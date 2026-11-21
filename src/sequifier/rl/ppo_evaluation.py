@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 
 from sequifier.rl.collection import PolicyCursor, stream_seed
-from sequifier.rl.environment import load_online_adapter
+from sequifier.rl.environment import adapter_identity, load_online_adapter
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 
 
@@ -50,7 +50,9 @@ def _deadline(seconds):
             )
 
 
-def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
+def evaluate_policy(
+    actor, evaluation, *, forbidden_adapter=None, expected_identity=None
+):
     """Evaluate synchronously with stochastic layers disabled; completed returns exclude censored episodes.
 
     The timeout covers adapter creation/reset/steps for the entire evaluation.
@@ -76,6 +78,8 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
                 raise ValueError(
                     "evaluation factory returned the live training adapter"
                 )
+            if expected_identity is not None:
+                adapter_identity(adapter, expected_identity)
             for index, seed in enumerate(evaluation.seeds):
                 cursor = PolicyCursor(
                     actor,

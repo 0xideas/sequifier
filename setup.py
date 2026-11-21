@@ -17,5 +17,13 @@ class BuildPy(build_py):
             documentation["source_documentation"](root), encoding="utf-8"
         )
 
+        scaffolds = run_path(str(root / "src/sequifier/scaffolds.py"))
+        templates = root / "src/sequifier/templates"
+        for name in scaffolds["CONTROL_TEMPLATES"]:
+            output = Path(self.build_lib) / "sequifier/templates" / f"{name}.yaml"
+            output.write_text(
+                scaffolds["template_text"](name, templates), encoding="utf-8"
+            )
+
 
 setup(cmdclass={"build_py": BuildPy})

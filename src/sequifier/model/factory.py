@@ -23,48 +23,7 @@ from sequifier.model.layers import RMSNorm, SequifierEncoderLayer
 from sequifier.model.network import ComposableTransformerNetwork, ModelInterfaceModule
 from sequifier.model.static_conditioning import StaticConditionEncoder
 from sequifier.objectives import BERTObjective, CausalObjective
-from sequifier.special_tokens import resolve_categorical_decoder_ids
 from sequifier.typechecking import beartype
-
-
-@dataclass(frozen=True)
-class InterfaceRuntimeMetadata:
-    target_decoder_ids: dict[str, list[int]]
-    target_n_classes: dict[str, int]
-    target_global_to_decoder: dict[str, list[int]]
-
-
-@dataclass(frozen=True)
-class ModelRuntimeMetadata:
-    interfaces: dict[str, InterfaceRuntimeMetadata]
-    device: torch.device
-
-    @beartype
-    def _only(self) -> InterfaceRuntimeMetadata:
-        if len(self.interfaces) != 1:
-            raise ValueError("A model interface selection is required")
-        return next(iter(self.interfaces.values()))
-
-    @property
-    @beartype
-    def target_decoder_ids(self) -> dict[str, list[int]]:
-        return self._only().target_decoder_ids
-
-    @property
-    @beartype
-    def target_n_classes(self) -> dict[str, int]:
-        return self._only().target_n_classes
-
-    @property
-    @beartype
-    def target_global_to_decoder(self) -> dict[str, list[int]]:
-        return self._only().target_global_to_decoder
-
-
-@dataclass
-class BuiltModel:
-    network: ComposableTransformerNetwork
-    runtime_metadata: ModelRuntimeMetadata
 
 
 def validate_hash_contracts(network: ComposableTransformerNetwork, config: Any) -> None:
@@ -198,66 +157,6 @@ def _initialize_components(
 
 
 @beartype
-def _decoder_metadata(view: Any) -> InterfaceRuntimeMetadata:
-    categorical_targets = {
-        column
-        for column in view.target_columns
-        if view.target_column_types[column] == "categorical"
-    }
-    persisted_decoder_ids = view.target_decoder_ids
-    if persisted_decoder_ids:
-        if set(persisted_decoder_ids) != categorical_targets:
-            raise ValueError(
-                "Persisted target_decoder_ids must contain exactly the categorical "
-                f"targets; expected {sorted(categorical_targets)}, found "
-                f"{sorted(persisted_decoder_ids)}."
-            )
-        target_decoder_ids = {
-            column: [int(global_id) for global_id in persisted_decoder_ids[column]]
-            for column in view.target_columns
-            if column in categorical_targets
-        }
-        for column, global_ids in target_decoder_ids.items():
-            if not global_ids:
-                raise ValueError(
-                    f"Persisted target_decoder_ids[{column!r}] cannot be empty."
-                )
-            if len(global_ids) != len(set(global_ids)):
-                raise ValueError(
-                    f"Persisted target_decoder_ids[{column!r}] contains duplicates."
-                )
-            invalid_ids = [
-                global_id
-                for global_id in global_ids
-                if global_id < 0 or global_id >= view.n_classes[column]
-            ]
-            if invalid_ids:
-                raise ValueError(
-                    f"Persisted target_decoder_ids[{column!r}] contains IDs outside "
-                    f"[0, {view.n_classes[column]}): {invalid_ids}."
-                )
-    else:
-        target_decoder_ids = resolve_categorical_decoder_ids(
-            view.target_columns,
-            view.target_column_types,
-            view.n_classes,
-            view.categorical_decoder_special_tokens,
-        )
-    target_n_classes = {column: len(ids) for column, ids in target_decoder_ids.items()}
-    target_global_to_decoder = {}
-    for column, ids in target_decoder_ids.items():
-        inverse = {global_id: decoder_id for decoder_id, global_id in enumerate(ids)}
-        target_global_to_decoder[column] = [
-            inverse.get(global_id, -1) for global_id in range(view.n_classes[column])
-        ]
-    return InterfaceRuntimeMetadata(
-        target_decoder_ids=target_decoder_ids,
-        target_n_classes=target_n_classes,
-        target_global_to_decoder=target_global_to_decoder,
-    )
-
-
-@beartype
 def _build_composable_network(
     config: ModelExecution,
     *,
@@ -266,33 +165,30 @@ def _build_composable_network(
     restored_history_interface: str | None,
     logger: Any,
     encoder_interface: str | None = None,
-) -> BuiltModel:
-    from sequifier.config.train_config import interface_build_view
-
+) -> ComposableTransformerNetwork:
     interfaces = (
         config.interfaces
         if encoder_interface is None
         else {encoder_interface: config.interface(encoder_interface)}
     )
-    backbone_seed = config.model.backbone.initialization_seed
+    backbone_seed = config.backbone.initialization_seed
     with isolated_initialization(derived_seed(backbone_seed, (), "constructor")):
-        backbone = TransformerBackbone(config.model.backbone.architecture)
+        backbone = TransformerBackbone(config.backbone.architecture)
     backbone_initialization = _ComponentInitialization(
         backbone,
-        config.model.backbone.initialization,
+        config.backbone.initialization,
         derived_seed(backbone_seed, (), "initializer"),
     )
 
     routes = {}
-    runtime_metadata = {}
     route_initialization_components: dict[str, _ComponentInitialization] = {}
     for name, interface in interfaces.items():
-        view = interface_build_view(config, interface)
         load_pretrained = (
             initialize and device.type != "meta" and name != restored_history_interface
         )
         built_ingestion = compile_feature_ingestion(
-            hparams=view,
+            hparams=interface,
+            architecture=config.backbone.architecture,
             direct_real_dtype_provider=lambda: cast(
                 SequifierEncoderLayer, backbone.layers[0]
             ).ff.get_first_layer_dtype(),
@@ -329,13 +225,7 @@ def _build_composable_network(
             )
         decoder = None
         if encoder_interface is None:
-            metadata = _decoder_metadata(view)
-            runtime_metadata[name] = metadata
-            decoder = build_target_decoding(
-                view,
-                target_n_classes=metadata.target_n_classes,
-                target_global_to_decoder=metadata.target_global_to_decoder,
-            )
+            decoder = build_target_decoding(interface, model_dim=backbone.model_dim)
             for column, expected in interface.categorical_hash_contracts.items():
                 actual = (
                     decoder.hash_codecs[column].contract()
@@ -503,13 +393,7 @@ def _build_composable_network(
         _initialize_components(initialization_components, logger)
     _apply_layer_dtypes(network, config)
     network.to(device)
-    return BuiltModel(
-        network=network,
-        runtime_metadata=ModelRuntimeMetadata(
-            interfaces=runtime_metadata,
-            device=device,
-        ),
-    )
+    return network
 
 
 @beartype
@@ -520,7 +404,7 @@ def build_transformer_network(
     initialize: bool = True,
     restored_history_interface: str | None = None,
     logger: Any | None = None,
-) -> BuiltModel:
+) -> ComposableTransformerNetwork:
     """Build one shared backbone and every distinct named model interface."""
 
     resolved_logger: Any = logger if logger is not None else logging.getLogger(__name__)
@@ -548,4 +432,4 @@ def build_history_encoder(
         restored_history_interface=interface_name if restored_history else None,
         logger=logging.getLogger(__name__),
         encoder_interface=interface_name,
-    ).network
+    )

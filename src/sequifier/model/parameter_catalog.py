@@ -2,18 +2,41 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable, Set
 from dataclasses import dataclass
-from typing import Any, Literal
+from fnmatch import fnmatchcase
+from functools import cached_property
+from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 from torch import nn
 
 from sequifier.artifacts.state_dict import canonical_parameter_name
-from sequifier.model.parameter_groups import semantic_parameter_groups
+from sequifier.model.parameter_groups import semantic_batches
 from sequifier.typechecking import beartype
+
+if TYPE_CHECKING:
+    from sequifier.config.parameter_selection import ParameterSelector
 
 ParameterComponent = Literal["ingestion", "backbone", "decoder"]
 ParameterKind = Literal["weight", "bias", "other"]
+
+
+def _unwrapped(name: str) -> str:
+    parts = name.split(".")
+    while len(parts) > 1 and (parts[0] == "network" or parts[0].isdigit()):
+        parts.pop(0)
+    return ".".join(parts)
+
+
+def _module_paths(alias: str) -> frozenset[str]:
+    """Ancestor module paths of a single alias, with and without role wrappers."""
+    paths = set()
+    for name in (alias, _unwrapped(alias)):
+        while "." in name:
+            name = name.rsplit(".", 1)[0]
+            paths.add(name)
+    return frozenset(paths)
 
 
 @dataclass(frozen=True)
@@ -31,26 +54,68 @@ class ParameterDescriptor:
     branch_path: tuple[str, ...] = ()
     semantic_aliases: tuple[str, ...] = ()
 
+    @cached_property
+    def module_paths(self) -> tuple[frozenset[str], ...]:
+        return tuple(_module_paths(alias) for alias in self.aliases)
+
+    def in_scope(self, selector: ParameterSelector) -> bool:
+        if selector.exclude_modules:
+            excluded = [
+                not paths.isdisjoint(selector.exclude_modules)
+                for paths in self.module_paths
+            ]
+            if any(excluded):
+                if not all(excluded):
+                    raise ValueError(
+                        f"conflicting selector exclusions for shared parameter {self.parameter_id}"
+                    )
+                return False
+        return (
+            (selector.component is None or selector.component == self.component)
+            and (
+                selector.parameter_kind is None
+                or selector.parameter_kind == self.parameter_kind
+            )
+            and (selector.ndim is None or selector.ndim == len(self.shape))
+            and (
+                not selector.branch_path
+                or tuple(selector.branch_path)
+                == self.branch_path[: len(selector.branch_path)]
+            )
+            and (
+                not selector.module
+                or any(selector.module in paths for paths in self.module_paths)
+            )
+            and (
+                not selector.interface
+                or any(
+                    f"interfaces.{selector.interface}" in paths
+                    for paths in self.module_paths
+                )
+            )
+        )
+
+    def matching_patterns(self, patterns: Iterable[str]) -> set[str]:
+        return {
+            pattern
+            for pattern in patterns
+            if any(fnmatchcase(group, pattern) for group in self.semantic_aliases)
+        }
+
 
 class ParameterCatalog:
     @beartype
     def __init__(self, model: nn.Module):
         self.model = model
-        grouped = semantic_parameter_groups(model)
-        semantic_by_identity = {
-            id(parameter): group
-            for group, parameters in grouped.items()
-            for parameter in parameters
-        }
-
-        semantic_aliases = {
-            identity: {group} for identity, group in semantic_by_identity.items()
-        }
-        # Component-local discovery preserves decoder and range-position semantics
-        # when the catalog is built for a complete multi-interface network.
-        from sequifier.model.decoders import TargetDecoderBranch, TargetDecoding
         from sequifier.model.depth_ingestion import DepthTransformerIngestion
-        from sequifier.model.module_roles import range_position_projection
+
+        roles = {}
+        for batch in semantic_batches(model):
+            for parameter in batch.parameters:
+                if parameter is not None:
+                    roles.setdefault(id(parameter), {}).setdefault(
+                        batch.group, batch.kind
+                    )
 
         depth_parameters = {
             id(parameter)
@@ -58,32 +123,6 @@ class ParameterCatalog:
             if isinstance(module, DepthTransformerIngestion)
             for parameter in module.parameters()
         }
-        for name, module in model.named_modules():
-            component = name.rsplit(".", 1)[-1]
-            if (
-                component not in {"backbone", "ingestion", "decoder"}
-                and not isinstance(module, (TargetDecoding, TargetDecoderBranch))
-                and range_position_projection(module) is None
-            ):
-                continue
-            for group, component_parameters in semantic_parameter_groups(
-                module
-            ).items():
-                for parameter in component_parameters:
-                    identity = id(parameter)
-                    previous = semantic_by_identity.get(identity)
-                    group_aliases = semantic_aliases.setdefault(identity, set())
-                    if (
-                        previous
-                        in {"fallback.linear", "fallback.convolution", "free_parameter"}
-                        and previous != group
-                    ):
-                        group_aliases.discard(previous)
-                        semantic_by_identity[identity] = group
-                    elif previous is None:
-                        semantic_by_identity[identity] = group
-                    group_aliases.add(group)
-
         aliases_by_identity: dict[int, list[str]] = {}
         parameter_by_identity: dict[int, nn.Parameter] = {}
         for name, parameter in model.named_parameters(remove_duplicate=False):
@@ -101,16 +140,18 @@ class ParameterCatalog:
             canonical_name = names[0]
             component = self._component(canonical_name)
             parameter_id = canonical_name
+            groups = roles[identity]
+            primary = next(iter(groups))
             descriptor = ParameterDescriptor(
                 parameter_id=parameter_id,
                 canonical_name=canonical_name,
                 aliases=tuple(names),
                 component=component,
-                semantic_group=str(
-                    semantic_by_identity.get(identity, "free_parameter")
-                ),
-                semantic_aliases=tuple(sorted(semantic_aliases.get(identity, ()))),
-                parameter_kind=self._kind(canonical_name),
+                semantic_group=primary,
+                semantic_aliases=tuple(sorted(groups)),
+                parameter_kind=self._kind(canonical_name)
+                if primary == "free_parameter"
+                else groups[primary],
                 shape=tuple(parameter.shape),
                 dtype=parameter.dtype,
                 shared_parameter_id=parameter_id if len(names) > 1 else None,
@@ -128,13 +169,19 @@ class ParameterCatalog:
         self._descriptors = tuple(descriptors)
         self._parameters = parameters
         self._aliases = aliases
+        self._ids = {id(parameter): key for key, parameter in parameters.items()}
+        module_names = (
+            canonical_parameter_name(name)
+            for name, _ in model.named_modules(remove_duplicate=False)
+        )
+        self._modules = {
+            spelling for name in module_names for spelling in (name, _unwrapped(name))
+        }
 
     @staticmethod
     @beartype
     def _component(name: str) -> ParameterComponent:
-        parts = name.split(".")
-        while len(parts) > 1 and (parts[0] == "network" or parts[0].isdigit()):
-            parts = parts[1:]
+        parts = _unwrapped(name).split(".")
         root = parts[0]
         route_component = parts[2] if root == "interfaces" and len(parts) > 2 else root
         if route_component in {
@@ -191,6 +238,53 @@ class ParameterCatalog:
             )
         )
 
+    def parameter_ids(self, parameters: Iterable[nn.Parameter]) -> set[str]:
+        try:
+            return {self._ids[id(parameter)] for parameter in parameters}
+        except KeyError as error:
+            raise ValueError(
+                "Parameter is outside the model parameter catalog"
+            ) from error
+
+    def matching_ids(self, selector: ParameterSelector, eligible: Set[str]) -> set[str]:
+        """Resolve a selector and validate its globs within the eligible parameters."""
+        paths = set(selector.exclude_modules)
+        if selector.module is not None:
+            paths.add(selector.module)
+        if unknown := paths - self._modules:
+            raise ValueError(f"unknown selector modules: {sorted(unknown)}")
+
+        included_patterns = set()
+        excluded_patterns = set()
+        selected = set()
+        for descriptor in self._descriptors:
+            if descriptor.parameter_id not in eligible or not descriptor.in_scope(
+                selector
+            ):
+                continue
+            if selector.semantic_groups:
+                matched = descriptor.matching_patterns(selector.semantic_groups)
+                included_patterns.update(matched)
+                if not matched:
+                    continue
+            excluded = descriptor.matching_patterns(selector.exclude_semantic_groups)
+            excluded_patterns.update(excluded)
+            if not excluded:
+                selected.add(descriptor.parameter_id)
+        for field, patterns, matched in (
+            ("semantic_groups", selector.semantic_groups, included_patterns),
+            (
+                "exclude_semantic_groups",
+                selector.exclude_semantic_groups,
+                excluded_patterns,
+            ),
+        ):
+            if missing := set(patterns or ()) - matched:
+                raise ValueError(
+                    f"{field} patterns {sorted(missing)} matched no parameters in the selector's eligible scope"
+                )
+        return selected
+
     @beartype
     def fingerprint(self) -> str:
         payload = [
@@ -234,19 +328,16 @@ def optimizer_group_id(descriptor: ParameterDescriptor) -> str:
 def semantic_optimizer_groups(
     catalog: ParameterCatalog,
     *,
-    parameters: set[int] | None = None,
+    parameters: set[str] | None = None,
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     grouped: dict[str, list[nn.Parameter]] = {}
-    seen: set[int] = set()
     for descriptor in catalog.descriptors():
-        parameter = catalog.parameter(descriptor.parameter_id)
-        identity = id(parameter)
-        if identity in seen or (parameters is not None and identity not in parameters):
+        if parameters is not None and descriptor.parameter_id not in parameters:
             continue
+        parameter = catalog.parameter(descriptor.parameter_id)
         if not parameter.requires_grad:
             continue
-        seen.add(identity)
         grouped.setdefault(optimizer_group_id(descriptor), []).append(parameter)
 
     base_options = dict(options or {})

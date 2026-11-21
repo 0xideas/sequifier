@@ -1,10 +1,12 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
 import torch
 from loguru import logger
 
+from sequifier.config.components import BackboneArchitectureConfig
+from sequifier.config.model_interface import ResolvedModelInterface
 from sequifier.model.ingestions import (
     STRUCTURED_BLOCK_HANDLERS,
     AxisShape,
@@ -38,17 +40,6 @@ class ResolvedIngestionBranch:
     usage: str
     layout: Optional[Any] = None
     children: tuple["ResolvedIngestionBranch", ...] = ()
-
-
-@dataclass(frozen=True)
-class IngestionPlan:
-    """Canonical internal form for both public ingestion-spec shapes."""
-
-    branches: tuple[ResolvedIngestionBranch, ...]
-    merge_type: Optional[str]
-    merge_softmax: Optional[str]
-    is_composite: bool
-    transformer_input_width: int
 
 
 @dataclass(frozen=True)
@@ -144,7 +135,7 @@ def _validate_ingestion_columns(hparams: Any, usage: str, columns: list[str]) ->
             f"{usage} references unknown input columns: {sorted(missing_columns)}"
         )
 
-    auxiliary_columns = set(hparams.model.ingestion.auxiliary_input_columns)
+    auxiliary_columns = set(hparams.ingestion.auxiliary_input_columns)
     consumed_auxiliary_columns = set(columns) & auxiliary_columns
     if consumed_auxiliary_columns:
         raise ValueError(
@@ -296,12 +287,12 @@ def _validate_noop(
 
 
 @beartype
-def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
+def resolve_ingestion_plan(
+    hparams: ResolvedModelInterface, architecture: BackboneArchitectureConfig
+) -> ResolvedIngestionBranch:
     """Lower the public union/dictionary syntax into one validated plan."""
-    model = hparams.model
-    ingestion_spec = model.ingestion
-    architecture = model.backbone.architecture
-    objective_name = hparams.training_objective
+    ingestion_spec = hparams.ingestion
+    objective_name = hparams.window_view.objective
     uses_causal_attention = (
         get_objective_class(objective_name).uses_causal_attention
         if objective_name is not None
@@ -406,15 +397,7 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
         )
     if unused and ingestion_spec.allow_unused_input_columns:
         logger.warning(f"model.ingestion unused columns: {sorted(unused)}")
-    return IngestionPlan(
-        branches=root.children if root.children else (root,),
-        merge_type=ingestion_spec.merge.type if root.children else None,
-        merge_softmax=ingestion_spec.merge.softmax if root.children else None,
-        is_composite=bool(root.children),
-        transformer_input_width=root.width
-        if root.children
-        else transformer_input_width,
-    )
+    return root
 
 
 @beartype
@@ -669,25 +652,23 @@ INGESTION_HANDLERS: dict[str, IngestionHandler] = {
 @beartype
 def compile_feature_ingestion(
     *,
-    hparams: Any,
+    hparams: ResolvedModelInterface,
+    architecture: BackboneArchitectureConfig,
     direct_real_dtype_provider: Callable[[], torch.dtype],
     max_concat_tensors: int,
     load_pretrained: bool = True,
 ) -> BuiltIngestion:
-    plan = resolve_ingestion_plan(hparams)
+    root = resolve_ingestion_plan(hparams, architecture)
     context = IngestionBuildContext(
         hparams=hparams,
         direct_real_dtype_provider=direct_real_dtype_provider,
         max_concat_tensors=max_concat_tensors,
         add_ingestion_position=(
-            hparams.model.backbone.architecture.position_encoding.type == "learned"
-            and hparams.model.backbone.architecture.position_encoding_scope
-            == "per_feature"
+            architecture.position_encoding.type == "learned"
+            and architecture.position_encoding_scope == "per_feature"
         ),
         load_pretrained=load_pretrained,
     )
-    root_config = hparams.model.ingestion
-    root_seed = root_config.initialization_seed
 
     def build(branch, inherited_seed=None, path=()):
         seed = branch.config.initialization_seed
@@ -716,42 +697,4 @@ def compile_feature_ingestion(
         module.initialization_seed = derived_seed(inherited_seed, path, "initializer")
         return module
 
-    built_branches = {
-        branch.name: build(
-            branch, root_seed, (str(branch.name),) if plan.is_composite else ()
-        )
-        for branch in plan.branches
-    }
-
-    if not plan.is_composite:
-        branch = plan.branches[0]
-        return BuiltIngestion(built_branches[None], branch.width)
-
-    named_branches = {str(name): module for name, module in built_branches.items()}
-    branch_widths = {str(branch.name): branch.width for branch in plan.branches}
-    with isolated_initialization(derived_seed(root_seed, (), "constructor")):
-        module = CompositeFeatureIngestion(
-            branches=named_branches,
-            branch_widths=branch_widths,
-            merge_type=cast(str, plan.merge_type),
-            merge_dim=plan.transformer_input_width,
-            merge_softmax=cast(str, plan.merge_softmax),
-        )
-    module.initialization_config = root_config
-    module.initialization_seed = derived_seed(root_seed, (), "initializer")
-    return BuiltIngestion(module, plan.transformer_input_width)
-
-
-@beartype
-def build_feature_ingestion(
-    *,
-    hparams: Any,
-    direct_real_dtype_provider: Callable[[], torch.dtype],
-    max_concat_tensors: int,
-) -> BaseFeatureIngestion:
-    """Compatibility wrapper returning only the compiled runtime module."""
-    return compile_feature_ingestion(
-        hparams=hparams,
-        direct_real_dtype_provider=direct_real_dtype_provider,
-        max_concat_tensors=max_concat_tensors,
-    ).module
+    return BuiltIngestion(build(root), root.width)

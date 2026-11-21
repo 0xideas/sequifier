@@ -758,47 +758,6 @@ def numpy_to_pytorch(
 
 
 @beartype
-def numpy_storage_to_pytorch(
-    data: pl.DataFrame,
-    column_data_types: dict[str, torch.dtype],
-    all_columns: list[str],
-    window_length: int,
-    sort_rows: bool = True,
-) -> tuple[dict[str, Tensor], Tensor]:
-    """Convert complete stored windows to tensors for virtual window sampling."""
-    sequence_columns = columns_from_slice(
-        slice(0, window_length),
-        window_length,
-    )
-    tensors = {}
-    for column_name in all_columns:
-        column_data = data.filter(pl.col("inputCol") == column_name)
-        if column_data.is_empty():
-            raise ValueError(f"Column not found in preprocessed data: {column_name}")
-        if sort_rows:
-            column_data = column_data.sort(["sequenceId", "subsequenceId"])
-        tensors[column_name] = torch.tensor(
-            column_data.select(sequence_columns).to_numpy(),
-            dtype=column_data_types[column_name],
-        )
-
-    if sort_rows:
-        left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
-    else:
-        left_pad_values = (
-            data.group_by(["sequenceId", "subsequenceId"], maintain_order=True)
-            .agg(pl.col("leftPadLength").first().alias("leftPadLength"))
-            .get_column("leftPadLength")
-        )
-        left_pad_lengths = torch.tensor(
-            left_pad_values.to_numpy(),
-            dtype=torch.int64,
-        )
-
-    return tensors, left_pad_lengths
-
-
-@beartype
 def build_valid_mask(
     left_pad_lengths: Tensor,
     full_length: int,

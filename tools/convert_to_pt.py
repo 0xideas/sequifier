@@ -7,10 +7,6 @@ import polars as pl
 import torch
 
 from sequifier.io.pt_payload import save_pt_payload, tabular_tensor_batch
-from sequifier.io.sample_order import (
-    curriculum_storage_columns,
-    source_curriculum_column,
-)
 
 
 def main():
@@ -40,20 +36,12 @@ def main():
         else torch.int64
     )
     batch = tabular_tensor_batch(
-        data, dict.fromkeys(features, dtype), features, len(sequence_columns)
+        data,
+        dict.fromkeys(features, dtype),
+        features,
+        len(sequence_columns),
+        curriculum=None,
     )
-    curriculum = curriculum_storage_columns(data.columns)
-    if curriculum:
-        positions = (
-            data.group_by("sequenceId", "subsequenceId")
-            .agg(pl.col(name).first() for name in curriculum)
-            .sort("sequenceId", "subsequenceId")
-        )
-        batch.sample_positions = torch.tensor(positions.to_numpy(), dtype=torch.int64)
-        batch.curriculum_columns = tuple(
-            source_curriculum_column(name) for name in curriculum
-        )
-
     total = len(batch.sequence_ids)
     if args.chunk_size is None or total <= args.chunk_size:
         save_pt_payload(batch, output)

@@ -3,17 +3,9 @@
 import os
 from typing import Literal
 
-from pydantic import Field
-
-from sequifier.config.naming import ConfigModel
-from sequifier.config.ownership import ExportSettings, RunSettings
+from sequifier.config.ownership import RunSettings
 
 RunMode = Literal["supervised", "policy", "coordinated"]
-
-
-class PublicationPlan(ConfigModel):
-    mode: RunMode = "supervised"
-    exports: ExportSettings = Field(default_factory=ExportSettings)
 
 
 def validate_runner_settings(
@@ -47,11 +39,15 @@ def validate_runner_settings(
             ),
         )
         for path, settings, fields in supervised_only:
-            if explicit := fields & settings.model_fields_set:
+            if unsupported := fields.intersection(
+                settings.model_dump(exclude_defaults=True)
+            ):
                 raise ValueError(
-                    f"policy phases do not support {path} settings: {sorted(explicit)}"
+                    f"policy phases do not support {path} settings: {sorted(unsupported)}"
                 )
-        if not supervised and "log_interval_batches" in run.logging.model_fields_set:
+        if not supervised and "log_interval_batches" in run.logging.model_dump(
+            exclude_defaults=True
+        ):
             raise ValueError("policy phases do not support batch logging intervals")
     elif (
         not (run.export.generative_model or run.export.embedding_model)
@@ -60,10 +56,10 @@ def validate_runner_settings(
         raise ValueError("At least one model export must be enabled")
 
 
-def publication_plan(run: RunSettings, phases) -> PublicationPlan:
+def training_run_mode(phases) -> RunMode:
     policy = [phase for phase in phases if phase.algorithm != "supervised"]
     if not policy:
-        return PublicationPlan(mode="supervised", exports=run.export)
+        return "supervised"
     if len(policy) == len(phases) and len({p.model_interface for p in policy}) == 1:
-        return PublicationPlan(mode="policy", exports=run.export)
-    return PublicationPlan(mode="coordinated", exports=run.export)
+        return "policy"
+    return "coordinated"

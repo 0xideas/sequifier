@@ -1,9 +1,10 @@
 """Content identities for inputs consumed by training."""
 
+import hashlib
 import json
 from pathlib import Path
 
-from sequifier.trajectory.sources import file_checksum
+from sequifier.fingerprints import file_checksum
 
 
 class DependencyManifest:
@@ -18,29 +19,41 @@ class DependencyManifest:
     def protected_paths(self):
         return self.roots | {Path(path) for path in self.identity}
 
+    def _record(self, path, resolved, checksum):
+        if self._paths.setdefault(path, resolved) != resolved:
+            raise ValueError(f"Training dependency moved: {path}")
+        if self.identity.setdefault(str(resolved), checksum) != checksum:
+            raise ValueError(f"Training dependency changed during preparation: {path}")
+
+    def add(self, path, checksum=None):
+        path = Path(path).absolute()
+        resolved = path.resolve()
+        if checksum is None:
+            checksum = self.identity.get(str(resolved)) or file_checksum(resolved)
+        self._record(path, resolved, checksum)
+        return checksum
+
+    def read_json(self, path: Path):
+        """Track the exact bytes used to interpret a manifest."""
+        content = path.read_bytes()
+        self.add(path, hashlib.sha256(content).hexdigest())
+        return json.loads(content)
+
     def include(self, checksums):
         for path, checksum in checksums.items():
-            path = Path(path).absolute()
-            resolved = path.resolve()
-            self._paths[path] = resolved
-            previous = self.identity.setdefault(str(resolved), checksum)
-            if previous != checksum:
-                raise ValueError(
-                    f"Training dependency changed during preparation: {path}"
-                )
+            self.add(path, checksum)
 
-    def add(self, path):
-        resolved = Path(path).resolve()
-        if str(resolved) not in self.identity:
-            self.include({path: file_checksum(resolved)})
-        else:
-            self._paths[Path(path).absolute()] = resolved
+    def include_files(self, other, paths):
+        for path in paths:
+            path = Path(path).absolute()
+            resolved = other._paths[path]
+            self._record(path, resolved, other.identity[str(resolved)])
 
     def add_reference(self, path, checkpoint_checksum):
         resolved = str(path.resolve())
         if checkpoint_checksum is None and resolved in self._embedded_references:
             # A later phase can still need this same file to create its reference.
-            self.include({path: file_checksum(path)})
+            self.add(path, file_checksum(path))
             self._embedded_references.remove(resolved)
             return
         try:
@@ -48,8 +61,30 @@ class DependencyManifest:
         except FileNotFoundError:
             if checkpoint_checksum is None:
                 raise
-            self.include({path: checkpoint_checksum})
+            self.add(path, checkpoint_checksum)
             self._embedded_references.add(resolved)
+
+    def add_prepared_split(
+        self, path: Path, *, storage_form=None, include_media=False
+    ) -> tuple[Path, ...]:
+        """Resolve the split's physical inputs and record what selected them."""
+        from sequifier.config.metadata import validate_persisted_metadata_versions
+        from sequifier.io.indexed_sequences import IndexedView, prepared_split_form
+
+        form = storage_form or prepared_split_form(path)
+        if form == "folder":
+            self.roots.add(path.resolve())
+            metadata = self.read_json(path / "metadata.json")
+            validate_persisted_metadata_versions(metadata)
+            files = tuple(path / shard["path"] for shard in metadata["batch_files"])
+        elif form == "indexed":
+            self.include(IndexedView.load(path).verify(include_media=include_media))
+            return (path,)
+        else:
+            files = (path,)
+        for file in files:
+            self.add(file)
+        return files
 
     def add_media_directory(self, directory, files):
         self.roots.add(directory.resolve())
@@ -58,10 +93,9 @@ class DependencyManifest:
             self.add(path)
 
     def merge(self, other):
-        self.include(other.identity)
+        self.include_files(other, other._paths)
         self.roots.update(other.roots)
         self._media.update(other._media)
-        self._paths.update(other._paths)
         self._embedded_references.update(other._embedded_references)
 
     def validate(self, expected):
@@ -133,22 +167,8 @@ def supervised_dependencies(config, incoming=None):
         for part_name, part in dataset.parts.items():
             if part.metadata_from_file:
                 manifest.add(root / part.metadata_config_path)
-            for split in (part.training_data_path, part.validation_data_path):
-                if split is None:
-                    continue
-                path = Path(split)
-                if part.storage_form == "indexed":
-                    from sequifier.io.indexed_sequences import IndexedView
-
-                    manifest.include(IndexedView.load(path).verify())
-                elif part.storage_form == "file":
-                    manifest.add(path)
-                else:
-                    manifest.roots.add(path.resolve())
-                    metadata = path / "metadata.json"
-                    manifest.add(metadata)
-                    for shard in json.loads(metadata.read_text())["batch_files"]:
-                        manifest.add(path / shard["path"])
+            for split in set(part.split_paths.values()):
+                manifest.add_prepared_split(Path(split), storage_form=part.storage_form)
             _add_loader_media(
                 manifest,
                 dataset_part_view(
@@ -163,10 +183,13 @@ def policy_dependencies(
 ):
     manifest = DependencyManifest()
     add_initialization(manifest, config)
-    for path in config.metadata_paths:
+    if path := config.parent.model_metadata_paths.get(config.policy.interface_name):
         manifest.add(path)
     for index, phase in enumerate(config.phases):
-        manifest.include(prepared.phase_checksums(config, phase, inputs))
+        _, _, data = prepared.phase_dependencies(
+            config.parent.policy_data, phase, inputs
+        )
+        manifest.merge(data)
         reference = phase.reference_config
         if reference and reference.path:
             path = Path(config.project_root) / reference.path
@@ -182,7 +205,7 @@ def policy_dependencies(
 def add_backbone_revision(manifest, config, revision_id):
     from sequifier.artifacts.backbone_repository import resolve_repository_path
 
-    repository = config.model.backbone.repository
+    repository = config.execution.backbone.repository
     if repository is not None and revision_id is not None:
         directory = (
             resolve_repository_path(repository.path, config.project_root)

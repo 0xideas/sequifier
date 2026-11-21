@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import polars as pl
 
-from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
+from sequifier.config.metadata import DatasetMetadata
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.io.images import ImageStore
@@ -25,6 +25,7 @@ from sequifier.trajectory.prepared import prepared_table
 
 if TYPE_CHECKING:
     from sequifier.io.indexed_sequences import IndexedImageStore
+    from sequifier.trajectory.sources import ResolvedSequenceSource
 
 ACTION_RECORD = "__executed_action"
 PREVIOUS_ACTION_RECORD = "__previous_action"
@@ -196,6 +197,13 @@ class TableEpisodeReference:
                 "content_key"
             )
         return None
+
+    @property
+    def used_for_fitting(self) -> bool:
+        return (
+            isinstance(self.table, IndexedEpisodeTable)
+            and self.sequence_id in self.table.view.fitted_sequences
+        )
 
     def load(self) -> SequenceEpisode:
         data = ordered_sequence_rows(self.table.load(self.sequence_id))
@@ -456,9 +464,12 @@ def table_episode(
     )
 
 
-def table_episodes(source, policy, paths, *, prepared=False):
+def table_episodes(resolved: ResolvedSequenceSource, policy: PolicyEpisodeSpec):
     from sequifier.io.indexed_sequences import IndexedView, is_indexed_view
 
+    paths = resolved.paths
+    source = resolved.declaration
+    prepared = resolved.kind == "prepared"
     view = (
         IndexedView.load(paths[0])
         if prepared and len(paths) == 1 and is_indexed_view(paths[0])
@@ -468,11 +479,11 @@ def table_episodes(source, policy, paths, *, prepared=False):
         source.columns.static_inputs
     ) - set(policy.static_columns):
         raise ValueError("table columns must name declared policy features")
-    static_path, image_store = source.static_data_path, None
+    static_path, image_store = resolved.static_path, None
     if view is not None:
         table, metadata = IndexedEpisodeTable(view), view.metadata()
         for label, configured, stored in (
-            ("metadata", source.metadata_config_path, view.metadata_path),
+            ("metadata", resolved.metadata_path, view.metadata_path),
             ("static data", static_path, view.static_path),
         ):
             if configured and (
@@ -483,12 +494,11 @@ def table_episodes(source, policy, paths, *, prepared=False):
         if not metadata.indexed_inline_media:
             image_store = view.image_store()
     else:
-        data = prepared_table(paths, source).lazy() if prepared else scan_tables(paths)
+        data = prepared_table(resolved).lazy() if prepared else scan_tables(paths)
         if {"sequenceId", "itemPosition"} - set(data.collect_schema().names()):
             raise ValueError("policy tables require sequenceId and itemPosition")
         table = IndexedTable(data, "sequenceId")
-        path = source.metadata_config_path
-        metadata = load_dataset_metadata(path) if path else None
+        metadata = resolved.metadata
         if (
             prepared
             and metadata
@@ -497,7 +507,7 @@ def table_episodes(source, policy, paths, *, prepared=False):
             image_store = ImageStore(
                 metadata.image_sources,
                 metadata.preconditioning_image,
-                source.project_root,
+                str(resolved.project_root),
             )
 
     static_table = None

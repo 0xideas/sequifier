@@ -1,115 +1,69 @@
 """Preflight scheduler budgets using the same source ordering as training."""
 
-from dataclasses import dataclass
+from itertools import repeat
 
-import torch
-
-from sequifier.config.train_config import (
-    ResolvedDatasetTrainingSpec,
-    ResolvedTrainingSource,
-)
-from sequifier.io.batch import SequifierBatch
+from sequifier.runtime.plan import continuation_groups
 from sequifier.training.plan import SupervisedRunPlan
-from sequifier.training.runtime import RuntimeBatch, SourceScheduler
+from sequifier.training.runtime import SourceScheduler
 
 
-@dataclass
-class _CountedSource:
-    """Supply batch identities to the scheduler without consuming training data."""
-
-    config: ResolvedTrainingSource
-    dataset_config: ResolvedDatasetTrainingSpec
-    batches: int
-
-    def set_epoch(self, epoch, split):
-        pass
-
-    def iter_batches(self, split="training"):
-        batch = RuntimeBatch(
-            self.dataset_config.name,
-            self.config.part or "",
-            SequifierBatch(
-                {},
-                {},
-                {
-                    "attention_valid_mask": torch.empty(0, dtype=torch.bool),
-                    "target_valid_mask": torch.empty(0, dtype=torch.bool),
-                },
-            ),
-        )
-        for _ in range(self.batches):
-            yield batch
-
-
-def _phase_update_budget(config, parts, view):
-    phase = view.spec()
-    counts = {}
+def _phase_update_budget(config, parts, phase):
     sources = []
     for source in phase.sources:
-        dataset = config.dataset_training[source.dataset]
-        batches = 0
-        for part in source.parts:
-            key = (source.dataset, part)
-            if key not in counts:
-                counts[key] = parts[source.dataset][
-                    part
-                ].factory.count_training_batches(view)
-            batches += counts[key]
-        sources.append(_CountedSource(source, dataset, batches))
-    scheduler = SourceScheduler(view, sources)
+        batches = sum(
+            parts[source.dataset][part].factory.count_batches(phase.loading, "training")
+            for part in source.parts
+        )
+        sources.append((source.dataset, batches))
+    scheduler = SourceScheduler(phase, config.dataset_training)
+    total_batches = sum(count for _, count in sources)
+    since_snapshot = 0
     updates = 0
     for epoch in range(1, phase.epochs + 1):
-        active_dataset, accumulated = None, 0
-        for batch in scheduler.iter_epoch(epoch):
-            if active_dataset != batch.dataset:
-                updates += int(accumulated > 0)
-                accumulated = 0
-            active_dataset = batch.dataset
-            accumulated += 1
-            if accumulated == phase.accumulation_batches:
-                updates += 1
-                accumulated = 0
-        updates += int(accumulated > 0)
+        pending = None
+        streams = [repeat(dataset, count) for dataset, count in sources]
+        for batch, dataset in enumerate(scheduler.iter_epoch(epoch, streams), 1):
+            since_snapshot += 1
+            update = phase.batch_update(
+                pending,
+                dataset,
+                last_batch=batch == total_batches,
+                batches_since_snapshot=since_snapshot,
+            )
+            updates += int(update.flush_before) + int(update.step_after)
+            pending = None if update.step_after else update
+            if update.snapshot:
+                since_snapshot = 0
     return updates
 
 
 def resolve_scheduler_budgets(plan, config, parts):
     """Resolve applied-update budgets, including dataset-boundary flushes."""
     views = list(plan.phases)
-    phases = [view.spec() for view in views]
-    phase_budgets = {}
-    for index, phase in enumerate(phases):
-        role = phase.optimization["model"]
-        if (
-            role.scheduler.name != "OneCycleLR"
-            or role.scheduler_step_on != "optimizer_step"
-            or role.scheduler.arguments.get("total_steps") is not None
-        ):
-            continue
-        start = index
-        while start > 0 and phases[start].optimizer_state == "continue":
-            start -= 1
-        end = index + 1
-        while end < len(phases) and phases[end].optimizer_state == "continue":
-            end += 1
-        for selected in range(start, end):
-            if selected not in phase_budgets:
-                phase_budgets[selected] = _phase_update_budget(
-                    config, parts, views[selected]
+    for start, group in continuation_groups(views):
+        budget = None
+        for index, phase in enumerate(group, start):
+            role = phase.optimization["model"]
+            if (
+                role.scheduler.name != "OneCycleLR"
+                or role.scheduler_step_on != "optimizer_step"
+                or role.has_update_budget_override
+            ):
+                continue
+            if budget is None:
+                budget = sum(
+                    _phase_update_budget(config, parts, item) for item in group
                 )
-        budget = sum(phase_budgets[selected] for selected in range(start, end))
-        if budget <= 0:
-            raise ValueError(
-                f"{phase.name}: OneCycleLR requires a positive optimizer-update budget"
+            optimization = {**phase.optimization, "model": role.resolve_budget(budget)}
+            views[index] = phase.model_copy(update={"optimization": optimization})
+        if len(group) > 1:
+            settings = (
+                phase.optimization["model"].compatibility_settings()
+                for phase in views[start : start + len(group)]
             )
-        scheduler = role.scheduler.model_copy(
-            update={"arguments": {**role.scheduler.arguments, "total_steps": budget}}
-        )
-        optimization = {
-            **phase.optimization,
-            "model": role.model_copy(update={"scheduler": scheduler}),
-        }
-        views[index] = views[index].with_spec(
-            phase.model_copy(update={"optimization": optimization})
-        )
+            first = next(settings)
+            if any(other != first for other in settings):
+                raise ValueError(
+                    "optimizer continuation requires identical effective role optimization settings"
+                )
     return SupervisedRunPlan(tuple(views))

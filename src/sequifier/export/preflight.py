@@ -50,7 +50,7 @@ def preflight_description(config, execution):
             return [graph_only(item) for item in value]
         return value
 
-    export = config.publication.exports
+    export = config.run.export
     return {
         "protocol_version": ContractVersions.EXPORT_PREFLIGHT,
         "representative_batch_policy": "publication_clamped_2_to_4_preflight_2",
@@ -94,8 +94,8 @@ def preflight_description(config, execution):
 
 
 def ensure_export_preflight(config, distributed):
-    export = config.publication.exports
-    if config.publication.mode != "supervised" or not export.onnx:
+    export = config.run.export
+    if config.run_mode != "supervised" or not export.onnx:
         return
     execution = ModelExecution.from_config(config)
     interfaces = {
@@ -203,10 +203,8 @@ def _worker(request_path):
     request = json.loads(request_path.read_text())
     configure_determinism(request["seed"])
     onnxruntime.set_seed(request["seed"])
-    config, _ = model_execution_from_model_config(request["execution"], device="cpu")
-    network = build_transformer_network(
-        config, device=torch.device("cpu")
-    ).network.float()
+    config, _ = model_execution_from_model_config(request["execution"])
+    network = build_transformer_network(config, device=torch.device("cpu")).float()
     exporter = OnnxModelExporter()
     for index, (name, interface) in enumerate(config.interfaces.items()):
         if request["generative"]:

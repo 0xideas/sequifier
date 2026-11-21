@@ -1,46 +1,35 @@
-"""Resolved inputs for the native policy runner; never an authored config."""
+"""Phase-local view of a compiled run for native policy training."""
 
-from typing import Literal
-
-from pydantic import BaseModel, ConfigDict, Field
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
 from sequifier.config.components import ResumeConfig
-from sequifier.config.normalization_config import FrozenNormalizationConfig
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_plan import PolicyPhase
-from sequifier.config.policy_train_config import SequenceSourceConfig
-from sequifier.model.execution import ModelExecution
+
+if TYPE_CHECKING:
+    from sequifier.config.train_config import ResolvedSequifierConfig
 
 
-class ResolvedPolicyRun(BaseModel):
-    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
-    project_root: str
-    model_name: str
-    device: str
-    seed: int
-    phase_offset: int = Field(default=0, ge=0, exclude=True)
-    enforce_determinism: bool = False
+@dataclass(frozen=True)
+class ResolvedPolicyRun:
+    parent: "ResolvedSequifierConfig"
+    phases: tuple[PolicyPhase, ...]
+    phase_offset: int
     policy: ResolvedPolicyBinding
-    execution: ModelExecution = Field(exclude=True)
-    policy_interface: str
-    initialize_from: str | None = None
-    metadata_paths: list[str] = Field(default_factory=list)
-    actor_initialization: Literal["attach", "history_only"] = "attach"
-    normalization: FrozenNormalizationConfig | None = None
-    sources: dict[str, SequenceSourceConfig]
-    preferences: dict[str, str]
-    units: dict[str, str]
-    phases: list[PolicyPhase]
-    latest_checkpoint_interval_minutes: float | None = None
-    log_interval_iterations: int = Field(default=10, gt=0)
-    source_validation_fractions: dict[str, float] = Field(default_factory=dict)
-    validation_fraction: float
-    episode_cache_size: int
+    initialize_from: str | None
+    actor_initialization: Literal["attach", "history_only"]
     resume: ResumeConfig
-    embedding_layer_names: list[str] = Field(
-        default_factory=lambda: ["backbone.final_norm"]
-    )
-    model_path: str
-    report_path: str
     checkpoint_path: str
-    phase_directory: str
+
+    @property
+    def outputs(self):
+        return self.parent.outputs
+
+    @property
+    def project_root(self):
+        return self.parent.project_root
+
+    @property
+    def model_name(self):
+        return self.parent.model_name

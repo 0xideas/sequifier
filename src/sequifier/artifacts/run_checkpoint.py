@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -16,115 +15,46 @@ from sequifier.io.atomic import atomic_save
 
 
 def read_training_plan(saved: dict):
-    """Translate legacy embedded interface views at the recovery boundary."""
-    from sequifier.artifacts.model_config import (
-        split_interface_storage,
-        validate_interface_storage_versions,
-    )
+    """Validate persisted storage versions before loading the resolved training plan."""
+    from sequifier.artifacts.model_config import validate_interface_storage_versions
     from sequifier.config.metadata import validate_persisted_metadata_versions
-    from sequifier.config.run_capabilities import PublicationPlan
-    from sequifier.config.train_config import (
-        ResolvedSequifierConfig,
-        TrainingRuntimeSettings,
-    )
-    from sequifier.model.execution_options import ModelExecutionOptions
+    from sequifier.config.train_config import ResolvedSequifierConfig
 
-    values = deepcopy(saved)
-    interfaces = values["interfaces"]
-    storage = values.setdefault("interface_storage", {})
-    for name, interface in interfaces.items():
-        model_interface, legacy_storage = split_interface_storage(interface)
-        interfaces[name] = model_interface
-        if legacy_storage is not None:
-            storage.setdefault(name, legacy_storage.model_dump())
-        if name in storage:
-            validate_interface_storage_versions(
-                storage[name], model_interface.get("depth_layouts") or {}
-            )
-    datasets = values["dataset_training"]
-    for dataset in datasets.values():
-        if (legacy_view := dataset.pop("interface", None)) is not None:
-            _, legacy_storage = split_interface_storage(legacy_view)
-            if legacy_storage is not None:
-                dataset.setdefault("storage", legacy_storage.model_dump())
-        if (dataset_storage := dataset.get("storage")) is not None:
+    execution = saved["execution"]
+    interfaces = execution["interfaces"]
+    for name, storage in execution["interface_storage"].items():
+        validate_interface_storage_versions(storage, interfaces[name]["depth_layouts"])
+    for dataset in saved["dataset_training"].values():
+        if (storage := dataset.get("storage")) is not None:
             interface = interfaces[dataset["model_interface"]]
-            validate_interface_storage_versions(
-                dataset_storage, interface.get("depth_layouts") or {}
-            )
+            validate_interface_storage_versions(storage, interface["depth_layouts"])
         for part in dataset["parts"].values():
             validate_persisted_metadata_versions(part["metadata"])
+    return ResolvedSequifierConfig.model_validate(saved)
 
-    if "model_metadata_paths" not in values:
-        authored_interfaces = (values.get("ownership", {}).get("model") or {}).get(
-            "interfaces", {}
-        )
-        values["model_metadata_paths"] = {
-            name: str(Path(values["project_root"]) / path)
-            for name, spec in authored_interfaces.items()
-            if (path := spec.get("input_contract", {}).get("metadata_config_path"))
-        }
-    if "model_options" not in values:
-        values["model_options"] = ModelExecutionOptions.from_training(
-            TrainingRuntimeSettings.model_validate(values["runtime_settings"])
-        )
-    if "publication" not in values:
-        values["publication"] = PublicationPlan(
-            exports={
-                "generative_model": values.pop("export_generative_model"),
-                "embedding_model": values.pop("export_embedding_model"),
-                "embedding_layer_names": values.pop("embedding_layer_names"),
-                "onnx": values.pop("export_onnx"),
-                "pt": values.pop("export_pt"),
-                "with_dropout": values.pop("export_with_dropout", False),
-                "batch_size": values["runtime_settings"].get("inference_batch_size", 1),
-            }
-        )
-    for phase in values["training_plan"]:
-        if phase["algorithm"] == "supervised":
-            for source in phase["sources"] + phase.get("evaluation_sources", []):
-                if "parts" not in source:
-                    source["parts"] = (
-                        [source["part"]]
-                        if source.get("part") is not None
-                        else list(datasets[source["dataset"]]["parts"])
-                    )
-    return ResolvedSequifierConfig.model_validate(values)
+
+def phase_contract(phase):
+    return {
+        **phase.model_dump(mode="json", exclude={"optimization"}),
+        "optimization": {
+            name: role.compatibility_settings()
+            for name, role in phase.optimization.items()
+        },
+    }
 
 
 def training_plan_identity(config):
-    """Retain the flat fingerprint contract used by existing coordinated runs."""
+    """Fingerprint the resolved plan independently of how recovery was requested."""
     from sequifier.fingerprints import fingerprint
 
-    values = config.model_dump(mode="json")
-    values.pop("model_options")
-    values.pop("model_metadata_paths")
-    storage = values.pop("interface_storage")
-    for name, interface in values["interfaces"].items():
-        interface.update(storage.get(name, {}))
-    for name, dataset in values["dataset_training"].items():
-        dataset["interface"] = {
-            **config.dataset_interface(name).model_dump(mode="json"),
-            **config.dataset_storage(name).model_dump(mode="json"),
-        }
-        dataset.pop("storage")
-    exports = values.pop("publication")["exports"]
-    values.update(
-        export_generative_model=exports["generative_model"],
-        export_embedding_model=exports["embedding_model"],
-        embedding_layer_names=exports["embedding_layer_names"],
-        export_onnx=exports["onnx"],
-        export_pt=exports["pt"],
-        export_with_dropout=exports["with_dropout"],
+    values = config.model_dump(
+        mode="json",
+        exclude={
+            "run": {"recovery": {"resume"}},
+            "training_plan": True,
+        },
     )
-    if values["actor_initialization"] == "attach":
-        values.pop("actor_initialization")
-    for phase in values["training_plan"]:
-        if phase["algorithm"] == "supervised":
-            for source in phase["sources"] + phase["evaluation_sources"]:
-                source.pop("parts")
-    values["runtime_settings"].pop("resume", None)
-    values.get("ownership", {}).get("run", {}).get("recovery", {}).pop("resume", None)
+    values["training_plan"] = [phase_contract(phase) for phase in config.training_plan]
     return fingerprint(values)
 
 
@@ -197,10 +127,7 @@ class RunCheckpoint:
 
         self.validate()
         recovery = {
-            "artifact_type": "sequifier_run_checkpoint",
-            "recovery_type": "supervised",
             "format_version": self.format_version,
-            "model": self.model.state_dict(),
             "optimization": asdict(self.optimization),
             "run_state": self.run_state,
             "random_state": {"states": self.random_state.states},
@@ -229,10 +156,6 @@ class RunCheckpoint:
             payload.get("format_version"),
             ContractVersions.SUPERVISED_RECOVERY,
         )
-        if payload.get("artifact_type") != "sequifier_run_checkpoint":
-            raise ValueError("Expected a supervised checkpoint recovery payload")
-        if payload.get("recovery_type") != "supervised":
-            raise ValueError("Checkpoint belongs to another training runner")
 
         require_contract_version(
             "initialization policy",
@@ -244,7 +167,7 @@ class RunCheckpoint:
             payload.get("initialization_seed_derivation_version"),
             ContractVersions.INITIALIZATION_SEED_DERIVATION,
         )
-        model = ModelArtifact.from_state_dict(payload["model"])
+        model = ModelArtifact.from_state_dict(envelope["model"])
         training_config = read_training_plan(payload["training_config"])
         loader_parts = payload["loader_state"]["parts"]
         checkpoint = cls(
@@ -273,7 +196,7 @@ class RunCheckpointStore:
     def __init__(self, training_config: Any, model_name: str) -> None:
         self.latest_path = checkpoint_path(training_config)
         self.model_name = model_name
-        self.phase_directory = training_config.phase_directory
+        self.phase_directory = training_config.outputs.phase_directory
         self.phases = training_config.training_plan
 
     def path_for(
@@ -283,14 +206,11 @@ class RunCheckpointStore:
             return self.latest_path
         from sequifier.artifacts.phase import PhaseArtifacts
 
-        directory = (
-            PhaseArtifacts.for_phase(
-                self.phase_directory,
-                phase_offset + phase_index,
-                self.phases[phase_index].name,
-            ).model.parent
-            / "checkpoints"
-        )
+        directory = PhaseArtifacts.for_phase(
+            self.phase_directory,
+            phase_offset + phase_index,
+            self.phases[phase_index].name,
+        ).snapshots
         return directory / f"{self.model_name}-{suffix}.pt"
 
     def save(self, checkpoint: RunCheckpoint, suffix: str | None) -> Path:
@@ -325,7 +245,7 @@ def write_run_checkpoint(
 
 def checkpoint_path(training_config: Any, *, resume=None) -> Path:
     if resume is None:
-        resume = training_config.runtime_settings.resume
+        resume = training_config.run.recovery.resume
     configured_path = resume.checkpoint_path if resume is not None else None
     if configured_path:
         path = Path(configured_path)
@@ -342,12 +262,9 @@ def checkpoint_path(training_config: Any, *, resume=None) -> Path:
     return path.resolve()
 
 
-def select_run_checkpoint(training_config: Any, *, resume=None) -> Path | None:
-    if resume is None:
-        resume = training_config.runtime_settings.resume
+def select_run_checkpoint(path: Path, resume) -> Path | None:
     if resume is None or resume.policy == "never":
         return None
-    path = checkpoint_path(training_config, resume=resume)
     if path.is_file():
         return path
     if resume.policy == "required":
@@ -359,14 +276,20 @@ def read_resume_seed(run) -> int | None:
     """Read the saved run seed before resolving seed-dependent inputs."""
     from sequifier.artifacts.checkpoint_envelope import validate_checkpoint_envelope
 
-    path = select_run_checkpoint(run, resume=run.recovery.resume)
+    resume = run.recovery.resume
+    path = select_run_checkpoint(checkpoint_path(run, resume=resume), resume)
     if path is None:
         return None
     envelope = torch.load(path, map_location="cpu", weights_only=False)
     validate_checkpoint_envelope(envelope)
     recovery = envelope["recovery"]
     if envelope["recovery_type"] == "supervised":
-        recovery = recovery["training_config"]
+        require_contract_version(
+            "supervised recovery",
+            recovery.get("format_version"),
+            ContractVersions.SUPERVISED_RECOVERY,
+        )
+        recovery = recovery["training_config"]["run"]["reproducibility"]
     elif envelope["recovery_type"] == "policy":
         recovery = recovery["plan"]
     seed = recovery.get("seed")

@@ -190,31 +190,89 @@ class StoredTensorBatch:
 
 
 def tabular_tensor_batch(
-    data, column_data_types, columns, window_length
+    data, column_data_types, columns, window_length, *, curriculum=(), sort_rows=True
 ) -> StoredTensorBatch:
-    """Read the legacy tabular representation into the standard stored batch."""
+    """Decode features, coordinates and curriculum values in the same window order."""
     import polars as pl
 
-    from sequifier.helpers import numpy_storage_to_pytorch
+    from sequifier.helpers import columns_from_slice
+    from sequifier.io.sample_order import (
+        SAMPLE_KEY_COLUMNS,
+        curriculum_storage_column,
+        curriculum_storage_columns,
+        source_curriculum_column,
+    )
 
-    bounds = ("startItemPosition", "splitStartItemPosition", "splitEndItemPosition")
+    keys = SAMPLE_KEY_COLUMNS
+    bounds = (
+        "startItemPosition",
+        "leftPadLength",
+        "splitStartItemPosition",
+        "splitEndItemPosition",
+    )
     if not set(bounds) <= set(data.columns):
         raise ValueError(
-            "prepared windows require explicit start positions and split bounds"
+            "Prepared windows require padding, start positions and split bounds"
         )
-    sequences, pads = numpy_storage_to_pytorch(
-        data, column_data_types, columns, window_length
+    if curriculum is None:
+        curriculum = [
+            source_curriculum_column(col)
+            for col in curriculum_storage_columns(data.columns)
+        ]
+    stored = [curriculum_storage_column(name) for name in curriculum]
+    if any(not data.schema[key].is_integer() for key in keys):
+        raise ValueError("Stored sequence and subsequence IDs must be integers")
+    values = []
+    for name, alias in zip(curriculum, stored):
+        source = alias if alias in data.columns else name
+        if source not in data.columns:
+            raise ValueError(f"Missing curriculum column {name!r} in stored windows")
+        column = pl.col(source)
+        values.append(pl.when(column.n_unique() == 1).then(column.first()).alias(alias))
+    positions = data.group_by(keys, maintain_order=True).agg(
+        pl.col(*bounds).first(), *values
     )
-    positions = (
-        data.group_by(["sequenceId", "subsequenceId"])
-        .agg(*(pl.col(name).first() for name in bounds))
-        .sort(["sequenceId", "subsequenceId"])
+    if sort_rows:
+        positions = positions.sort(keys)
+    samples = None
+    if stored:
+        selected = positions.select(stored)
+        if any(selected.null_count().row(0)):
+            raise ValueError(
+                "Curriculum values must be non-null and identical per subsequence"
+            )
+        samples = torch.tensor(selected.to_numpy(), dtype=torch.int64)
+
+    identities = positions.select(keys)
+    steps = columns_from_slice(slice(0, window_length), window_length)
+    partitions = data.partition_by("inputCol", as_dict=True) if columns else {}
+    sequences = {}
+    for name in columns:
+        rows = partitions.get((name,))
+        if rows is None:
+            raise ValueError(f"Column not found in preprocessed data: {name}")
+        if not rows.select(keys).equals(identities):
+            rows = identities.join(rows, on=keys, validate="1:1", maintain_order="left")
+            if rows.height != identities.height:
+                raise ValueError(f"{name}: expected one feature row per stored window")
+        sequences[name] = torch.tensor(
+            rows.select(steps).to_numpy(), dtype=column_data_types[name]
+        )
+
+    def coordinate(name):
+        return torch.tensor(positions[name].to_numpy(), dtype=torch.int64)
+
+    return StoredTensorBatch(
+        sequences=sequences,
+        sequence_ids=coordinate("sequenceId"),
+        subsequence_ids=coordinate("subsequenceId"),
+        start_item_positions=coordinate("startItemPosition"),
+        left_pad_lengths=coordinate("leftPadLength"),
+        split_start_item_positions=coordinate("splitStartItemPosition"),
+        split_end_item_positions=coordinate("splitEndItemPosition"),
+        sample_positions=samples,
+        curriculum_columns=tuple(curriculum),
     )
-    ids, subsequences, starts, lows, highs = (
-        torch.tensor(positions[name].to_numpy(), dtype=torch.int64)
-        for name in ("sequenceId", "subsequenceId", *bounds)
-    )
-    return StoredTensorBatch(sequences, ids, subsequences, starts, pads, lows, highs)
 
 
 def load_pt_payload(path, *, layouts=None, n_classes=None) -> StoredTensorBatch:

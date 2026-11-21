@@ -1,21 +1,21 @@
 """Shared policy transactions, representation checks and phase result contracts."""
 
-import hashlib
-import json
 import math
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Callable, Generic, TypedDict, TypeVar
 
 import torch
 
-from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.artifacts.model_artifact import ModelExecutionConfig
+from sequifier.artifacts.reports import HandoffCandidate, PhaseResult
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.contract_versions import ContractVersions
+from sequifier.fingerprints import fingerprint
 from sequifier.rl.phase_optimization import PhaseOptimization, PhaseRoles
 from sequifier.rl.policy import Policy
 from sequifier.rl.telemetry import TelemetryJournal
-from sequifier.runtime.plan import metric_improved, select_handoff, stop_scope
+from sequifier.runtime.plan import metric_improved, stop_scope
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 from sequifier.runtime.stopping import StoppingState
 
@@ -34,16 +34,6 @@ def clone_weights(module):
     }
 
 
-def weight_fingerprint(weights):
-    digest = hashlib.sha256()
-    for name, tensor in sorted(weights.items()):
-        value = tensor.detach().cpu().contiguous()
-        digest.update(name.encode())
-        digest.update(str((value.dtype, tuple(value.shape))).encode())
-        digest.update(value.reshape(-1).view(torch.uint8).numpy().tobytes())
-    return digest.hexdigest()
-
-
 def require_equal(expected, actual, field):
     """Locate the first mismatching contract field rather than a generic failure."""
     if isinstance(expected, dict) and isinstance(actual, dict):
@@ -59,82 +49,29 @@ def require_equal(expected, actual, field):
 
 @dataclass(frozen=True)
 class ActorRepresentation:
-    # Canonical JSON provides an immutable owned value, even for nested schemas.
-    canonical: str
+    execution: ModelExecutionConfig
+    interface: str
 
     @classmethod
-    def from_actor(cls, actor, units):
-        from pydantic_core import to_jsonable_python
-
-        from sequifier.artifacts.model_export import model_execution_config
-
-        try:
-            units = actor.units
-        except AttributeError:
-            pass
-        model = actor.execution_config.model.model_dump(mode="json")
-        model["backbone"]["repository"] = None
+    def from_actor(cls, actor):
         return cls(
-            json.dumps(
-                {
-                    "execution": to_jsonable_python(
-                        model_execution_config(actor.execution_config)
-                    ),
-                    "policy": actor.config.model_dump(mode="json"),
-                    "model": model,
-                    "statistics": actor.interface.selected_columns_statistics,
-                    "units": dict(units),
-                },
-                sort_keys=True,
-                allow_nan=False,
-            )
+            ModelExecutionConfig.from_training_config(actor.execution_config),
+            actor.interface_name,
         )
 
     @property
-    def values(self):
-        return json.loads(self.canonical)
-
-    @property
-    def policy(self):
-        return ResolvedPolicyBinding.model_validate(self.values["policy"])
-
-    @property
     def identity(self):
-        return hashlib.sha256(self.canonical.encode()).hexdigest()
+        return fingerprint((self.interface, self.execution.identity))
 
-    def validate_actor(self, actor, units, field="actor"):
-        actual = type(self).from_actor(actor, units).values
-        if "execution" not in self.values:
-            actual.pop("execution")
-        require_equal(self.values, actual, field)
-
-
-@dataclass(frozen=True)
-class PolicyPhaseResult:
-    index: int
-    name: str
-    algorithm: str
-    monitor: str
-    direction: str
-    handoff: str
-    selected_metric: float | None
-    selected_transaction: int
-    selected_weight_hash: str
-    clocks: dict
-    metrics: tuple[dict, ...]
-    provenance: dict
-    stop_scope: str | None = None
-
-    def as_dict(self):
-        from dataclasses import asdict
-
-        return asdict(self)
+    def validate_actor(self, actor, field="actor"):
+        actual = type(self).from_actor(actor)
+        require_equal(self.identity, actual.identity, field)
 
 
 @dataclass(frozen=True)
 class PolicyRunResult:
     policy: Policy
-    phases: tuple[PolicyPhaseResult, ...]
+    phases: tuple[PhaseResult, ...]
     representation: ActorRepresentation
     model_path: str
     report_path: str
@@ -152,7 +89,7 @@ class OptimizerContinuation(TypedDict):
 class PhaseExecution:
     actor: Policy
     weights: dict[str, torch.Tensor]
-    result: PolicyPhaseResult
+    result: PhaseResult
     continuation: OptimizerContinuation | None
 
 
@@ -187,6 +124,7 @@ class PhaseContext(Generic[PhaseType, DataType]):
     commit: Callable[[dict], None]
     optimization: PhaseOptimization
     telemetry: TelemetryJournal
+    adapter_contract: dict
     metrics: "PolicyMetrics | None" = None
     continuation: OptimizerContinuation | None = None
     preserve_optimizer: bool = False
@@ -201,13 +139,8 @@ class Selection:
 
     def __init__(self, phase, monitor, direction, state=None):
         self.phase, self.monitor, self.direction = phase, monitor, direction
-        self.best_metric, self.best_weights, self.best_transaction = None, None, None
-        self.last_metric = None
-        if state:
-            self.best_metric = state["best_metric"]
-            self.best_weights = state["best_weights"]
-            self.best_transaction = state["best_transaction"]
-            self.last_metric = state["last_metric"]
+        self.best = HandoffCandidate(**state["best"]) if state else HandoffCandidate()
+        self.last_metric = state["last_metric"] if state else None
 
     def observe(self, actor, metric, transaction):
         if metric is not None and not math.isfinite(metric):
@@ -215,52 +148,44 @@ class Selection:
         self.last_metric = metric
         if metric is None:
             return
-        if metric_improved(metric, self.best_metric, self.direction):
-            self.best_metric = float(metric)
-            self.best_weights = clone_weights(actor.network)
-            self.best_transaction = transaction
+        if metric_improved(metric, self.best.metric, self.direction):
+            self.best = HandoffCandidate(
+                float(metric), transaction, clone_weights(actor.network)
+            )
 
     def state_dict(self):
-        return {
-            "best_metric": self.best_metric,
-            "best_weights": self.best_weights,
-            "best_transaction": self.best_transaction,
-            "last_metric": self.last_metric,
-        }
+        return {"best": vars(self.best), "last_metric": self.last_metric}
 
-    def finish(self, context, transaction: int, clocks, provenance):
+    def finish(self, context, transaction: int, clocks, provenance, scope):
         actor = context.actor.eval()
-        selected, metric = select_handoff(
-            self.phase.handoff,
-            (transaction, self.last_metric),
-            (self.best_transaction, self.best_metric),
+        selected = self.best.select(
+            self.phase,
+            lambda: HandoffCandidate(
+                self.last_metric, transaction, clone_weights(actor.network)
+            ),
         )
-        if selected is None:
-            raise ValueError(f"{self.phase.name}: no selected transaction")
+        weights = selected.require_weights()
         if self.phase.handoff == "best":
-            if self.best_weights is None:
-                raise ValueError(
-                    f"phases.{self.phase.name}: handoff best requires a finite {self.monitor}"
-                )
-            weights = self.best_weights
             actor.network.load_state_dict(weights, strict=True)
-        else:
-            weights = clone_weights(actor.network)
-        result = PolicyPhaseResult(
+        result = PhaseResult.from_phase(
             context.index,
-            self.phase.name,
-            self.phase.algorithm,
-            self.monitor,
-            self.direction,
-            self.phase.handoff,
-            metric,
-            selected,
-            weight_fingerprint(weights),
-            clocks,
-            (),
-            provenance,
+            self.phase,
+            self.phase.evaluation.monitor,
+            stop_scope=scope,
+            selection=selected,
+            clocks=clocks,
+            provenance=provenance,
         )
         return actor, weights, result
+
+
+@dataclass(frozen=True)
+class TransactionSchedule:
+    timestamp: float
+    evaluate: bool
+    checkpoint: bool
+    retain_snapshot: bool
+    timed_snapshot: bool
 
 
 class PhaseSession:
@@ -383,28 +308,42 @@ class PhaseSession:
         self.zero_grad()
         return norms
 
-    def snapshot_due(self):
-        minutes = self.context.phase.checkpoints.snapshot_interval_minutes
-        return (
-            minutes is not None
-            and time.monotonic() - self.last_snapshot_time >= minutes * 60
-        )
-
-    def should_evaluate_initial(self):
-        due = self.context.phase.evaluation.before_phase and not self.initial_evaluated
-        if due:
-            self.initial_evaluated = True
+    def evaluate_initial(self, evaluate, *args, **kwargs):
+        if self.context.phase.evaluation.before_phase and not self.initial_evaluated:
             self._count_stopping = False
-        return due
+            evaluate(*args, initial=True, **kwargs)
+            self.initial_evaluated = True
 
-    def should_evaluate(self, final):
-        scheduled = (
-            final
-            or self.transaction % self.context.phase.evaluation_interval_iterations == 0
+    def transaction_schedule(self, final):
+        phase = self.context.phase
+        now = time.monotonic()
+        snapshot_minutes = phase.checkpoints.snapshot_interval_minutes
+        latest_minutes = (
+            self.context.run.parent.run.recovery.latest_checkpoint_interval_minutes
         )
-        self._count_stopping = scheduled
-        return scheduled or (
-            self.snapshot_due() and self.context.phase.evaluation.on_snapshot
+        timed = (
+            snapshot_minutes is not None
+            and now - self.last_snapshot_time >= snapshot_minutes * 60
+        )
+        latest = (
+            latest_minutes is not None
+            and now - self.last_checkpoint_time >= latest_minutes * 60
+        )
+        retain = (
+            final
+            or timed
+            or self.transaction % phase.checkpoint_interval_iterations == 0
+        )
+        scheduled_evaluation = (
+            final or self.transaction % phase.evaluation_interval_iterations == 0
+        )
+        self._count_stopping = scheduled_evaluation
+        return TransactionSchedule(
+            timestamp=now,
+            evaluate=scheduled_evaluation or (retain and phase.evaluation.on_snapshot),
+            checkpoint=retain or latest,
+            retain_snapshot=retain,
+            timed_snapshot=timed,
         )
 
     def observe(self, metric, **record):
@@ -456,14 +395,27 @@ class PhaseSession:
         """Commit an offline update after all participating optimizers have stepped."""
         self.transaction += 1
         self.record_training(final=final, **training)
-        if self.should_evaluate(final):
+        schedule = self.transaction_schedule(final)
+        if schedule.evaluate:
             extra = (
                 evaluation_record()
                 if callable(evaluation_record)
                 else evaluation_record
             )
             evaluate(**training, **(extra or {}))
-        self.checkpoint(final, **(checkpoint or {}))
+        self.checkpoint(schedule, checkpoint)
+
+    def complete_online_update(
+        self, *, final, training: dict | Callable[[], dict], evaluate, checkpoint
+    ):
+        """Evaluate the updated policy before recording collection metrics and recovery."""
+        self.transaction += 1
+        schedule = self.transaction_schedule(final)
+        if schedule.evaluate:
+            evaluate()
+        metrics = training() if callable(training) else training
+        self.record_training(final=final, transaction=self.transaction, **metrics)
+        self.checkpoint(schedule, checkpoint)
 
     def optimizer_clocks(self):
         return {f"{role}_optimizer_steps": steps for role, steps in self.steps.items()}
@@ -473,29 +425,21 @@ class PhaseSession:
             "continuations", {"transaction": self.transaction, **record}
         )
 
-    def evaluate_online(self, adapter, *, initial=False, **progress):
+    def evaluate_online(self, adapter, *, adjust=None, **progress):
         from sequifier.rl.ppo_evaluation import evaluate_policy
 
         phase = self.context.phase
         result = evaluate_policy(
-            self.context.actor, phase.evaluation, forbidden_adapter=adapter
+            self.context.actor,
+            phase.evaluation,
+            forbidden_adapter=adapter,
+            expected_identity=self.context.adapter_contract[
+                f"{self.context.index}.evaluation"
+            ],
         )
-        if (
-            phase.algorithm == "grpo"
-            and phase.evaluation.monitor.metric == "score_mean"
-        ):
-            score = float(
-                torch.tensor(
-                    result["score_mean"] * phase.reward_scale, dtype=torch.float32
-                )
-            )
-            if not math.isfinite(score):
-                raise ValueError("GRPO evaluation score exceeds finite FP32 range")
-            result["score_mean"] = score
-            result["selection_value"] = score
+        if adjust is not None:
+            adjust(result, phase)
         self.observe(result["selection_value"], **result)
-        if initial and phase.algorithm == "ppo":
-            progress["initial"] = True
         self.telemetry.append(
             "evaluations", {**result, "transaction": self.transaction, **progress}
         )
@@ -510,22 +454,11 @@ class PhaseSession:
             for role, (optimizer, scheduler) in self.optimization.items()
         }
 
-    def should_checkpoint(self, final):
-        return (
-            final
-            or self.stopping.triggered
-            or self.snapshot_due()
-            or (
-                self.context.run.latest_checkpoint_interval_minutes is not None
-                and time.monotonic() - self.last_checkpoint_time
-                >= self.context.run.latest_checkpoint_interval_minutes * 60
-            )
-            or self.transaction % self.context.phase.checkpoint_interval_iterations == 0
-        )
-
-    def checkpoint(self, final, **extra):
-        if not self.should_checkpoint(final):
+    def checkpoint(self, schedule, payload=None):
+        # A scheduled evaluation may just have triggered early stopping.
+        if not (schedule.checkpoint or self.stopping.triggered):
             return
+        extra = payload() if payload is not None else {}
         self.context.commit(
             {
                 **extra,
@@ -550,33 +483,30 @@ class PhaseSession:
             }
         )
 
-        retained = (
-            final
-            or self.stopping.triggered
-            or self.snapshot_due()
-            or self.transaction % self.context.phase.checkpoint_interval_iterations == 0
-        )
-        if retained:
-            from pathlib import Path
+        if schedule.retain_snapshot or self.stopping.triggered:
             from shutil import copyfile
 
+            from sequifier.artifacts.phase import PhaseArtifacts
             from sequifier.io.atomic import atomic_path
 
             destination = (
-                Path(self.context.run.phase_directory)
-                / f"{self.context.index:03d}-{self.context.phase.name}"
-                / "checkpoints"
+                PhaseArtifacts.for_phase(
+                    self.context.run.outputs.phase_directory,
+                    self.context.index,
+                    self.context.phase.name,
+                ).snapshots
                 / f"transaction-{self.transaction:08d}.pt"
             )
             with atomic_path(destination, durable=True) as temporary:
                 copyfile(self.context.run.checkpoint_path, temporary)
-        self.last_checkpoint_time = time.monotonic()
-        if self.snapshot_due():
-            self.last_snapshot_time = self.last_checkpoint_time
+        self.last_checkpoint_time = schedule.timestamp
+        if schedule.timed_snapshot:
+            self.last_snapshot_time = schedule.timestamp
 
     def finish(self, clocks, provenance):
         if self.context.metrics is not None:
             self.context.metrics.flush(self)
+        scope = stop_scope(self.context.phase.stopping, self.stopping.triggered)
         actor, weights, result = self.selection.finish(
             self.context,
             self.transaction,
@@ -589,8 +519,8 @@ class PhaseSession:
                     "phase_sampling": self.context.identity.sampling_seed,
                 },
             },
+            scope,
         )
-        scope = stop_scope(self.context.phase.stopping, self.stopping.triggered)
         continuation: OptimizerContinuation | None = None
         if self.context.preserve_optimizer and scope != "end_plan":
             continuation = {
@@ -602,9 +532,4 @@ class PhaseSession:
                 "optimization": self.optimization_state(),
                 "trainable_parameters": self.mask_ids,
             }
-        return PhaseExecution(
-            actor,
-            weights,
-            replace(result, stop_scope=scope),
-            continuation,
-        )
+        return PhaseExecution(actor, weights, result, continuation)

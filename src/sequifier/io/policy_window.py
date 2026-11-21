@@ -18,8 +18,7 @@ PREVIOUS_ACTION = "__policy_previous_action"
 def normalize_policy_features(inputs, interface, *, input_encoding=None):
     """Apply transforms to policy histories that still contain raw real values."""
     features = dict(inputs.inputs)
-    encoding = input_encoding or interface.policy.input_encoding
-    if encoding == "model" or isinstance(inputs, ModelEncodedPolicyInputs):
+    if input_encoding == "model" or isinstance(inputs, ModelEncodedPolicyInputs):
         return features
     mask = inputs.attention_valid_mask
     if interface.policy.return_conditioned:
@@ -157,9 +156,10 @@ class PolicyWindowView:
                 raise ValueError(
                     "return-conditioned histories require one return per observation"
                 )
+            start = max(0, len(observations) - config.context_length)
             observations = [
                 {**row, DESIRED_RETURN: value}
-                for row, value in zip(observations, desired_returns)
+                for row, value in zip(observations[start:], desired_returns[start:])
             ]
         return materialize_history(
             config,

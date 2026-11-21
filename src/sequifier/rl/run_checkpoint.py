@@ -12,12 +12,11 @@ from sequifier.artifacts.checkpoint_envelope import (
     recovery_payload,
     require_phase_boundary,
 )
-from sequifier.artifacts.model_artifact import (
-    ModelArtifact,
-    ModelArtifactMetadata,
-    ModelExecutionConfig,
-)
-from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
+from sequifier.artifacts.model_artifact import ModelArtifact, ModelArtifactMetadata
+from sequifier.artifacts.phase import CommittedPhases, PhaseArtifacts, PhaseCommit
+from sequifier.artifacts.reports import PhaseResult
+from sequifier.artifacts.run_checkpoint import select_run_checkpoint
+from sequifier.artifacts.state_dict import weight_fingerprint
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.atomic import atomic_save
 from sequifier.rl.checkpoint import phase_actor_path, policy_model_artifact
@@ -26,33 +25,10 @@ from sequifier.rl.run_state import (
     ActorRepresentation,
     OptimizerContinuation,
     PhaseExecution,
-    PolicyPhaseResult,
     require_equal,
-    weight_fingerprint,
 )
 from sequifier.runtime.plan import new_run_id
 from sequifier.runtime.random_state import capture_rng_state
-
-
-@dataclass(frozen=True)
-class CompletedPhase:
-    commit: PhaseCommit
-
-    @property
-    def result(self):
-        values = self.commit.result
-        return PolicyPhaseResult(**{**values, "metrics": tuple(values["metrics"])})
-
-    @classmethod
-    def from_dict(cls, values):
-        return cls(PhaseCommit.load(values))
-
-    def as_dict(self):
-        return self.commit.as_dict()
-
-    def report_result(self):
-        values = self.commit.report_result()
-        return PolicyPhaseResult(**{**values, "metrics": tuple(values["metrics"])})
 
 
 @dataclass
@@ -65,8 +41,8 @@ class RunCheckpoint:
     initialization: dict
     incoming_actor: dict
     random: dict
+    completed: CommittedPhases
     reference_contract: dict = field(default_factory=dict)
-    completed: list[CompletedPhase] = field(default_factory=list)
     phase_state: dict | None = None
     continuation: OptimizerContinuation | None = None
     stopped: bool = False
@@ -82,12 +58,8 @@ class RunCheckpoint:
 
     @classmethod
     def load(cls, path, config, plan, data_identity=None, *, run_id=None):
-        path = Path(path)
-        if config.resume.policy == "never":
-            return None
-        if not path.is_file():
-            if config.resume.policy == "required":
-                raise FileNotFoundError(path)
+        path = select_run_checkpoint(Path(path), config.resume)
+        if path is None:
             return None
         envelope = torch.load(path, map_location="cpu", weights_only=False)
         payload = recovery_payload(envelope, "policy")
@@ -105,16 +77,22 @@ class RunCheckpoint:
         try:
             saved_plan = payload["plan"]
             require_equal(plan, saved_plan, "resume.plan")
-            completed = [
-                CompletedPhase.from_dict(record) for record in payload["completed"]
-            ]
+            completed = CommittedPhases.load(
+                config.phases,
+                payload["completed"],
+                offset=config.phase_offset,
+                checkpoint_path=path,
+            )
             checkpoint = cls(
                 **{
                     f.name: payload[f.name]
                     for f in fields(cls)
                     if f.name not in {"representation", "completed"}
                 },
-                representation=ActorRepresentation(payload["representation"]),
+                representation=ActorRepresentation(
+                    ModelArtifact.from_state_dict(envelope["model"]).model_config,
+                    payload["interface"],
+                ),
                 completed=completed,
             )
             require_equal(
@@ -141,21 +119,12 @@ class RunCheckpoint:
         require_equal(data_identity, self.data_identity, "resume.data")
 
     def validate(self, config):
-        if self.phase_index > len(config.phases):
-            raise ValueError("checkpoint completed handoffs disagree with the plan")
         validate_finite_state(self.incoming_actor, "incoming_actor")
-        # Parsing the owned representation also validates the persisted policy schema.
-        self.representation.policy
         for position, record in enumerate(self.completed):
-            result = record.result
+            result = PhaseResult.model_validate(record.result)
             phase = config.phases[position]
             index = config.phase_offset + position
-            require_equal(
-                (index, phase.name, phase.algorithm, phase.handoff),
-                (result.index, result.name, result.algorithm, result.handoff),
-                "resume.completed_phase",
-            )
-            path = phase_actor_path(config.phase_directory, index, phase.name)
+            path = phase_actor_path(config.outputs.phase_directory, index, phase.name)
             require_equal(
                 str(path), result.provenance["actor_path"], "resume.actor_path"
             )
@@ -164,16 +133,17 @@ class RunCheckpoint:
                 result.provenance["report_path"],
                 "resume.report_path",
             )
-            if sidecar := record.commit.sidecars.get("telemetry"):
+            require_equal(str(path), record.result["model_path"], "resume.model_path")
+            if sidecar := record.sidecars.get("telemetry"):
                 require_equal(
                     str(PhaseArtifacts(path).telemetry),
                     sidecar["path"],
                     "resume.telemetry.path",
                 )
-            validate_finite_state(record.commit.result, "completed_phase")
+            validate_finite_state(record.result, "completed_phase")
         incoming_identity = weight_fingerprint(self.incoming_actor)
         require_equal(
-            self.completed[-1].result.selected_weight_hash
+            self.completed[-1].result["selected_weight_hash"]
             if self.completed
             else self.initialization["weight_hash"],
             incoming_identity,
@@ -190,7 +160,7 @@ class RunCheckpoint:
             ContractVersions.POLICY_PHASE_STATE,
         )
         artifacts = PhaseArtifacts.for_phase(
-            config.phase_directory,
+            config.outputs.phase_directory,
             self.next_phase_index,
             config.phases[self.phase_index].name,
         )
@@ -206,8 +176,8 @@ class RunCheckpoint:
             raise ValueError(
                 "phase checkpoint must follow a completed optimizer transaction"
             )
-        selection = state["selection"]
-        best = selection["best_transaction"]
+        selection = state["selection"]["best"]
+        best = selection["transaction"]
         if best is not None and (
             (not isinstance(best, int) or isinstance(best, bool))
             or not 0 <= best <= transaction
@@ -215,9 +185,9 @@ class RunCheckpoint:
             raise ValueError(
                 "checkpoint selected transaction is outside committed progress"
             )
-        if (selection["best_metric"] is None) != (
-            selection["best_weights"] is None
-        ) or (best is None) != (selection["best_weights"] is None):
+        if (selection["metric"] is None) != (selection["weights"] is None) or (
+            best is None
+        ) != (selection["weights"] is None):
             raise ValueError(
                 "checkpoint best actor, metric and transaction must be recorded together"
             )
@@ -228,8 +198,8 @@ class RunCheckpoint:
         )
         validate_finite_state(state, "phase")
 
-    def validate_actor(self, actor, units):
-        self.representation.validate_actor(actor, units, "resume.representation")
+    def validate_actor(self, actor):
+        self.representation.validate_actor(actor, "resume.representation")
         expected = actor.network.state_dict()
         weights = [self.incoming_actor]
         if self.phase_state is not None:
@@ -237,7 +207,7 @@ class RunCheckpoint:
             weights += [
                 state["networks"]["actor"],
                 state["reference"],
-                state["selection"]["best_weights"],
+                state["selection"]["best"]["weights"],
             ]
         for snapshot in weights:
             if snapshot is None:
@@ -267,9 +237,7 @@ class RunCheckpoint:
             }
         return phase_boundary(
             self.run_id,
-            selected=self.completed[-1].commit.model_identity
-            if self.completed
-            else None,
+            selected=self.completed.selected_model,
             active=active,
         )
 
@@ -279,7 +247,7 @@ class RunCheckpoint:
         self.phase_state = state
         model = ModelArtifact(
             ContractVersions.MODEL_ARTIFACT,
-            ModelExecutionConfig(self.representation.values["execution"]),
+            self.representation.execution,
             state["networks"]["actor"] if state else self.incoming_actor,
             ModelArtifactMetadata(),
         )
@@ -295,40 +263,42 @@ class RunCheckpoint:
                         for f in fields(self)
                         if f.name not in {"representation", "completed"}
                     },
-                    "representation": self.representation.canonical,
+                    "interface": self.representation.interface,
                     "representation_fingerprint": self.representation.identity,
-                    "completed": [record.as_dict() for record in self.completed],
+                    "completed": self.completed.records(),
                 },
                 model,
                 boundary=self.phase_boundary(),
             ),
         )
 
-    def finish_phase(self, execution: PhaseExecution, telemetry_position):
+    def finish_phase(self, execution: PhaseExecution, telemetry_position, checkpoint):
         actor, result = execution.actor, execution.result
-        require_equal(self.next_phase_index, result.index, "handoff.phase_index")
         require_equal(
             result.selected_weight_hash,
             weight_fingerprint(execution.weights),
             "handoff.selected_actor",
         )
         artifacts = PhaseArtifacts(Path(result.provenance["actor_path"]))
-        result_data = result.as_dict()
         commit = PhaseCommit.stage(
             artifacts,
-            result_data,
+            result,
+            checkpoint_path=checkpoint,
             model=policy_model_artifact(
-                actor, metadata=result_data, weights=execution.weights
+                actor,
+                metadata=result.model_dump(mode="json"),
+                weights=execution.weights,
             ),
             telemetry={"path": str(artifacts.telemetry), "position": telemetry_position}
             if telemetry_position is not None
             else None,
         )
-        self.completed.append(CompletedPhase(commit))
+        self.completed.append(commit)
         self.stopped = result.stop_scope == "end_plan"
         self.incoming_actor = execution.weights
         self.continuation = execution.continuation
         self.phase_state = None
+        return commit
 
 
 def validate_finite_state(value, field):

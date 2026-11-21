@@ -11,7 +11,6 @@ from sequifier.io.actions import decode_action
 from sequifier.io.batch import ModelEncodedPolicyInputs, SequifierInputs
 from sequifier.io.categorical import CategoricalCodec, is_hash_bucket_label
 from sequifier.io.preprocessing import normalize_input_values
-from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
 DESIRED_RETURN = "__policy_return"
@@ -34,8 +33,17 @@ def encode_value(value, column, config, *, force_raw=False, codecs=None):
             encode_value(item, column, config, force_raw=force_raw, codecs=codecs)
             for item in value
         ]
-    if force_raw and value in SPECIAL_TOKEN_IDS.ids_by_label:
-        return SPECIAL_TOKEN_IDS.ids_by_label[value]
+    storage = getattr(config, "raw_inputs", None)
+    cardinality = storage.cardinality_config if storage else None
+    if force_raw:
+        if (
+            not (cardinality or {}).get(column)
+            and value is not None
+            and str(value) in mapping
+        ):
+            return mapping[str(value)]
+        if value in SPECIAL_TOKEN_IDS.ids_by_label:
+            return SPECIAL_TOKEN_IDS.ids_by_label[value]
     if value is None or isinstance(value, str):
         dtype = pl.String
     elif isinstance(value, (bool, np.bool_)):
@@ -46,7 +54,6 @@ def encode_value(value, column, config, *, force_raw=False, codecs=None):
         raise ValueError(f"{column}: expected a string, integer, or boolean category")
     key = (column, dtype)
     if key not in codecs:
-        cardinality = getattr(config, "cardinality_config", None)
         if cardinality is None and any(
             is_hash_bucket_label(label) for label in mapping
         ):
@@ -58,14 +65,17 @@ def encode_value(value, column, config, *, force_raw=False, codecs=None):
 
 
 def materialize_history(config, observations, previous_actions, static, *, codecs):
-    schema = ExecutionSchema.from_dict(config.input_schema)
+    schema = config.input_schema
+    if schema is None:
+        raise ValueError("Materializing policy windows requires a model input schema")
+    transforms = config.transforms
     rows = observations[-config.context_length :]
     previous = previous_actions[-config.context_length :]
     if config.previous_action_inputs and len(previous) != len(rows):
         raise ValueError("lagged actions must align with the observation history")
     padding = config.context_length - len(rows)
     prepared = config.input_encoding == "model"
-    normalize = prepared or bool(config.input_column_types)
+    normalize = prepared or bool(transforms.column_data_types)
     depth_masks = {
         column: depth_mask_metadata_key(name)
         for name, layout in schema.depth_layouts.items()
@@ -75,8 +85,10 @@ def materialize_history(config, observations, previous_actions, static, *, codec
     def tensor(raw, key, dtype, *, feedback=False):
         raw = encode_value(raw, key, config, force_raw=feedback, codecs=codecs)
         if dtype == torch.float32 and normalize and (not prepared or feedback):
-            column_type = config.input_column_types.get(key, "")
-            if statistics := config.input_statistics.get(key):
+            column_type = transforms.column_data_types.get(key, "")
+            if transforms.normalize_real_columns and (
+                statistics := transforms.selected_columns_statistics.get(key)
+            ):
                 raw = normalize_input_values(raw, statistics, column_type)
             elif column_type.lower() == "float16":
                 raw = np.asarray(raw, dtype=np.float16)
@@ -128,7 +140,7 @@ def materialize_history(config, observations, previous_actions, static, *, codec
                     raise ValueError(
                         f"{config.raw_mask_column}: expected a boolean or 0 or 1"
                     )
-                if mask and key in config.input_column_types and not feedback:
+                if mask and key in transforms.column_data_types and not feedback:
                     value = torch.tensor(
                         SPECIAL_TOKEN_IDS.mask if dtype == torch.int64 else 0,
                         dtype=dtype,

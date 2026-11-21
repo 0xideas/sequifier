@@ -28,6 +28,24 @@ from sequifier.runtime.resource_accounting import allocation
 from sequifier.trajectory.archives import collection_archive
 
 
+def validate_grpo_adapter(adapter, phase, exact):
+    require_group_start(adapter, exact=exact)
+    if phase.simulator_workers > 1:
+        from sequifier.rl.simulator_workers import require_parallel_group_start
+
+        require_parallel_group_start(adapter)
+
+
+def scale_evaluation_score(result, phase):
+    if phase.evaluation.monitor.metric == "score_mean":
+        score = torch.tensor(
+            result["score_mean"] * phase.reward_scale, dtype=torch.float32
+        )
+        if not torch.isfinite(score):
+            raise ValueError("GRPO evaluation score exceeds finite FP32 range")
+        result["score_mean"] = result["selection_value"] = float(score)
+
+
 def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     actor, phase = context.actor.eval(), context.phase
     session = PhaseSession(context)
@@ -55,8 +73,10 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     resources = ExitStack()
     workers = None
     try:
-        require_group_start(adapter, exact=context.run.resume.mode == "exact")
-        identity = adapter_identity(adapter)
+        validate_grpo_adapter(adapter, phase, context.run.resume.mode == "exact")
+        identity = adapter_identity(
+            adapter, context.adapter_contract[f"{context.index}.training"]
+        )
         if state:
             require_equal(state["adapter_identity"], identity, "grpo.adapter_identity")
             if context.run.resume.mode != "exact" and groups < phase.total_groups:
@@ -76,12 +96,8 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             )
         )
         if phase.simulator_workers > 1 and groups < phase.total_groups:
-            from sequifier.rl.simulator_workers import (
-                SimulatorWorkers,
-                require_parallel_group_start,
-            )
+            from sequifier.rl.simulator_workers import SimulatorWorkers
 
-            require_parallel_group_start(adapter)
             workers = SimulatorWorkers(
                 phase.environment,
                 min(
@@ -94,8 +110,9 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             )
             resources.callback(workers.close)
 
-        if session.should_evaluate_initial():
-            session.evaluate_online(adapter, initial=True)
+        session.evaluate_initial(
+            session.evaluate_online, adapter, adjust=scale_evaluation_score
+        )
         while groups < phase.total_groups and not session.stopping.triggered:
             count = min(phase.groups_per_iteration, phase.total_groups - groups)
             with allocation("rollout_storage") as storage:
@@ -119,14 +136,12 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 update_seconds = perf_counter() - update_start
                 env_steps += executed
                 groups += count
-                session.transaction += 1
-                final = groups == phase.total_groups
                 if phase.archive_directory:
                     with allocation("rollout_archive") as archive:
                         archive.resize(buffer.estimated_bytes)
                         write_json_atomic(
                             Path(phase.archive_directory)
-                            / f"groups-{session.transaction:08d}.json",
+                            / f"groups-{actor.grpo_policy_version:08d}.json",
                             collection_archive(
                                 "grpo",
                                 {
@@ -143,7 +158,6 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 scores = [t.score for t in buffer.trajectories]
                 record.update(
                     {
-                        "transaction": session.transaction,
                         "groups": groups,
                         "env_steps": env_steps,
                         "policy_version": actor.grpo_policy_version,
@@ -171,13 +185,26 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 )
                 del buffer, scores
             evaluation_start = perf_counter()
-            if session.should_evaluate(final):
-                session.evaluate_online(adapter)
-            evaluation_seconds = perf_counter() - evaluation_start
-            record["evaluation_seconds"] = evaluation_seconds
-            record.update(image_cache_statistics(actor, context.reference))
-            release_image_cache_entries(actor, context.reference)
-            session.record_training(final=final, **record)
+
+            def training_metrics():
+                record["evaluation_seconds"] = perf_counter() - evaluation_start
+                record.update(image_cache_statistics(actor, context.reference))
+                release_image_cache_entries(actor, context.reference)
+                return record
+
+            session.complete_online_update(
+                final=groups == phase.total_groups,
+                training=training_metrics,
+                evaluate=lambda: session.evaluate_online(
+                    adapter, adjust=scale_evaluation_score
+                ),
+                checkpoint=lambda: dict(
+                    groups=groups,
+                    env_steps=env_steps,
+                    adapter_identity=identity,
+                    restart_stream=restart_stream,
+                ),
+            )
             logger.info(
                 "GRPO iteration {}: {} steps, collection {:.2f}s ({:.1f} steps/s), "
                 "update {:.2f}s, evaluation {:.2f}s",
@@ -186,14 +213,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 collection_seconds,
                 executed / collection_seconds,
                 update_seconds,
-                evaluation_seconds,
-            )
-            session.checkpoint(
-                final,
-                groups=groups,
-                env_steps=env_steps,
-                adapter_identity=identity,
-                restart_stream=restart_stream,
+                record["evaluation_seconds"],
             )
     finally:
         try:

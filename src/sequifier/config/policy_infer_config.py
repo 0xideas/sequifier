@@ -4,13 +4,10 @@ from typing import Literal
 
 from pydantic import Field, PrivateAttr, model_validator
 
-from sequifier.artifacts.model_artifact import ModelArtifact
 from sequifier.config.image_config import MediaPath
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
-    InferenceRouteConfig,
-    SelectedInferenceModel,
-    inference_model_config,
+    ResolvedInferenceModel,
 )
 from sequifier.config.policy_config import PolicyConfigBase
 from sequifier.config.policy_plan import OnlineEnvironmentConfig
@@ -68,138 +65,5 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
 class ResolvedPolicyInferenceConfig(PolicyInferenceConfig):
     """Validated policy request with selected artifact/interface and assertions."""
 
-    _artifacts: dict[str, ModelArtifact] = PrivateAttr(default_factory=dict)
+    _model: ResolvedInferenceModel = PrivateAttr()
     _indexed_view: object | None = PrivateAttr(default=None)
-    _legacy_metadata_path: str | None = PrivateAttr(default=None)
-
-
-def _policy_inference_route(
-    route: InferenceRouteConfig, artifacts: dict[str, ModelArtifact]
-) -> SelectedInferenceModel | None:
-    """Inspect artifact interfaces before applying either inference schema."""
-    if route.task != "policy":
-        return None
-    paths = route.model_paths
-    bindings = []
-    selection = None
-    for path in paths:
-        model_config = inference_model_config(path, route.project_root, artifacts)
-        if model_config is None:
-            bindings.append(False)
-            continue
-        selection = SelectedInferenceModel.select(
-            path,
-            model_config,
-            interface_name=route.model_interface,
-            task=route.task,
-        )
-        bindings.append(selection.policy_bound)
-    if len(paths) != 1 or not all(bindings):
-        raise ValueError(
-            "task: policy requires one artifact with a selected policy-bound interface"
-        )
-    if not paths[0].lower().endswith(".pt"):
-        raise ValueError(
-            "task: policy requires a portable .pt artifact; "
-            "use task: forecast for forecast inference"
-        )
-    assert selection is not None
-    return selection
-
-
-def policy_inference_config(
-    values: dict, artifacts: dict[str, ModelArtifact] | None = None
-) -> ResolvedPolicyInferenceConfig | None:
-    """Dispatch from the persisted interface contract, without training YAML."""
-    route = InferenceRouteConfig.model_validate(values)
-    from sequifier.config.infer_config import (
-        _assert_metadata_matches_source,
-        _execution_metadata,
-        _execution_values,
-        _select_image_metadata,
-    )
-    from sequifier.config.metadata import load_dataset_metadata
-
-    artifacts = {} if artifacts is None else artifacts
-    selection = _policy_inference_route(route, artifacts)
-    if selection is None:
-        return None
-    model_path, selected = selection.path, selection.interface_name
-    request = PolicyInferenceConfig.model_validate(values)
-    execution = selection.resolve(request.device)
-    interface = execution.interface(selected)
-    policy = interface.policy
-    if policy is None:
-        raise ValueError("selected interface has no policy")
-    if (
-        request.rollout is not None
-        and request.rollout.environment.units != policy.units
-    ):
-        raise ValueError("rollout environment units differ from policy artifact")
-    reserved = {"sequenceId", "subsequenceId", "windowStartOffset", "itemPosition"}
-    if reserved & set(policy.actions) or (
-        request.output_probabilities and "action_log_probability" in policy.actions
-    ):
-        raise ValueError(
-            "policy action names overlap prediction identity/probability columns"
-        )
-    if request.output_probabilities and any(
-        len({str(value) for value in field.values}) != len(field.values)
-        for field in policy.actions.values()
-        if field.type == "categorical"
-    ):
-        raise ValueError("action labels must have unique probability column names")
-    contract = _execution_values(execution.options, interface)
-    requested_fields = dict(request)
-    for key, actual in contract.items():
-        if (
-            key in request.model_fields_set
-            and requested_fields[key] is not None
-            and requested_fields[key] != actual
-        ):
-            raise ValueError(f"{key} differs from policy artifact")
-    from sequifier.io.prepare_inference import (
-        original_metadata_path,
-        resolve_inference_view,
-    )
-
-    indexed = resolve_inference_view(request)
-    metadata_path = original_metadata_path(request, indexed)
-    storage = execution.interface_storage.get(selected)
-    if metadata_path is not None:
-        explicit = load_dataset_metadata(str(metadata_path))
-        artifact_metadata = _execution_metadata(interface, storage)
-        assert storage is not None
-        explicit = _select_image_metadata(
-            explicit,
-            set(artifact_metadata.image_sources),
-            artifact_metadata.preconditioning_image is not None,
-        )
-        _assert_metadata_matches_source(
-            artifact_metadata,
-            explicit,
-            "policy metadata",
-            layout_is_authoritative=indexed is None and request.input_layout != "raw",
-        )
-        if storage.cardinality_config is not None:
-            for name in interface.id_maps:
-                if storage.cardinality_config.get(
-                    name
-                ) != explicit.cardinality_config.get(name):
-                    raise ValueError(
-                        f"{name}: cardinality settings differ from the saved policy"
-                    )
-            if storage.raw_mask_column != getattr(explicit, "raw_mask_column", None):
-                raise ValueError("Mask column differs from the saved policy")
-    authored = request.model_dump()
-    authored["run"] = request.run.model_dump(mode="python", exclude_unset=True)
-    authored["model_paths"] = [model_path]
-    authored["model_interface"] = selected
-    config = ResolvedPolicyInferenceConfig.model_validate(authored)
-    config._artifacts = artifacts
-    config._indexed_view = indexed
-    if metadata_path is not None and (
-        storage is None or storage.cardinality_config is None
-    ):
-        config._legacy_metadata_path = str(metadata_path)
-    return config

@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field, StrictInt, field_validator, model_valida
 from sequifier.config.components import ResumeConfig
 from sequifier.config.naming import ConfigModel, RunSeed
 from sequifier.config.normalization_config import FrozenNormalizationConfig
+from sequifier.model.execution_options import DEFAULT_MAX_CONCAT_TENSORS, ConcatLimit
 
 
 class Settings(ConfigModel):
@@ -18,6 +19,10 @@ class DistributionSettings(Settings):
     world_size: int = Field(default=1, gt=0)
     backend: str = "nccl"
     cpu_offload: bool | None = None
+
+    @property
+    def distributed(self) -> bool:
+        return self.strategy != "local"
 
     @model_validator(mode="after")
     def coherent(self):
@@ -53,7 +58,17 @@ class ExecutionSettings(Settings):
     precision: PrecisionSettings = Field(default_factory=PrecisionSettings)
     compilation: CompilationSettings = Field(default_factory=CompilationSettings)
     data_loading: DataLoadingSettings = Field(default_factory=DataLoadingSettings)
-    max_concat_tensors: int = Field(default=12, gt=0)
+    max_concat_tensors: ConcatLimit = DEFAULT_MAX_CONCAT_TENSORS
+
+    @model_validator(mode="after")
+    def validate_compilation(self):
+        strategy = self.distribution.strategy
+        mode = self.compilation.torch_compile
+        if strategy == "fsdp" and mode == "outer":
+            raise ValueError("FSDP requires torch_compile 'none' or 'inner'")
+        if strategy == "ddp" and mode == "inner":
+            raise ValueError("DDP requires torch_compile 'none' or 'outer'")
+        return self
 
 
 class TrainingReproducibilitySettings(Settings):

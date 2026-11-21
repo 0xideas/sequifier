@@ -1,24 +1,25 @@
 """Attach a policy task to a resolved model without rebuilding its interface."""
 
-from sequifier.config.policy_config import ResolvedPolicyBinding
-from sequifier.config.policy_inputs import PolicyInputLayout
+from sequifier.config.policy_config import PolicyBinding, ResolvedPolicyBinding
+from sequifier.config.policy_inputs import observation_columns
 from sequifier.model.execution_schema import ExecutionSchema
 
 
-def resolve_binding(execution, interface_name, binding):
+def bind_policy(execution, interface_name, binding=None) -> ResolvedPolicyBinding:
+    """Compile the task once and keep its portable declaration on the interface."""
     interface = execution.interface(interface_name)
+    if binding is None:
+        binding = interface.policy
+    if binding is None:
+        raise ValueError(f"Model interface {interface_name!r} has no policy alignment")
     schema = ExecutionSchema.from_interface(interface, execution.options.context_length)
     if (
         -binding.decision_position
         > execution.options.context_length - interface.decoder.support_length + 1
     ):
         raise ValueError("decision_position lies outside the source decoder output")
-    values = binding.model_dump()
+    values = {name: getattr(binding, name) for name in PolicyBinding.model_fields}
     actions = dict(binding.actions)
-    if not actions:
-        raise ValueError(
-            "model attachment requires named actions with explicit real scales"
-        )
     for name, field in actions.items():
         if name not in interface.target_columns:
             raise ValueError(f"{name}: policy action is not a model target")
@@ -47,63 +48,27 @@ def resolve_binding(execution, interface_name, binding):
         for item in schema.inputs
         if item.key not in static and item.key != "attention_valid_mask"
     ]
-    conditioned = binding.return_conditioned
-    if conditioned and "__policy_return" not in temporal:
+    if binding.return_conditioned and "__policy_return" not in temporal:
         raise ValueError(
             "return conditioning requires an explicit __policy_return model input"
         )
-    layout = PolicyInputLayout.select(
-        temporal,
-        static,
-        binding,
-        [k for k in interface.categorical_columns if k in temporal],
-        interface.n_classes,
-        interface.id_maps,
-    )
-    storage = execution.interface_storage.get(interface_name)
     values.update(
-        input_column_types=interface.column_data_types,
-        cardinality_config=storage.cardinality_config if storage else None,
-        raw_mask_column=storage.raw_mask_column if storage else None,
-        **layout.binding_values(),
+        transforms=interface,
+        raw_inputs=execution.interface_storage.get(interface_name),
+        observation_columns=observation_columns(temporal, binding),
+        static_columns=static,
         actions=actions,
         action_order=[name for name in interface.target_columns if name in actions],
-        return_conditioned=conditioned,
-        input_schema=schema.to_dict(),
-        input_statistics={
-            name: stats
-            for name, stats in interface.selected_columns_statistics.items()
-            if name in set(temporal) | set(static) and interface.normalize_real_columns
-        },
+        input_schema=schema,
         context_length=execution.options.context_length,
         interface_name=interface_name,
     )
     for column in binding.previous_action_inputs:
         if column not in temporal:
             raise ValueError(f"{column}: previous action binding is not a model input")
-    return ResolvedPolicyBinding.model_validate(values)
-
-
-def apply_binding(execution, interface_name, policy):
-    """Attach task behavior without changing model-owned distribution parameters."""
-    interface = execution.interface(interface_name)
-    for name, action in policy.actions.items():
-        if action.scale == "model" and name not in interface.prediction_distributions:
-            raise ValueError(
-                f"{name}: scale: model requires a model prediction_distributions entry"
-            )
-    interface.policy = policy
-
-
-def attach_policy(network, execution, interface_name, binding):
-    from sequifier.rl.policy import Policy
-
-    original_parameters = {name for name, _ in network.named_parameters()}
-    policy = resolve_binding(execution, interface_name, binding)
-    apply_binding(execution, interface_name, policy)
-    actor = Policy.from_network(network, execution, interface_name)
-    actor.transfer_report = attachment_report(actor, original_parameters)
-    return actor
+    resolved = ResolvedPolicyBinding.model_validate(values)
+    interface.policy = resolved.task_binding
+    return resolved
 
 
 def attachment_report(actor, original_parameters):

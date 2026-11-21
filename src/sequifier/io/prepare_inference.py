@@ -9,6 +9,7 @@ import polars as pl
 
 from sequifier.config.image_config import bind_image_paths
 from sequifier.config.metadata import load_dataset_metadata
+from sequifier.config.preprocess_config import PreprocessorModel
 from sequifier.io.categorical import is_hash_bucket_label
 from sequifier.io.indexed_sequences import (
     IndexedSequenceWriter,
@@ -21,10 +22,36 @@ from sequifier.io.indexed_sequences import (
 def prepare_inference(
     config, *, required_columns=(), optional_passthrough=(), sequence_id_staging=None
 ):
+    root = Path(config.run.project_root).resolve()
+    return _prepare_inference(
+        config,
+        root=root,
+        raw_path=root / config.preprocessing_data_path,
+        destination=root / config.output_path,
+        read_format=config.read_format,
+        num_workers=config.run.execution.data_loading.num_workers,
+        required_columns=required_columns,
+        passthrough_columns=config.passthrough_columns,
+        optional_passthrough=optional_passthrough,
+        sequence_id_staging=sequence_id_staging,
+    )
+
+
+def _prepare_inference(
+    config,
+    *,
+    root,
+    raw_path,
+    destination,
+    read_format,
+    required_columns,
+    passthrough_columns,
+    optional_passthrough,
+    sequence_id_staging,
+    num_workers=1,
+):
     from sequifier.preprocess import Preprocessor, _folder_input_files
 
-    root = Path(config.run.project_root)
-    raw_path = root / config.preprocessing_data_path
     metadata_path = root / config.metadata_config_path
     original_contents = metadata_path.read_bytes()
     metadata = load_dataset_metadata(str(metadata_path))
@@ -32,7 +59,7 @@ def prepare_inference(
         raise ValueError(
             "The original preprocessing metadata changed during preparation"
         )
-    read_format = config.read_format or raw_path.suffix.lower().lstrip(".")
+    read_format = read_format or raw_path.suffix.lower().lstrip(".")
     if read_format not in {"csv", "parquet"}:
         raise ValueError("Fresh raw folders require read_format: csv or parquet")
     static_path = (
@@ -53,7 +80,7 @@ def prepare_inference(
     missing |= {"sequenceId", "itemPosition"} - available
     if missing:
         raise ValueError(f"Fresh data is missing model columns: {sorted(missing)}")
-    passthrough = set(config.passthrough_columns)
+    passthrough = set(passthrough_columns)
     passthrough.update((set(optional_passthrough) & available) - required_columns)
     if conflicts := passthrough & required_columns:
         raise ValueError(
@@ -77,7 +104,7 @@ def prepare_inference(
         config.image_paths,
         config.preconditioning_image_paths,
     )
-    persisted_mask = getattr(metadata, "raw_mask_column", None)
+    persisted_mask = metadata.raw_mask_column
     if persisted_mask is not None and config.mask_column not in (None, persisted_mask):
         raise ValueError("mask_column differs from the original preprocessing metadata")
     mask_column = config.mask_column or persisted_mask
@@ -101,46 +128,42 @@ def prepare_inference(
         )
         read_format = "parquet"
     depth = bool(metadata.depth_layouts)
-    with IndexedSequenceWriter(root / config.output_path) as writer:
+    with IndexedSequenceWriter(destination) as writer:
         snapshot = writer.root / "original-metadata.json"
         snapshot.write_bytes(original_contents)
-        Preprocessor(
-            project_root=str(root),
-            preprocessing_data_path=str(raw_path),
-            metadata_config_path=str(snapshot),
-            read_format=read_format,
-            write_format="pt" if depth else "parquet",
-            merge_output=not depth,
-            allow_sequence_splitting=False,
-            continue_preprocessing=False,
-            normalize_real_columns=metadata.normalize_real_columns,
-            selected_columns=temporal_columns,
-            split_ratios=[1.0],
-            window_lengths=[metadata.window_length],
-            window_stride=metadata.window_length,
-            max_target_offset=metadata.max_target_offset,
-            max_rows=None,
-            seed=config.run.reproducibility.seed,
-            num_workers=1,
-            batches_per_file=1024,
-            process_by_file=True,
-            prediction_aligned_splits=[],
-            prediction_length=None,
-            target_offset=None,
-            use_precomputed_maps=None,
-            static_data_path=static_path,
-            depth_layouts=metadata.depth_layouts.model_dump(),
-            image_sources={
-                name: source.model_dump() for name, source in image_sources.items()
-            },
-            preconditioning_image=prefix.model_dump() if prefix else None,
-            time_alignment_column=metadata.time_alignment_column,
-            mask_column=mask_column,
-            indexed_writer=writer,
-            indexed_prediction=True,
-            indexed_passthrough=sorted(passthrough),
+        options = PreprocessorModel.model_validate(
+            {
+                "run": {
+                    "project_root": str(root),
+                    "reproducibility": {"seed": config.run.reproducibility.seed},
+                    "execution": {
+                        "data_loading": {
+                            "num_workers": 1 if num_workers is None else num_workers
+                        }
+                    },
+                },
+                "preprocessing_data_path": str(raw_path),
+                "metadata_config_path": str(snapshot),
+                "read_format": read_format,
+                "write_format": "pt" if depth else "parquet",
+                "merge_output": not depth,
+                "selected_columns": temporal_columns,
+                "split_ratios": [1.0],
+                "window_lengths": [metadata.window_length],
+                "max_target_offset": metadata.max_target_offset,
+                "normalize_real_columns": metadata.normalize_real_columns,
+                "static_data_path": static_path,
+                "depth_layouts": metadata.depth_layouts,
+                "image_sources": image_sources,
+                "preconditioning_image": prefix,
+                "time_alignment_column": metadata.time_alignment_column,
+                "mask_column": mask_column,
+                "indexed_output_path": str(destination),
+                "indexed_passthrough": sorted(passthrough),
+            }
         )
-    view = IndexedView.load(root / config.output_path / "predict.split.json")
+        Preprocessor(options).run(indexed_writer=writer, indexed_prediction=True)
+    view = IndexedView.load(destination / "predict.split.json")
     view.sequence_labels = sequence_labels
     return view
 
@@ -188,33 +211,21 @@ def original_metadata_path(config, view):
 def fresh_view_from_raw(
     config, *, required_columns=(), passthrough_columns=(), optional_passthrough=()
 ):
-    from sequifier.config.preprocess_config import PrepareInferenceConfig
-
-    # The caller owns the context for all range reads.
+    root = Path(config.project_root).resolve()
+    raw_path = root / config.data_path
     with TemporaryDirectory(prefix="sequifier-inference-") as temporary:
-        raw_path = Path(config.project_root) / config.data_path
-        staging = Path(temporary) / "raw" if config.task == "policy" else None
-        preparation = PrepareInferenceConfig(
-            operation="prepare_inference",
-            run={
-                "project_root": config.project_root,
-                "reproducibility": {"seed": config.seed},
-            },
-            preprocessing_data_path=str(raw_path),
-            metadata_config_path=config.metadata_config_path,
-            output_path=str(Path(temporary) / "dataset"),
+        yield _prepare_inference(
+            config,
+            root=root,
+            raw_path=raw_path,
+            destination=Path(temporary) / "dataset",
             read_format=config.read_format if raw_path.is_dir() else None,
-            static_data_path=config.static_data_path,
-            passthrough_columns=list(passthrough_columns),
-            mask_column=config.mask_column,
-            image_paths=config.image_paths or {},
-            preconditioning_image_paths=config.preconditioning_image_paths,
-        )
-        yield prepare_inference(
-            preparation,
             required_columns=required_columns,
+            passthrough_columns=passthrough_columns,
             optional_passthrough=optional_passthrough,
-            sequence_id_staging=staging,
+            sequence_id_staging=Path(temporary) / "raw"
+            if config.task == "policy"
+            else None,
         )
 
 
@@ -261,30 +272,25 @@ def _stage_sequence_ids(directory, files, read_format, static_path, has_media):
 def export_policy_metadata(config):
     """Export the frozen contract of a policy trained before explicit preparation."""
     from sequifier.artifacts.model_artifact import read_execution_artifact
-    from sequifier.config.infer_config import _execution_metadata
-    from sequifier.config.inference_common import SelectedInferenceModel
+    from sequifier.config.inference_common import resolve_inference_model
 
     root = Path(config.run.project_root)
     path = root / config.model_path
     artifact = read_execution_artifact(str(path))
-    selected = SelectedInferenceModel.select(
-        str(path),
+    execution, name = resolve_inference_model(
         artifact.model_config.values,
         interface_name=config.model_interface,
         task="policy",
     )
-    execution = selected.resolve("cpu")
-    name = selected.interface_name
     interface = execution.interface(name)
     if interface.policy is None:
         raise ValueError("Metadata export requires a policy-bound model")
     storage = execution.interface_storage.get(name)
-    metadata = _execution_metadata(interface, storage)
-    assert storage is not None
-    if storage.cardinality_config is None and any(
-        is_hash_bucket_label(label)
-        for mapping in metadata.id_maps.values()
-        for label in mapping
+    metadata = interface.preprocessing_metadata(storage)
+    if any(
+        not metadata.cardinality_config.get(column, {}).get("hashing")
+        and any(is_hash_bucket_label(label) for label in mapping)
+        for column, mapping in metadata.id_maps.items()
     ):
         raise ValueError(
             "Original preprocessing metadata is required for this actor's categorical hashing"

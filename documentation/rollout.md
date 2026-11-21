@@ -48,7 +48,7 @@ raw CSV/Parquet rows with `seed_row_index`, rejects forecast bindings, and execu
 named policy actions. A seed supplies exactly one current observation; model history,
 codecs and normalization come from its artifact. See
 [inference options](configs/infer.md#policy-model-interfaces) and the
-[Python example](example_inputs/ppo_toy_control.py).
+[Python example](example_inputs/ppo_toy_control.py) using the shipped PPO scaffold.
 
 Both seed indices are required, zero-based, and checked before environment creation.
 Only the route-specific seed index name is accepted and recorded in trajectory

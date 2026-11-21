@@ -16,7 +16,7 @@ from sequifier.helpers import construct_index_maps
 from sequifier.model.network import ModelOutput
 from sequifier.runtime.precision import PrecisionPolicy
 from sequifier.training.loss import LossService, PreparedBatch
-from sequifier.training.plan import SupervisedPhaseView
+from sequifier.training.plan import CompiledSupervisedPhase
 from sequifier.training.runtime import DatasetRuntimeRegistry, build_source_runtime
 
 
@@ -81,7 +81,7 @@ class EvaluationService:
     def _baseline_definition(dataset: Any) -> str:
         """Identify inputs that affect raw baseline loss statistics."""
         interface = dataset.interface
-        training = dataset.objective.config.runtime_settings
+        learning = dataset.objective.config.learning
 
         def model_value(value: Any) -> Any:
             if isinstance(value, BaseModel):
@@ -93,8 +93,8 @@ class EvaluationService:
         definition = {
             "objective": dataset.objective.name,
             "objective_options": {
-                "bert_spec": model_value(training.bert_spec),
-                "next_occurrence_config": model_value(training.next_occurrence_config),
+                "bert_spec": model_value(learning.bert_spec),
+                "next_occurrence_config": model_value(learning.next_occurrence_config),
             },
             "window_view": model_value(interface.window_view),
             "prediction_length": interface.decoder.prediction_length,
@@ -102,8 +102,8 @@ class EvaluationService:
             "target_column_types": interface.target_column_types,
             "target_decoder_ids": interface.target_decoder_ids,
             "target_global_to_decoder": interface.target_global_to_decoder,
-            "criterion": dataset.config.criterion,
-            "class_weights": dataset.class_weights,
+            "criterion": dataset.learning.criterion,
+            "class_weights": dataset.learning.class_weights,
         }
         return json.dumps(definition, sort_keys=True, separators=(",", ":"))
 
@@ -134,13 +134,13 @@ class EvaluationService:
                         for index, width in enumerate(codec.widths)
                     )
                 lookup = torch.tensor(
-                    dataset.runtime_metadata.target_global_to_decoder[target],
+                    dataset.interface.target_global_to_decoder[target],
                     device=values.device,
                 )
                 mapped = lookup[global_ids]
                 values = one_hot(
                     mapped.clamp_min(0),
-                    dataset.runtime_metadata.target_n_classes[target],
+                    dataset.interface.target_n_classes[target],
                 ).to(torch.float32) * (mapped >= 0).unsqueeze(-1)
             logits[target] = values
         return ModelOutput(
@@ -152,7 +152,7 @@ class EvaluationService:
     def evaluate(
         self,
         network: Any,
-        phase: SupervisedPhaseView,
+        phase: CompiledSupervisedPhase,
         datasets: DatasetRuntimeRegistry,
         context: EvaluationContext,
     ) -> EvaluationResult:
@@ -162,7 +162,7 @@ class EvaluationService:
         try:
             autocast = self.precision.autocast() if self.precision else nullcontext()
             with torch.no_grad(), autocast:
-                for source_config in phase.spec().evaluation_sources:
+                for source_config in phase.evaluation_sources:
                     started = time.perf_counter()
                     source = build_source_runtime(source_config, datasets, phase)
                     source.set_epoch(context.phase_epoch, "validation")
@@ -183,11 +183,11 @@ class EvaluationService:
                     baseline_count = torch.zeros((), device=context.device, dtype=dtype)
                     class_counts = {
                         target: torch.zeros(
-                            dataset.runtime_metadata.target_n_classes[target],
+                            dataset.interface.target_n_classes[target],
                             device=context.device,
                             dtype=torch.int64,
                         )
-                        for target in dataset.config.class_share_log_columns
+                        for target in dataset.learning.class_share_log_columns
                     }
                     correct_counts = {
                         target: torch.zeros(
@@ -306,9 +306,7 @@ class EvaluationService:
                                 :, -decoded_length:
                             ].reshape(-1)
                             lookup = torch.tensor(
-                                dataset.runtime_metadata.target_global_to_decoder[
-                                    target
-                                ],
+                                dataset.interface.target_global_to_decoder[target],
                                 device=logical_targets.device,
                             )
                             expected = lookup[logical_targets.to(torch.int64)]
@@ -381,9 +379,7 @@ class EvaluationService:
                         ):
                             torch.distributed.all_reduce(counts)
                         total_count = int(counts.sum().item())
-                        decoder_ids = dataset.runtime_metadata.target_decoder_ids[
-                            target
-                        ]
+                        decoder_ids = dataset.interface.target_decoder_ids[target]
                         distributions[target] = [
                             {
                                 "class_id": decoder_ids[index],

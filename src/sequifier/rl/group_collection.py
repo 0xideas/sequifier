@@ -141,7 +141,7 @@ class GroupCollection:
         cursor = PolicyCursor(
             self.context.actor,
             self.adapter,
-            self.context.run.units,
+            self.context.run.policy.units,
             stream_seed(self.seed, f"group-{group}-actions", sample),
             defer_device_transfer=deferred,
         )

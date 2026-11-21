@@ -1,5 +1,7 @@
 """Execution options consumed by every inference route."""
 
+from __future__ import annotations
+
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,16 +9,22 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from sequifier.config.command_ownership import CommandRunSettings
+from sequifier.config.command_ownership import InferenceRunSettings
 from sequifier.config.naming import ConfigModel
 from sequifier.helpers import normalize_path
 from sequifier.io.output_paths import validate_inference_destination
+
+if TYPE_CHECKING:
+    from sequifier.artifacts.model_artifact import ModelArtifact
+    from sequifier.model.execution import ModelExecution
+    from sequifier.model.execution_schema import ExecutionSchema
 
 
 class InferenceExecutionConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
+    run: InferenceRunSettings = Field(default_factory=InferenceRunSettings)
+    model_paths: list[str] = Field(min_length=1)
     model_interface: str | None = None
     read_format: str = "parquet"
     write_format: str = "csv"
@@ -27,10 +35,23 @@ class InferenceExecutionConfig(ConfigModel):
     mask_column: str | None = None
 
     if TYPE_CHECKING:
-        model_paths: list[str]
         data_path: Any
         task: Any
         rollout: Any
+
+    @field_validator("model_paths")
+    @classmethod
+    def validate_paths(cls, value):
+        if any(not path.strip() for path in value):
+            raise ValueError("model_paths requires at least one nonempty artifact path")
+        return value
+
+    @field_validator("model_interface")
+    @classmethod
+    def validate_interface(cls, value):
+        if value is not None and not value.isidentifier():
+            raise ValueError("model_interface must be a valid identifier without '.'")
+        return value
 
     @property
     def project_root(self):
@@ -54,7 +75,6 @@ class InferenceExecutionConfig(ConfigModel):
 
     @model_validator(mode="after")
     def validate_resources(self):
-        self.run.validate_for("infer")
         if self.output_path is not None and len(self.model_paths) != 1:
             raise ValueError("output_path requires exactly one model path")
         rollout = self.rollout
@@ -100,111 +120,68 @@ class InferenceExecutionConfig(ConfigModel):
         return normalized
 
 
-class InferenceRouteConfig(ConfigModel):
-    """Validate artifact and interface selection before route-specific options."""
+def resolve_inference_model(values, *, interface_name, task):
+    """Apply task-specific interface selection before resolving portable execution."""
+    from sequifier.artifacts.model_config import model_execution_from_model_config
 
-    model_config = ConfigDict(extra="ignore")
-    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
-    model_paths: list[str] = Field(min_length=1)
-    model_interface: str | None = None
-    task: Literal["forecast", "policy", "embedding"]
-
-    @property
-    def project_root(self):
-        return self.run.project_root
-
-    @field_validator("model_paths")
-    @classmethod
-    def validate_paths(cls, value):
-        paths = value
-        if not paths or any(not path.strip() for path in paths):
-            raise ValueError("model_paths requires at least one nonempty artifact path")
-        return value
-
-    @field_validator("model_interface")
-    @classmethod
-    def validate_interface(cls, value):
-        if value is not None and not value.isidentifier():
-            raise ValueError("model_interface must be a valid identifier without '.'")
-        return value
+    interfaces = values.get("interfaces")
+    if (
+        interface_name is None
+        and task != "forecast"
+        and isinstance(interfaces, dict)
+        and len(interfaces) > 1
+        and any(
+            interface.get("policy") is not None for interface in interfaces.values()
+        )
+    ):
+        raise ValueError(
+            "Select model_interface for a multi-interface artifact with a policy binding"
+        )
+    return model_execution_from_model_config(values, interface_name=interface_name)
 
 
 @dataclass(frozen=True)
-class SelectedInferenceModel:
+class ResolvedInferenceModel:
     path: str
-    values: dict
-    interface_name: str
+    execution: ModelExecution | None
+    interface_name: str | None
+    artifact: ModelArtifact | None = None
+    onnx_schema: ExecutionSchema | None = None
 
     @classmethod
-    def select(cls, path, values, *, interface_name=None, task=None):
-        interfaces = values.get("interfaces")
-        if not isinstance(interfaces, dict) or not interfaces:
-            raise ValueError("model_config.interfaces must be a non-empty mapping")
-        if interface_name is None:
-            policies = [
-                name
-                for name, interface in interfaces.items()
-                if interface.get("policy") is not None
-            ]
-            if len(interfaces) > 1 and policies and task != "forecast":
-                raise ValueError(
-                    "Artifact has multiple interfaces; select model_interface before choosing task"
-                )
-            else:
-                interface_name = next(iter(interfaces))
-        if interface_name not in interfaces:
-            raise ValueError(f"Unknown model_interface {interface_name!r}")
-        return cls(path, values, interface_name)
+    def load(cls, path, *, interface_name, task):
+        from sequifier.artifacts.model_artifact import read_execution_artifact
 
-    @property
-    def policy_bound(self):
-        return self.values["interfaces"][self.interface_name].get("policy") is not None
+        artifact = schema = None
+        if path.lower().endswith(".pt"):
+            artifact = read_execution_artifact(path)
+            values = artifact.model_config.values
+        elif path.lower().endswith(".onnx"):
+            import onnx
 
-    def resolve(self, device):
-        from sequifier.artifacts.model_config import model_execution_from_model_config
-
-        return model_execution_from_model_config(
-            self.values, device=device, interface_name=self.interface_name
-        )[0]
-
-
-def inference_model_config(path, project_root, artifacts):
-    """Read the interface contract once for PT artifacts, or from ONNX metadata."""
-    from sequifier.artifacts.model_artifact import read_execution_artifact
-
-    normalized = normalize_path(path, project_root)
-    if path.lower().endswith(".pt"):
-        if normalized not in artifacts:
-            artifacts[normalized] = artifacts.get(path) or read_execution_artifact(
-                normalized
+            from sequifier.export.onnx import validate_graph_contract
+            from sequifier.model.execution_schema import (
+                EXECUTION_SCHEMA_KEY,
+                MODEL_CONFIG_KEY,
+                ExecutionSchema,
             )
-        artifacts[path] = artifacts[normalized]
-        return artifacts[path].model_config.values
-    if not path.lower().endswith(".onnx"):
-        return None
-    import onnx
 
-    from sequifier.model.execution_schema import (
-        DROPOUT_MODE_KEY,
-        EXECUTION_SCHEMA_KEY,
-        MODEL_CONFIG_KEY,
-        ExecutionSchema,
-    )
-
-    graph = onnx.load(normalized, load_external_data=False)
-    properties = {item.key: item.value for item in graph.metadata_props}
-    schema = properties.get(EXECUTION_SCHEMA_KEY)
-    if (
-        schema is not None
-        or MODEL_CONFIG_KEY in properties
-        or DROPOUT_MODE_KEY in properties
-        or any(
-            len(value.type.tensor_type.shape.dim) == 3 for value in graph.graph.input
-        )
-    ):
-        ExecutionSchema.from_dict(json.loads(schema) if schema is not None else None)
-    return (
-        json.loads(properties[MODEL_CONFIG_KEY])
-        if MODEL_CONFIG_KEY in properties
-        else None
-    )
+            graph = onnx.load(path, load_external_data=False)
+            properties = {item.key: item.value for item in graph.metadata_props}
+            schema = ExecutionSchema.from_dict(
+                json.loads(properties.get(EXECUTION_SCHEMA_KEY, "null"))
+            )
+            validate_graph_contract(graph, schema)
+            values = (
+                json.loads(properties[MODEL_CONFIG_KEY])
+                if MODEL_CONFIG_KEY in properties
+                else None
+            )
+        else:
+            raise ValueError(f"Unsupported inference model format: {path}")
+        execution = None
+        if values is not None:
+            execution, interface_name = resolve_inference_model(
+                values, interface_name=interface_name, task=task
+            )
+        return cls(path, execution, interface_name, artifact, schema)

@@ -31,7 +31,7 @@ def _history_contract(config, interface_name):
     static = interface.static_conditioning
     columns = interface.input_columns + (static.columns if static else [])
     return {
-        "backbone.architecture": execution.model.backbone.architecture,
+        "backbone.architecture": execution.backbone.architecture,
         "layer_type_dtypes": settings.layer_type_dtypes,
         "context_length": settings.context_length,
         "forward_attention": settings.attention,

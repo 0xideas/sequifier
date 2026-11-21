@@ -28,8 +28,6 @@ NextOccurrenceTargetValue: TypeAlias = StrictInt | StrictStr
 class CartesianLayoutModel(ConfigModel):
     """Reusable coordinate annotation for flat feature columns."""
 
-    model_config = ConfigDict(extra="forbid")
-
     axes: dict[str, list[AnyType]] = Field(..., min_length=1)
     columns: dict[str, dict[str, AnyType]] = Field(..., min_length=1)
 
@@ -97,8 +95,6 @@ class FeatureLayoutRegistryModel(RootModel[dict[str, CartesianLayoutModel]]):
 class IngestionComponentBase(ConfigModel):
     """Settings shared by every feature-ingestion component."""
 
-    model_config = ConfigDict(extra="forbid")
-
     initialization_seed: Optional[StrictInt] = Field(default=None, ge=0, le=2**63 - 1)
     allow_shared_columns: bool = False
     allow_unused_input_columns: bool = False
@@ -128,8 +124,6 @@ class IngestionComponentBase(ConfigModel):
 class MultiHashEmbeddingConfig(ConfigModel):
     """Embed one categorical variable through independent hash tables."""
 
-    model_config = ConfigDict(extra="forbid")
-
     type: Literal["multi_hash"]
     num_buckets: int = Field(..., gt=0)
     num_hashes: int = Field(..., ge=1)
@@ -138,8 +132,6 @@ class MultiHashEmbeddingConfig(ConfigModel):
 
 class QRHashEmbeddingConfig(ConfigModel):
     """Embed one categorical variable with quotient and remainder tables."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["qr"]
     num_buckets: int = Field(..., gt=0)
@@ -336,8 +328,6 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
 class AxisProjectionBlockModel(ConfigModel):
     """Flatten configured cartesian axes and project them with a linear layer."""
 
-    model_config = ConfigDict(extra="forbid")
-
     type: Literal["axis_projection"]
     axes: list[str] = Field(..., min_length=1)
     output_dim: int = Field(..., gt=0)
@@ -353,8 +343,6 @@ class AxisProjectionBlockModel(ConfigModel):
 
 class AxisConvBlockModel(ConfigModel):
     """Sweep a native 1D/2D/3D convolution over configured cartesian axes."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["axis_conv"]
     axes: list[str] = Field(..., min_length=1, max_length=3)
@@ -375,8 +363,6 @@ class AxisConvBlockModel(ConfigModel):
 class AxisAttentionBlockModel(ConfigModel):
     """Apply self-attention over one or more configured cartesian axes."""
 
-    model_config = ConfigDict(extra="forbid")
-
     type: Literal["axis_attention"]
     axes: list[str] = Field(..., min_length=1)
     output_dim: int = Field(..., gt=0)
@@ -396,8 +382,6 @@ class AxisAttentionBlockModel(ConfigModel):
 
 class AxisPoolBlockModel(ConfigModel):
     """Reduce configured cartesian axes without changing the channel dimension."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["axis_pool"]
     axes: list[str] = Field(..., min_length=1)
@@ -448,8 +432,6 @@ def _validate_feature_embedding_dims(
 
 class AxisEmbeddingModel(ConfigModel):
     """Optional positional encoding for cartesian layout axes."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["none", "learned", "rope"] = "none"
     axes: list[str] = Field(default_factory=list)
@@ -513,8 +495,6 @@ class StructuredIngestionConfig(IngestionComponentBase):
 
 
 class ImageEncoderConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     type: Literal["resnet", "frozen"] = "resnet"
     depth: Literal[18, 34, 50, 101, 152] = 18
     block: Literal["basic", "bottleneck"] | None = None
@@ -591,8 +571,6 @@ StructuredIngestionConfig.model_rebuild()
 class LinearDecodingConfig(ConfigModel):
     """Project each support window directly to target outputs."""
 
-    model_config = ConfigDict(extra="forbid")
-
     type: Literal["linear"] = "linear"
     target_columns: Optional[list[str]] = Field(default=None, min_length=1)
 
@@ -607,8 +585,6 @@ class LinearDecodingConfig(ConfigModel):
 
 class MLPDecodingConfig(ConfigModel):
     """Flatten support windows and decode targets with a shared MLP branch."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["mlp"]
     target_columns: Optional[list[str]] = Field(default=None, min_length=1)
@@ -643,8 +619,6 @@ class MLPDecodingConfig(ConfigModel):
 
 class AutoregressiveTransformerDecodingConfig(ConfigModel):
     """Decode ordered targets autoregressively within each temporal position."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["autoregressive_transformer"]
     target_columns: list[str] = Field(min_length=1)
@@ -702,8 +676,6 @@ DecodingSpecConfig = BranchDecodingConfig | dict[str, BranchDecodingConfig]
 class DecoderComponentBase(ConfigModel):
     """Settings shared by every target-decoder component."""
 
-    model_config = ConfigDict(extra="forbid")
-
     prediction_length: int = Field(..., gt=0)
     support_length: int = Field(1, gt=0)
     initialization: ModelInitializationConfig = Field(
@@ -752,8 +724,6 @@ DecoderComponentConfig = Annotated[
 
 
 class BackboneAttentionConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     type: Literal["mha", "mqa", "gqa"] = "mha"
     num_heads: int = Field(..., gt=0)
     num_kv_heads: Optional[int] = Field(default=None, gt=0)
@@ -779,30 +749,22 @@ class BackboneAttentionConfig(ConfigModel):
 
 
 class BackboneFeedForwardConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     hidden_dim: int = Field(..., gt=0)
     activation: Literal["relu", "gelu", "swiglu", "softplus"] = "swiglu"
 
 
 class BackboneNormalizationConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     type: Literal["layer_norm", "rmsnorm"] = "rmsnorm"
     norm_first: bool = True
 
 
 class BackbonePositionEncodingConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     type: Literal["learned", "rope", "range", "range_concat", "sinusoidal"] = "learned"
     theta: float = Field(10000.0, gt=0.0)
 
 
 class TransformerEncoderArchitectureConfig(ConfigModel):
     """Capacity-independent transformer architecture shared by both encoders."""
-
-    model_config = ConfigDict(extra="forbid")
 
     model_dim: int = Field(..., gt=0)
     num_layers: int = Field(..., gt=0)
@@ -932,8 +894,6 @@ class DepthTransformerIngestionConfig(IngestionComponentBase):
 class IngestionMergeConfig(ConfigModel):
     """How composite branch outputs are merged."""
 
-    model_config = ConfigDict(extra="forbid")
-
     type: Literal["concat", "sum", "gated", "attention"] = "concat"
     softmax: Literal["standard", "max_excluding"] = "standard"
 
@@ -989,8 +949,6 @@ IngestionSpecConfig = IngestionComponentConfig | dict[str, IngestionComponentCon
 
 
 class BackboneRepositoryConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     backbone_id: StrictStr = Field(..., min_length=1)
     path: str
     load_policy: Literal["if_exists", "required"] = "if_exists"
@@ -999,8 +957,6 @@ class BackboneRepositoryConfig(ConfigModel):
 
 
 class BackboneComponentConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     initialization_seed: Optional[StrictInt] = Field(default=None, ge=0, le=2**63 - 1)
     architecture: BackboneArchitectureConfig
     repository: Optional[BackboneRepositoryConfig] = None
@@ -1028,8 +984,6 @@ class ComponentSpec(ConfigModel):
 
 
 class ReplacementDistribution(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     masked: float = Field(..., ge=0.0, le=1.0)
     random: float = Field(..., ge=0.0, le=1.0)
     identical: float = Field(..., ge=0.0, le=1.0)
@@ -1046,24 +1000,18 @@ class ReplacementDistribution(ConfigModel):
 
 
 class BERTSpecModel(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     masking_probability: float = Field(..., gt=0.0, le=1.0)
     replacement_distribution: ReplacementDistribution
     span_masking: ProbabilityDistribution
 
 
 class NextOccurrenceConfigModel(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     column_name: str
     target_values: list[NextOccurrenceTargetValue] = Field(..., min_length=1)
 
 
 class ResumeConfig(ConfigModel):
     """Policy for resuming the same run from its complete checkpoint."""
-
-    model_config = ConfigDict(extra="forbid")
 
     policy: Literal["never", "if_exists", "required"] = "never"
     checkpoint_path: Optional[str] = None

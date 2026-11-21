@@ -2,11 +2,13 @@
 
 Use `sequifier train --config-path configs/train-policy.yaml`. All algorithms use
 `training_plan.phases`; model interfaces and datasets follow the
-[training reference](configs/train.md). Start from the shipped
-[imitation](../src/sequifier/templates/train-policy.yaml),
-[IQL](../src/sequifier/templates/train-iql.yaml), [PPO](../src/sequifier/templates/train-ppo.yaml),
-[DPO](../src/sequifier/templates/train-dpo.yaml), or [GRPO](../src/sequifier/templates/train-grpo.yaml)
-template. [Artifact transfer](supervised-policy-learning.md) covers joint real/categorical
+[training reference](configs/train.md). Use `sequifier make` to create standalone
+training configs for imitation, IQL, PPO, DPO and GRPO. The three control examples
+combine a [shared actor and binding](../src/sequifier/templates/control/actor.yaml)
+with the settings for [PPO](../src/sequifier/templates/control/train-ppo.yaml),
+[DPO](../src/sequifier/templates/control/train-dpo.yaml), or
+[GRPO](../src/sequifier/templates/control/train-grpo.yaml).
+[Artifact transfer](supervised-policy-learning.md) covers joint real/categorical
 actions and mixed supervised/policy plans.
 
 ## Authoring and optimization
@@ -255,8 +257,10 @@ Online intervals count completed collection/update iterations.
 ## Checkpoints and inference
 
 Policy runs use the shared `RUN_CHECKPOINT` envelope with a `POLICY_RECOVERY`
-payload and a `POLICY_PHASE_STATE` record for the live phase. They retain representation, plan/source/partition/adapter
-identities, selected phase summaries and checksums, RNG and live phase
+payload and a `POLICY_PHASE_STATE` record for the live phase. The embedded model owns
+the execution configuration. Recovery records the active interface and verifies
+the representation fingerprint on load. Checkpoints also retain plan, source,
+partition and adapter identities, selected phase summaries and checksums, RNG and live phase
 networks/optimization/sampler/selection state. Training and evaluation histories
 are journaled under each native phase directory. Keep the journal and committed
 phase models with the checkpoint so reports can be regenerated from the recorded

@@ -12,7 +12,7 @@ class PolicyMetrics:
             config.project_root,
             config.model_name,
             0,
-            dataset_name=config.policy_interface,
+            dataset_name=config.policy.interface_name,
         )
         self.run_id = identity.run_id
         self.session_id = identity.session_id
@@ -36,7 +36,8 @@ class PolicyMetrics:
             not validation
             and not final
             and not session.stopping.triggered
-            and session.transaction % context.run.log_interval_iterations
+            and session.transaction
+            % context.run.parent.run.logging.log_interval_iterations
         ):
             return
         scalars = {

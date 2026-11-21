@@ -3,12 +3,9 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from sequifier.config.train_config import (
-    ResolvedDatasetTrainingSpec,
-    ResolvedSequifierConfig,
-    ResolvedTrainingPhase,
-    TrainingRuntimeSettings,
-)
+from pydantic import ConfigDict, Field
+
+from sequifier.config.train_config import ResolvedSequifierConfig, ResolvedTrainingPhase
 
 
 @dataclass(frozen=True)
@@ -27,57 +24,60 @@ class PhaseLoading:
 
 
 @dataclass(frozen=True)
-class SupervisedPhaseView:
-    index: int
-    seed: int
-    loading: PhaseLoading
-    _spec: ResolvedTrainingPhase
+class BatchUpdate:
+    dataset: str
+    accumulated: int
+    flush_before: bool
+    step_after: bool
+    snapshot: bool
 
-    @classmethod
-    def from_spec(
-        cls, index: int, seed: int, spec: ResolvedTrainingPhase
-    ) -> "SupervisedPhaseView":
-        from sequifier.evaluation.compatibility import evaluation_batch_size
 
-        return cls(
-            index=index,
-            seed=seed,
-            loading=PhaseLoading(
-                spec.batch_size,
-                evaluation_batch_size(spec),
-                spec.learning.window_stride,
-                spec.curriculum.column if spec.curriculum else None,
-            ),
-            _spec=spec.model_copy(deep=True),
-        )
+class CompiledSupervisedPhase(ResolvedTrainingPhase):
+    """Run-owned phase. Builders replace the record when resolving runtime facts."""
+
+    model_config = ConfigDict(frozen=True)
+
+    index: int = Field(exclude=True)
+    seed: int = Field(exclude=True)
 
     @property
-    def optimizer_state(self):
-        return self._spec.optimizer_state
+    def loading(self) -> PhaseLoading:
+        from sequifier.evaluation.compatibility import evaluation_batch_size
 
-    def spec(self) -> ResolvedTrainingPhase:
-        """Give consumers their own copy of the configuration models."""
-        return self._spec.model_copy(deep=True)
+        return PhaseLoading(
+            self.batch_size,
+            evaluation_batch_size(self),
+            self.learning.window_stride,
+            self.curriculum.column if self.curriculum else None,
+        )
 
-    def with_spec(self, spec: ResolvedTrainingPhase) -> "SupervisedPhaseView":
-        return self.from_spec(self.index, self.seed, spec)
-
-    def objective_settings(
-        self, settings: TrainingRuntimeSettings
-    ) -> TrainingRuntimeSettings:
-        learning = self._spec.learning
-        return settings.model_copy(
-            update={
-                "bert_spec": learning.bert_spec,
-                "next_occurrence_config": learning.next_occurrence_config,
-                "window_stride": self.loading.window_stride,
-            }
-        ).model_copy(deep=True)
+    def batch_update(
+        self,
+        pending: BatchUpdate | None,
+        dataset: str,
+        *,
+        last_batch: bool,
+        batches_since_snapshot: int,
+    ) -> BatchUpdate:
+        """Plan the current batch against gradients still pending from earlier batches."""
+        interval = self.checkpoints.snapshot_interval_batches
+        snapshot = interval is not None and batches_since_snapshot >= interval
+        flush_before = pending is not None and pending.dataset != dataset
+        accumulated = 1 if pending is None or flush_before else pending.accumulated + 1
+        return BatchUpdate(
+            dataset=dataset,
+            accumulated=accumulated,
+            flush_before=flush_before,
+            step_after=accumulated >= self.accumulation_batches
+            or last_batch
+            or snapshot,
+            snapshot=snapshot,
+        )
 
 
 @dataclass(frozen=True)
 class SupervisedRunPlan:
-    phases: tuple[SupervisedPhaseView, ...]
+    phases: tuple[CompiledSupervisedPhase, ...]
 
     @classmethod
     def from_config(cls, config: ResolvedSequifierConfig) -> "SupervisedRunPlan":
@@ -88,19 +88,12 @@ class SupervisedRunPlan:
                     "Native supervised training requires supervised phases"
                 )
             phases.append(
-                SupervisedPhaseView.from_spec(
-                    index,
-                    spec.resolved_seed
+                CompiledSupervisedPhase(
+                    **dict(spec.model_copy(deep=True)),
+                    index=index,
+                    seed=spec.resolved_seed
                     if spec.resolved_seed is not None
                     else config.seed + index,
-                    spec,
                 )
             )
         return cls(tuple(phases))
-
-
-def dataset_learning_view(
-    dataset: ResolvedDatasetTrainingSpec, phase: ResolvedTrainingPhase
-) -> ResolvedDatasetTrainingSpec:
-    learning = phase.learning.datasets.get(dataset.name)
-    return dataset.model_copy(update=learning.model_dump()) if learning else dataset

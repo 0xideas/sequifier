@@ -4,14 +4,13 @@ import math
 from typing import Optional
 
 import torch
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
 from sequifier.config.components import BERTSpecModel, NextOccurrenceConfigModel
 from sequifier.config.naming import ConfigModel
 
 
 class DatasetLearningConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     criterion: dict[str, str] = Field(default_factory=dict)
     class_weights: Optional[dict[str, list[float]]] = None
     loss_weights: Optional[dict[str, float]] = None
@@ -34,6 +33,41 @@ class DatasetLearningConfig(ConfigModel):
                 f"{usage}: at least one target must have positive loss weight"
             )
 
+    def validate_interface(self, interface, usage):
+        self.validate_targets(interface.target_columns, usage)
+        for column in self.class_share_log_columns:
+            if (
+                interface.target_column_types.get(column) != "categorical"
+                or column not in interface.id_maps
+                or column not in interface.n_classes
+            ):
+                raise ValueError(
+                    f"{usage}: class-share column {column!r} requires a categorical target with a codec"
+                )
+        for target, criterion in self.criterion.items():
+            categorical = interface.target_column_types[target] == "categorical"
+            if criterion == "AccurateCrossEntropyLoss" and not categorical:
+                raise ValueError(
+                    f"{usage}: AccurateCrossEntropyLoss requires categorical target {target!r}"
+                )
+            weights = (self.class_weights or {}).get(target)
+            if target in interface.categorical_hashing:
+                if weights is not None or criterion not in {
+                    "CrossEntropyLoss",
+                    "AccurateCrossEntropyLoss",
+                }:
+                    raise ValueError(
+                        f"{usage}: hashed target {target!r} requires unweighted cross-entropy"
+                    )
+            if weights is not None and (
+                not categorical
+                or len(weights)
+                not in {interface.n_classes[target], interface.target_n_classes[target]}
+            ):
+                raise ValueError(
+                    f"{usage}: class_weights[{target!r}] must match the global or decoder classes of a categorical target"
+                )
+
     @model_validator(mode="after")
     def losses(self):
         for name in self.criterion.values():
@@ -50,7 +84,6 @@ class DatasetLearningConfig(ConfigModel):
 
 
 class SupervisedLearningConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     datasets: dict[str, DatasetLearningConfig] = Field(default_factory=dict)
     bert_spec: BERTSpecModel | None = None
     next_occurrence_config: NextOccurrenceConfigModel | None = None

@@ -17,6 +17,19 @@ def is_hash_bucket_label(value):
     )
 
 
+def validate_category_values(column: pl.Series, *, hashing: bool) -> None:
+    if column.dtype not in (pl.String, pl.Categorical):
+        return
+    values = column.drop_nulls()
+    mask = SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask]
+    if values.eq(mask).any():
+        raise ValueError(f"Found value {mask!r} in {column.name}, this is invalid")
+    if hashing and any(is_hash_bucket_label(value) for value in values.to_list()):
+        raise ValueError(
+            f"Values beginning with {HASH_BUCKET_LABEL_PREFIX!r} are reserved for hashing buckets in {column.name}"
+        )
+
+
 def _stable_category_hash(value, seed):
     if isinstance(value, (bool, np.bool_)):
         payload = b"b:1" if value else b"b:0"

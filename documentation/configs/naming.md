@@ -48,6 +48,9 @@ is temporal model input length; `max_context_length` is backbone capacity;
 `max_depth_length` is child-collection capacity. `support_length` counts temporal
 representations consumed by a decoder; `prediction_length` counts decoded positions.
 
+`run.execution.max_concat_tensors` limits the number of feature tensors joined in
+one operation. It defaults to 12 and must be at least 2.
+
 Source `selection_weight` changes ordering and burst frequency, not the total
 amount consumed in an epoch. Class weights and loss weights retain their separate
 loss-scaling meanings.

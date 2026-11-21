@@ -34,42 +34,6 @@ model:
           source: identity
   execution:
     context_length: 4
-dataset_training:
-  decisions:
-    parts:
-      default:
-        type: sequence
-        paths:
-        - data/control-decisions.csv
-    model_interface: actor
-    split:
-      validation_fraction: 0.2
-  rankings:
-    parts:
-      default:
-        type: preferences
-        manifest_path: data/control-preferences.json
-    split:
-      validation_fraction: 0.2
-training_plan:
-  phases:
-  - name: preferences
-    algorithm: dpo
-    preferences:
-      source: rankings.default
-    beta: 0.1
-    iterations: 100
-    model_selection:
-      handoff: last
-    checkpoints:
-      cadence:
-        iterations: 1
-    evaluation:
-      cadence:
-        iterations: 1
-      batch_size: 1
-      before_phase: false
-      on_snapshot: false
 policy_bindings:
   actor:
     previous_action_inputs:
@@ -83,15 +47,3 @@ policy_bindings:
         values:
         - left
         - right
-run:
-  project_root: .
-  model_name: dpo-control
-  reproducibility:
-    seed: 1010
-    enforce_determinism: false
-  execution:
-    device: cpu
-  recovery: {}
-  logging: {}
-  outputs: {}
-  export: {}

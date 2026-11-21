@@ -3,27 +3,28 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from torch import Tensor
-
+from sequifier.artifacts.phase import CommittedPhases
+from sequifier.artifacts.reports import HandoffCandidate
 from sequifier.runtime.plan import new_run_id
 
 
 @dataclass(frozen=True)
 class RunStateSnapshot:
     values: dict[str, Any]
+    committed_count: int
 
 
 @dataclass
 class RunState:
+    phase_commits: CommittedPhases
     run_id: str = field(default_factory=new_run_id)
     session_id: str = field(default_factory=new_run_id)
     stopping_state: dict[str, Any] = field(default_factory=dict)
-    phase_commits: list[dict[str, Any]] = field(default_factory=list)
     last_validation_metric: float | None = None
-    best_optimizer_step: int | None = None
+    selection: HandoffCandidate = field(default_factory=HandoffCandidate)
     plan_stopped: bool = False
     initial_evaluated_phases: list[int] = field(default_factory=list)
     phase_index: int = 0  # Position within the native plan.
@@ -39,28 +40,34 @@ class RunState:
     global_batch_step: int = 0
     optimizer_step: int = 0
     accumulation_index: int = 0
-    best_validation_loss: float = float("inf")
-    epochs_without_improvement: int = 0
-    best_model_state_dict: dict[str, Tensor] | None = None
     backbone_parent_revision_id: str | None = None
 
     def snapshot(self) -> RunStateSnapshot:
-        # ``dataclasses.asdict`` already recursively deep-copies non-dataclass
-        # values, including tensors in ``best_model_state_dict``.
-        return RunStateSnapshot(self.state_dict())
+        values = {
+            key: value for key, value in vars(self).items() if key != "phase_commits"
+        }
+        return RunStateSnapshot(deepcopy(values), len(self.phase_commits))
 
     def restore(self, snapshot: RunStateSnapshot) -> None:
-        restored = RunState.from_state_dict(snapshot.values)
-        self.__dict__.clear()
-        self.__dict__.update(restored.__dict__)
+        if snapshot.committed_count != len(self.phase_commits):
+            raise ValueError("Cannot roll back across a committed phase boundary")
+        self.__dict__.update(deepcopy(snapshot.values))
 
     def state_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        values = self.snapshot().values
+        values["selection"] = vars(values["selection"])
+        values["phase_commits"] = self.phase_commits.records()
+        return values
 
     @classmethod
-    def from_state_dict(cls, state: Mapping[str, Any]) -> "RunState":
+    def from_state_dict(cls, state: Mapping[str, Any], phases) -> "RunState":
         fields = cls.__dataclass_fields__
         unknown = set(state).difference(fields)
         if unknown:
             raise ValueError(f"Unknown run-state fields: {sorted(unknown)!r}.")
-        return cls(**deepcopy(dict(state)))
+        values = deepcopy(dict(state))
+        values["selection"] = HandoffCandidate(**values["selection"])
+        values["phase_commits"] = CommittedPhases.load(
+            phases, values["phase_commits"], offset=values["phase_offset"]
+        )
+        return cls(**values)

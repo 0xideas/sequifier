@@ -22,8 +22,9 @@ def paths_overlap(left, right):
 def validate_path_conflicts(paths, protected, *, label, check_each_other=True):
     protected = {Path(path).resolve() for path in protected}
     paths = [Path(path).resolve() for path in paths]
-    for path in paths:
-        others = protected | (set(paths) - {path} if check_each_other else set())
+    for index, path in enumerate(paths):
+        # Skip this entry by position so equal destinations still conflict.
+        others = protected | (set(paths[index + 1 :]) if check_each_other else set())
         for other in others:
             if paths_overlap(path, other):
                 raise ValueError(f"{label} {path} conflicts with input/output {other}")
@@ -60,17 +61,20 @@ def require_directory_destinations(paths):
             raise ValueError(f"archive requires a directory: {path}")
 
 
-def validate_training_destinations(config, checkpoint, protected, *, phase_offset=0):
+def validate_training_destinations(
+    config, checkpoint, protected, *, phase_offset=0, group=False
+):
     """Reserve generated trees as well as explicit files before any publication."""
     checkpoint = Path(checkpoint).resolve()
-    files = unique_paths(
-        [config.model_path, config.report_path, checkpoint],
-        "training model, report and checkpoint paths must be distinct",
-    )
+    phase_root = Path(config.outputs.phase_directory).resolve()
+    directories = []
+    files = [checkpoint]
     manifest = checkpoint.parent / "manifest.json"
-    if manifest != Path(config.report_path).resolve():
-        files = unique_paths([*files, manifest], "manifest overlaps a training output")
-    directories = [Path(config.phase_directory).resolve()]
+    if not group:
+        directories.append(phase_root)
+        files.extend([config.outputs.model_path, config.outputs.report_path])
+        if manifest != Path(config.outputs.report_path).resolve():
+            files.append(manifest)
     from sequifier.logging_paths import model_log_directory
 
     directories.append(
@@ -82,25 +86,32 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
         phases, resume = config.phases, config.resume
         dataset_names = ()
     else:
-        phases, resume = config.training_plan, config.runtime_settings.resume
+        phases, resume = config.training_plan, config.run.recovery.resume
         dataset_names = tuple(config.dataset_training)
     from sequifier.artifacts.phase import PhaseArtifacts
 
+    phase_files = []
+    snapshot_phases = {}
     generated = []
     for index, phase in enumerate(phases, phase_offset):
-        artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
+        artifacts = PhaseArtifacts.for_phase(
+            config.outputs.phase_directory, index, phase.name
+        )
+        if group:
+            directories.append(artifacts.model.parent.resolve())
+        snapshot_phases[artifacts.snapshots.resolve()] = phase
+        phase_files.extend([artifacts.model, artifacts.report])
         for path in (
             artifacts.model,
             artifacts.report,
-            artifacts.model.parent / "commits",
-            artifacts.model.with_name("run.pt"),
-            artifacts.model.parent / "native",
-            artifacts.model.parent / "checkpoints",
+            artifacts.commits,
+            artifacts.recovery,
+            artifacts.snapshots,
             artifacts.telemetry.parent,
             artifacts.telemetry,
         ):
             resolved = path.resolve()
-            if not contains_path(directories[0], resolved):
+            if not contains_path(phase_root, resolved):
                 raise ValueError(f"phase destination escapes phase_directory: {path}")
             generated.append(resolved)
     validate_path_conflicts(
@@ -114,18 +125,14 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
     directories = unique_paths(
         directories, "training output directories must be distinct"
     )
-    require_file_destinations(files)
+    outputs = unique_paths(
+        [*files, *phase_files], "training file destinations must be distinct"
+    )
+    require_file_destinations(outputs)
+    validate_path_conflicts(outputs, (), label="training output")
     require_directory_destinations(directories)
+    files = [Path(path).resolve() for path in files]
     # A generated snapshot may be selected as the rolling checkpoint on resume.
-    snapshot_phases = {
-        (
-            PhaseArtifacts.for_phase(
-                config.phase_directory, index, phase.name
-            ).model.parent
-            / "checkpoints"
-        ).resolve(): phase
-        for index, phase in enumerate(phases, phase_offset)
-    }
     snapshot_phase = snapshot_phases.get(checkpoint.parent)
     snapshot_name = snapshot_phase is not None and (
         checkpoint.name.startswith(f"{config.model_name}-")
@@ -138,9 +145,11 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
         and checkpoint.is_file()
         and snapshot_name
         and checkpoint.suffix == ".pt"
-        and manifest != Path(config.report_path).resolve()
+        and manifest != Path(config.outputs.report_path).resolve()
     )
-    if snapshot_resume:
+    if group:
+        validate_path_conflicts(directories, protected, label="phase group output")
+    elif snapshot_resume:
         external_files = [path for path in files if path not in {checkpoint, manifest}]
         validate_path_conflicts(
             [*external_files, *directories], protected, label="training output"
@@ -173,15 +182,15 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
                 )
 
 
-def resolve_training_output_paths(config):
-    root = Path(config.project_root)
-    output_dir = Path("outputs/training") / config.model_name
-    config.model_path = str(
-        (root / (config.model_path or f"models/{config.model_name}.pt")).resolve()
+def resolve_training_output_paths(run):
+    root = Path(run.project_root)
+    output_dir = Path("outputs/training") / run.model_name
+    run.outputs.model_path = str(
+        (root / (run.outputs.model_path or f"models/{run.model_name}.pt")).resolve()
     )
-    config.report_path = str(
-        (root / (config.report_path or output_dir / "report.json")).resolve()
+    run.outputs.report_path = str(
+        (root / (run.outputs.report_path or output_dir / "report.json")).resolve()
     )
-    config.phase_directory = str(
-        (root / (config.phase_directory or output_dir / "phases")).resolve()
+    run.outputs.phase_directory = str(
+        (root / (run.outputs.phase_directory or output_dir / "phases")).resolve()
     )

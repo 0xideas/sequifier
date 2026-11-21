@@ -19,6 +19,7 @@ from sequifier.artifacts.state_dict import (
     validate_model_state_contract,
 )
 from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save
 from sequifier.model.execution import ModelExecution
 from sequifier.model.factory import build_transformer_network
@@ -33,6 +34,51 @@ class ModelExecutionConfig:
     @classmethod
     def from_training_config(cls, config: Any) -> "ModelExecutionConfig":
         return cls(values=model_execution_config(config))
+
+    @property
+    def identity(self) -> str:
+        """Fingerprint the portable contract with its execution order and typed labels."""
+
+        def component_values(component):
+            values = dict(component)
+            if branches := values.get("branches"):
+                values["branches"] = [
+                    (name, component_values(branch))
+                    for name, branch in branches.items()
+                ]
+            for name in ("groups", "image_cells"):
+                if isinstance(values.get(name), dict):
+                    values[name] = list(values[name].items())
+            return values
+
+        interfaces = []
+        for name, interface in self.values["interfaces"].items():
+            values = dict(interface)
+            for component in ("ingestion", "decoder"):
+                values[component] = component_values(interface[component])
+            if layouts := interface.get("feature_layout"):
+                values["feature_layout"] = {
+                    key: {
+                        **layout,
+                        "axes": list(layout["axes"].items()),
+                        "columns": list(layout["columns"].items()),
+                    }
+                    for key, layout in layouts.items()
+                }
+            if policy := interface.get("policy"):
+                values["policy"] = {
+                    **policy,
+                    "actions": list(policy["actions"].items()),
+                }
+            # JSON object keys would conflate an integer label with its string spelling.
+            values["id_maps"] = {
+                column: sorted(
+                    labels.items(), key=lambda item: (type(item[0]).__name__, item[0])
+                )
+                for column, labels in interface["id_maps"].items()
+            }
+            interfaces.append((name, values))
+        return fingerprint({**self.values, "interfaces": interfaces})
 
 
 @dataclass(frozen=True)
@@ -150,18 +196,23 @@ def restore_model_artifact(
 ) -> tuple[Any, ModelExecution, ModelArtifact]:
     """Reconstruct execution identically for portable models and run checkpoints."""
     config, _ = model_execution_from_model_config(
-        artifact.model_config.values,
-        device=device,
-        interface_name=interface_name,
+        artifact.model_config.values, interface_name=interface_name
     )
-    built = build_transformer_network(
+    return restore_execution_network(artifact, config, device), config, artifact
+
+
+def restore_execution_network(
+    artifact: ModelArtifact, config: ModelExecution, device: str
+):
+    """Populate a model from its validated execution contract and portable weights."""
+    network = build_transformer_network(
         config, device=torch.device(device), initialize=False
     )
-    built.network.load_state_dict(artifact.model_state_dict)
+    network.load_state_dict(artifact.model_state_dict)
     from sequifier.model.factory import validate_hash_contracts
 
-    validate_hash_contracts(built.network, config)
-    return built.network, config, artifact
+    validate_hash_contracts(network, config)
+    return network
 
 
 def read_artifact(

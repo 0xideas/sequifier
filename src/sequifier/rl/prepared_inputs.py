@@ -1,60 +1,31 @@
 """Run-owned source identities, episode catalogs and policy partitions."""
 
 from contextlib import contextmanager
-from copy import deepcopy
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 
+from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.config.policy_config import PolicyBinding
 from sequifier.config.policy_inputs import PolicyFittingSpec
 from sequifier.fingerprints import fingerprint
 from sequifier.io.episode_cache import EpisodeCache
 from sequifier.io.memory_budget import resident_bytes
 from sequifier.runtime.resource_accounting import ResourceAccounting
-from sequifier.trajectory.sources import (
-    ResolvedSequenceSource,
-    file_checksum,
-    resolve_source,
-)
+from sequifier.trajectory.sources import ResolvedSequenceSource, resolve_source
 
 
 @dataclass(frozen=True)
 class RunInputs:
     sources: dict[str, ResolvedSequenceSource]
-    checksums: dict[Path, str]
-    _identity: dict[str, str] = field(repr=False)
-
-    @classmethod
-    def from_sources(cls, sources, checksums):
-        identity = {str(path.resolve()): value for path, value in checksums.items()}
-        return cls(sources, checksums, identity)
-
-    @classmethod
-    def resolve(cls, config):
-        prepared = config._prepared_inputs or PreparedTrainingInputs()
-        return prepared.resolve(config)
-
-    @property
-    def identity(self):
-        return dict(self._identity)
-
-    def revalidate(self, expected, field):
-        """Rehash every dependency, including manifests and retargeted links."""
-        from sequifier.rl.run_state import require_equal
-
-        require_equal(
-            expected,
-            {str(path.resolve()): file_checksum(path) for path in self.checksums},
-            field,
-        )
+    dependencies: DependencyManifest
 
 
 def _data_policy_contract(policy):
     """Episode interpretation and eligibility, independent of fitted feature codecs."""
     binding = policy.binding if isinstance(policy, PolicyFittingSpec) else policy
-    values = binding.model_dump(mode="json")
     return {
-        "binding": {key: values[key] for key in PolicyBinding.model_fields},
+        "binding": binding.model_dump(
+            mode="json", include=set(PolicyBinding.model_fields)
+        ),
         "context_length": policy.context_length,
         "interface_name": policy.interface_name,
         "observation_columns": policy.observation_columns,
@@ -74,7 +45,7 @@ class PreparedTrainingInputs:
 
     def __init__(self):
         self._sources = {}
-        self._checksums = {}
+        self._baseline = DependencyManifest()
         self._inputs = {}
         self._episode_records = {}
         self._memberships = {}
@@ -95,7 +66,7 @@ class PreparedTrainingInputs:
         roots = (
             self._inputs,
             self._sources,
-            self._checksums,
+            self._baseline,
             self._episode_records,
             self._memberships,
             self._partitions,
@@ -147,14 +118,12 @@ class PreparedTrainingInputs:
             config._prepared_inputs = cls()
         return config._prepared_inputs
 
-    def _phase_dependencies(self, config, phase, inputs):
-        if phase.algorithm == "dpo":
+    def phase_dependencies(self, config, phase, inputs):
+        refs = phase.data_sources
+        if refs.kind == "preference":
             from sequifier.trajectory.preferences import load_preferences
 
-            preferences = {
-                ref.source: config.preferences[ref.source]
-                for ref in [phase.preferences, *(phase.evaluation.sources or [])]
-            }
+            preferences = {ref.source: config.preferences[ref.source] for ref in refs}
             names = set()
             for path in preferences.values():
                 if path not in self._preference_manifests:
@@ -167,56 +136,39 @@ class PreparedTrainingInputs:
                 )
         else:
             preferences = {}
-            names = {
-                ref.source
-                for ref in [*phase.sources, *(phase.evaluation.sources or [])]
-            }
+            names = {ref.source for ref in refs}
         sources = {name: inputs.sources[name] for name in sorted(names)}
-        checksums = {
-            str(path): value
-            for source in sources.values()
-            for path, value in source.checksums.items()
-        }
-        checksums.update(
-            {path: inputs.checksums[Path(path)] for path in preferences.values()}
-        )
-        return sources, preferences, checksums
+        dependencies = DependencyManifest()
+        for source in sources.values():
+            dependencies.merge(source.dependencies)
+        dependencies.include_files(inputs.dependencies, preferences.values())
+        return sources, preferences, dependencies
 
-    def phase_checksums(self, config, phase, inputs):
-        from sequifier.rl.registry import BUILTIN_ALGORITHMS
-
-        if BUILTIN_ALGORITHMS[phase.algorithm].prepare_data is None:
-            return {}
-        return self._phase_dependencies(config, phase, inputs)[2]
+    def source(self, declaration, root, *, metadata=None):
+        key = fingerprint((str(root), declaration.model_dump(mode="json")))
+        if key not in self._sources:
+            self._sources[key] = resolve_source(declaration, root, metadata=metadata)
+        return self._sources[key]
 
     def resolve(self, config):
-        declarations = {
-            name: {
-                **source.model_dump(mode="json"),
-                "split_index": source.selected_split_index,
-            }
+        sources = {
+            name: self.source(source, config.project_root)
             for name, source in config.sources.items()
         }
-        key = fingerprint({"sources": declarations, "preferences": config.preferences})
+        key = fingerprint(
+            {
+                "sources": {name: source.cache_key for name, source in sources.items()},
+                "preferences": config.preferences,
+            }
+        )
         if key not in self._inputs:
-            sources, checksums = {}, {}
-            for name, source in config.sources.items():
-                source_key = fingerprint(declarations[name])
-                if source_key not in self._sources:
-                    self._sources[source_key] = resolve_source(source)
-                resolved = self._sources[source_key]
-                sources[name] = resolved
-                for path, checksum in resolved.checksums.items():
-                    if path in self._checksums and self._checksums[path] != checksum:
-                        raise ValueError(f"source changed during preparation: {path}")
-                    self._checksums[path] = checksum
-                    checksums[path] = checksum
+            dependencies = DependencyManifest()
+            for source in sources.values():
+                dependencies.merge(source.dependencies)
             for path in config.preferences.values():
-                path = Path(path)
-                if path not in self._checksums:
-                    self._checksums[path] = file_checksum(path)
-                checksums[path] = self._checksums[path]
-            self._inputs[key] = RunInputs.from_sources(sources, checksums)
+                dependencies.add(path)
+            self._baseline.merge(dependencies)
+            self._inputs[key] = RunInputs(sources, dependencies)
         return self._inputs[key]
 
     @contextmanager
@@ -232,31 +184,20 @@ class PreparedTrainingInputs:
 
     def _prepare_phase(self, config, phase, policy, inputs, *, fitting=False):
         from sequifier.io.policy_dataset import PolicyDataCatalog
-        from sequifier.rl.offline_data import prepare_offline
         from sequifier.rl.registry import BUILTIN_ALGORITHMS
 
-        prepare = BUILTIN_ALGORITHMS[phase.algorithm].prepare_data
+        algorithm = BUILTIN_ALGORITHMS[phase.algorithm]
+        prepare = (
+            algorithm.prepare_for_fitting if fitting else None
+        ) or algorithm.prepare_data
         if prepare is None:
             return None
-        if fitting and phase.algorithm == "iql":
-            prepare = prepare_offline
-        sources, preferences, checksums = self._phase_dependencies(
+        sources, preferences, dependencies = self.phase_dependencies(
             config, phase, inputs
         )
         catalog_key = fingerprint(
             {
-                "sources": {
-                    name: {
-                        "source": source.source.model_dump(mode="json"),
-                        "split_index": source.source.selected_split_index,
-                        "paths": [str(path) for path in source.paths],
-                        "kind": source.kind,
-                        "checksums": {
-                            str(path): value for path, value in source.checksums.items()
-                        },
-                    }
-                    for name, source in sources.items()
-                },
+                "sources": {name: source.cache_key for name, source in sources.items()},
                 "policy": _data_policy_contract(policy),
                 "episode_cache_size": config.episode_cache_size,
             }
@@ -265,8 +206,7 @@ class PreparedTrainingInputs:
             {
                 "catalog": catalog_key,
                 "preferences": preferences,
-                "identity": checksums,
-                "validation_fraction": config.validation_fraction,
+                "identity": dependencies.identity,
                 "source_validation_fractions": config.source_validation_fractions,
                 "seed": config.seed,
             }
@@ -282,7 +222,7 @@ class PreparedTrainingInputs:
         if view_key not in catalog_views:
             catalog_views[view_key] = PolicyDataCatalog(
                 sources,
-                deepcopy(policy),
+                policy,
                 config.episode_cache_size,
                 preference_manifests=self._preference_manifests,
                 episode_records=self._episode_records.setdefault(catalog_key, {}),
@@ -296,9 +236,9 @@ class PreparedTrainingInputs:
             self._memberships.setdefault(partition_key, {}),
         )
 
-    def prepare(self, config, policy, inputs):
+    def prepare(self, config, phases, policy, inputs):
         data = []
-        for phase in config.phases:
+        for phase in phases:
             try:
                 data.append(self._prepare_phase(config, phase, policy, inputs))
             except (ValueError, KeyError, FileNotFoundError) as error:

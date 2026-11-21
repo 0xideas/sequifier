@@ -5,13 +5,14 @@ from __future__ import annotations
 import random
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, Optional, Protocol, runtime_checkable
+from typing import Any, Literal, TypeVar
 
 import torch
 import torch.distributed as dist
 from torch import nn
 from torch.utils.data import DataLoader
 
+from sequifier.config.learning_config import DatasetLearningConfig
 from sequifier.config.train_config import (
     ResolvedDatasetTrainingSpec,
     ResolvedModelInterface,
@@ -20,32 +21,21 @@ from sequifier.config.train_config import (
     ResolvedTrainingSource,
     SelectedObjectiveConfig,
     dataset_part_view,
-    interface_build_view,
 )
 from sequifier.helpers import normalize_path
 from sequifier.io.batch import SequifierBatch
-from sequifier.io.folder_dataset import FolderDataset
-from sequifier.io.memory_budget import DataLoadingBudget
+from sequifier.io.folder_dataset import load_folder_dataset
+from sequifier.io.memory_budget import DataLoadingBudget, plan_data_loading
 from sequifier.io.sequifier_dataset_from_file import SequifierDatasetFromFile
-from sequifier.io.sequifier_dataset_from_folder_parquet import (
-    SequifierDatasetFromFolderParquet,
-)
-from sequifier.io.sequifier_dataset_from_folder_parquet_lazy import (
-    SequifierDatasetFromFolderParquetLazy,
-)
-from sequifier.io.sequifier_dataset_from_folder_pt import SequifierDatasetFromFolderPt
-from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
-    SequifierDatasetFromFolderPtLazy,
-)
+from sequifier.io.window_dataset import WindowDataset
 from sequifier.model.network import ComposableTransformerNetwork
 from sequifier.model.parameter_catalog import ParameterCatalog
 from sequifier.objectives import CausalObjective, Objective, create_objective
 from sequifier.training.accurate_cross_entropy import AccurateCrossEntropyLoss
 from sequifier.training.plan import (
+    CompiledSupervisedPhase,
     PhaseLoading,
-    SupervisedPhaseView,
     SupervisedRunPlan,
-    dataset_learning_view,
 )
 from sequifier.typechecking import beartype
 
@@ -65,6 +55,9 @@ class PartLoaderFactory:
     memory_budget: DataLoadingBudget
     curriculum_eligible: bool
     _loading: PhaseLoading | None = field(default=None, init=False)
+    _batch_counts: dict[tuple[PhaseLoading, str], int] = field(
+        default_factory=dict, init=False
+    )
     loaders: dict[Literal["training", "validation"], DataLoader] = field(
         default_factory=dict,
         init=False,
@@ -77,7 +70,7 @@ class PartLoaderFactory:
     def _build_dataset(
         self, loading: PhaseLoading, split: Literal["training", "validation"]
     ):
-        global_spec = self.config.runtime_settings
+        data_loading = self.config.run.execution.data_loading
         curriculum_column = (
             loading.curriculum_column
             if split == "training" and self.curriculum_eligible
@@ -92,24 +85,18 @@ class PartLoaderFactory:
             curriculum_column=curriculum_column,
         )
         part = dataset_config.part
-        path = (
-            part.training_data_path
-            if split == "training"
-            else part.validation_data_path
-        )
+        path = part.split_paths.get(split)
         if path is None:
             raise ValueError(
                 f"Part {self.dataset_name}.{self.part_name} has no {split} path"
             )
         shuffle = split == "training"
         if part.storage_form == "indexed":
-            from sequifier.io.sequifier_dataset_from_indexed import (
-                SequifierDatasetFromIndexed,
-            )
+            from sequifier.io.sequifier_dataset_from_indexed import load_indexed_dataset
 
-            dataset = SequifierDatasetFromIndexed(path, dataset_config, shuffle=shuffle)
+            dataset = load_indexed_dataset(path, dataset_config, shuffle=shuffle)
         elif part.storage_form == "file":
-            if global_spec.distributed:
+            if self.config.run.execution.distribution.distributed:
                 raise ValueError(
                     "Distributed training is not supported with single-file parts"
                 )
@@ -125,38 +112,27 @@ class PartLoaderFactory:
                     ),
                 )
             dataset = SequifierDatasetFromFile(path, dataset_config, shuffle=shuffle)
-        elif dataset_config.read_format == "pt":
-            cls = (
-                SequifierDatasetFromFolderPt
-                if global_spec.load_full_data_to_ram
-                else SequifierDatasetFromFolderPtLazy
-            )
-            dataset = cls(path, dataset_config, shuffle=shuffle)
-        elif dataset_config.read_format == "parquet":
-            cls = (
-                SequifierDatasetFromFolderParquet
-                if global_spec.load_full_data_to_ram
-                else SequifierDatasetFromFolderParquetLazy
-            )
-            dataset = cls(path, dataset_config, shuffle=shuffle)
         else:
-            raise ValueError(
-                f"Folder parts do not support read_format={dataset_config.read_format!r}"
-            )
+            dataset = load_folder_dataset(path, dataset_config, shuffle=shuffle)
         self.memory_budget.validate_dataset(
             f"{self.dataset_name}.{self.part_name}.{split}",
             dataset,
-            global_spec.num_workers,
+            data_loading.num_workers,
         )
         return dataset
 
-    def count_training_batches(self, phase: SupervisedPhaseView) -> int:
+    def count_batches(
+        self, loading: PhaseLoading, split: Literal["training", "validation"]
+    ) -> int:
         # The dataset emits pre-batched items and the loader uses batch_size=None.
-        return len(self._build_dataset(phase.loading, "training"))
+        key = (loading, split)
+        if key not in self._batch_counts:
+            self._batch_counts[key] = len(self._build_dataset(loading, split))
+        return self._batch_counts[key]
 
     @beartype
     def build(
-        self, phase: SupervisedPhaseView, split: Literal["training", "validation"]
+        self, phase: CompiledSupervisedPhase, split: Literal["training", "validation"]
     ) -> DataLoader:
         if self._loading != phase.loading:
             self.loaders.clear()
@@ -164,7 +140,7 @@ class PartLoaderFactory:
         if split in self.loaders:
             return self.loaders[split]
         dataset = self._build_dataset(phase.loading, split)
-        global_spec = self.config.runtime_settings
+        data_loading = self.config.run.execution.data_loading
         generator = self.generators.get(split)
         if generator is None:
             generator = torch.Generator().manual_seed(
@@ -180,10 +156,10 @@ class PartLoaderFactory:
             dataset,
             batch_size=None,
             sampler=None,
-            num_workers=global_spec.num_workers,
+            num_workers=data_loading.num_workers,
             pin_memory=self.config.device not in {"mps", "cpu"},
-            prefetch_factor=4 if global_spec.num_workers > 0 else None,
-            persistent_workers=global_spec.num_workers > 0,
+            prefetch_factor=4 if data_loading.num_workers > 0 else None,
+            persistent_workers=data_loading.num_workers > 0,
             generator=generator,
         )
         self.loaders[split] = loader
@@ -215,17 +191,16 @@ class DatasetPartRuntime:
         ]
         return {
             "storage_form": part.storage_form,
-            "training_data_path": part.training_data_path,
-            "validation_data_path": part.validation_data_path,
+            "split_paths": dict(part.split_paths),
         }
 
     def loader(
-        self, phase: SupervisedPhaseView, split: Literal["training", "validation"]
+        self, phase: CompiledSupervisedPhase, split: Literal["training", "validation"]
     ) -> DataLoader:
         return self.factory.build(phase, split)
 
     def iter_loader(
-        self, phase: SupervisedPhaseView, split: Literal["training", "validation"]
+        self, phase: CompiledSupervisedPhase, split: Literal["training", "validation"]
     ) -> Iterator[Any]:
         loader = self.loader(phase, split)
         generator = self.factory.generators[split]
@@ -290,10 +265,8 @@ class DatasetRuntime:
     objective: Objective
     parts: dict[str, DatasetPartRuntime]
     criteria: dict[str, nn.Module]
-    loss_weights: Optional[dict[str, float]]
-    class_weights: Optional[dict[str, list[float]]]
+    learning: DatasetLearningConfig
     frozen_parameter_ids: frozenset[int]
-    runtime_metadata: Any
     metrics: DatasetMetrics = field(default_factory=DatasetMetrics)
 
 
@@ -335,62 +308,38 @@ class PhaseTrainabilityPlan:
         config: ResolvedSequifierConfig,
         network: ComposableTransformerNetwork,
         phase: ResolvedTrainingPhase,
+        catalog: ParameterCatalog,
     ) -> PhaseTrainabilityPlan:
-        catalog = ParameterCatalog(network)
-        parameter_id_by_identity = {
-            id(catalog.parameter(descriptor.parameter_id)): descriptor.parameter_id
-            for descriptor in catalog.descriptors()
+        active = {ref.dataset for ref in phase.sources}
+        backbone = catalog.parameter_ids(network.backbone.parameters())
+        by_dataset = {
+            name: backbone
+            | catalog.parameter_ids(
+                network.interfaces[dataset.model_interface].parameters()
+            )
+            for name, dataset in config.dataset_training.items()
         }
-        parameter_ids_by_dataset = {}
-        active_datasets = {ref.dataset for ref in phase.sources}
-        phase_parameters = {id(p) for p in network.backbone.parameters()}
-        for name in active_datasets:
-            phase_parameters.update(
-                id(p)
-                for p in network.interfaces[
-                    config.dataset_training[name].model_interface
-                ].parameters()
-            )
-        default_mask = phase.trainability.policy("model").resolve(
-            network, eligible=phase_parameters
-        )
-        for name, dataset in config.dataset_training.items():
-            route = network.interfaces[dataset.model_interface]
-            active_parameter_ids = {
-                id(parameter)
-                for module in (network.backbone, route)
-                for parameter in module.parameters()
-            }
-            override = phase.trainability.by_dataset.get(name)
-            if name not in active_datasets:
-                frozen = frozenset()
-            elif override is not None and "model" in override.roles:
-                frozen = override.roles["model"].resolve(
-                    network, eligible=active_parameter_ids
+        eligible = set().union(*(by_dataset[name] for name in active))
+        default = phase.trainability.policy("model").frozen_ids(catalog, eligible)
+        masks = {}
+        for name, candidates in by_dataset.items():
+            frozen = frozenset()
+            if name in active:
+                override = phase.trainability.by_dataset.get(name)
+                frozen = (
+                    override.roles["model"].frozen_ids(catalog, candidates)
+                    if override and "model" in override.roles
+                    else default & candidates
                 )
-            else:
-                frozen = default_mask & active_parameter_ids
-            trainable = {
-                id(p)
-                for module in (network.backbone, route)
-                for p in module.parameters()
-                if p.requires_grad
-            }
-            if name in active_datasets and not trainable - frozen:
-                raise ValueError(f"Dataset {name!r} leaves no trainable parameters")
-            missing = frozen.difference(parameter_id_by_identity)
-            if missing:
-                raise RuntimeError(
-                    "Freezing selected parameters outside the model parameter catalog"
-                )
-            parameter_ids_by_dataset[name] = frozenset(
-                parameter_id_by_identity[identity] for identity in frozen
-            )
-        return cls(parameter_ids_by_dataset)
+                if not any(
+                    catalog.parameter(key).requires_grad for key in candidates - frozen
+                ):
+                    raise ValueError(f"Dataset {name!r} leaves no trainable parameters")
+            masks[name] = frozen
+        return cls(masks)
 
     @beartype
-    def bind(self, network: ComposableTransformerNetwork) -> dict[str, frozenset[int]]:
-        catalog = ParameterCatalog(network)
+    def bind(self, catalog: ParameterCatalog) -> dict[str, frozenset[int]]:
         return {
             dataset_name: frozenset(
                 id(catalog.parameter(parameter_id)) for parameter_id in parameter_ids
@@ -404,11 +353,7 @@ class TrainingSourceRuntime:
     config: ResolvedTrainingSource
     dataset: DatasetRuntime
     part_names: tuple[str, ...]
-    phase: SupervisedPhaseView
-
-    @property
-    def dataset_config(self) -> ResolvedDatasetTrainingSpec:
-        return self.dataset.config
+    phase: CompiledSupervisedPhase
 
     @beartype
     def _loaders(self, split: Literal["training", "validation"]):
@@ -421,7 +366,7 @@ class TrainingSourceRuntime:
     def set_epoch(self, epoch: int, split: Literal["training", "validation"]):
         for _, loader in self._loaders(split):
             dataset = loader.dataset
-            if isinstance(dataset, (SequifierDatasetFromFile, FolderDataset)):
+            if isinstance(dataset, WindowDataset):
                 dataset.set_epoch(epoch)
 
     @beartype
@@ -442,63 +387,24 @@ class TrainingSourceRuntime:
         return sum(len(loader) for _, loader in self._loaders(split))
 
 
-@runtime_checkable
-class ScheduledSource(Protocol):
-    """Structural source contract consumed by the deterministic scheduler."""
-
-    config: ResolvedTrainingSource
-
-    @property
-    def dataset_config(self) -> ResolvedDatasetTrainingSpec: ...
-
-    @beartype
-    def set_epoch(
-        self, epoch: int, split: Literal["training", "validation"]
-    ) -> None: ...
-
-    @beartype
-    def iter_batches(
-        self, split: Literal["training", "validation"] = "training"
-    ) -> Iterator[Any]: ...
-
-
 @beartype
 def _criterion_modules(
-    dataset: ResolvedDatasetTrainingSpec,
+    learning: DatasetLearningConfig,
     interface: ResolvedModelInterface,
     device: torch.device,
 ) -> dict[str, nn.Module]:
     modules = {}
-    for target in interface.target_columns:
-        if target in interface.categorical_hashing:
-            if dataset.class_weights and target in dataset.class_weights:
-                raise ValueError(
-                    f"class_weights[{target!r}] describes canonical classes, but hash heads "
-                    "predict buckets; no unambiguous class-weight conversion is available."
-                )
-            if dataset.criterion[target] not in {
-                "CrossEntropyLoss",
-                "AccurateCrossEntropyLoss",
-            }:
-                raise ValueError(
-                    f"Hashed target {target!r} requires CrossEntropyLoss or "
-                    "AccurateCrossEntropyLoss with class-index labels."
-                )
+    for target, name in learning.criterion.items():
         criterion_class = (
             AccurateCrossEntropyLoss
-            if dataset.criterion[target] == "AccurateCrossEntropyLoss"
-            else vars(torch.nn)[dataset.criterion[target]]
+            if name == "AccurateCrossEntropyLoss"
+            else vars(torch.nn)[name]
         )
         kwargs: dict[str, Any] = {"reduction": "none"}
-        if dataset.class_weights is not None and target in dataset.class_weights:
-            weights = torch.tensor(dataset.class_weights[target])
-            if interface.target_column_types[target] == "categorical":
-                if weights.numel() == interface.n_classes[target]:
-                    weights = weights[interface.target_decoder_ids[target]]
-                elif weights.numel() != interface.target_n_classes[target]:
-                    raise ValueError(
-                        f"class_weights[{target!r}] has incompatible length"
-                    )
+        if learning.class_weights is not None and target in learning.class_weights:
+            weights = torch.tensor(learning.class_weights[target])
+            if weights.numel() == interface.n_classes[target]:
+                weights = weights[interface.target_decoder_ids[target]]
             kwargs["weight"] = weights
         modules[target] = criterion_class(**kwargs).to(device)
     return modules
@@ -510,10 +416,10 @@ def build_dataset_parts(
     memory_budget: DataLoadingBudget,
 ) -> dict[str, dict[str, DatasetPartRuntime]]:
     training_parts = {
-        (source.dataset, part)
+        (name, part)
         for phase in plan.phases
-        for source in phase.spec().sources
-        for part in source.parts
+        for name, part, role in phase.part_roles()
+        if role == "training"
     }
     return {
         name: {
@@ -529,60 +435,58 @@ def build_dataset_parts(
     }
 
 
-def preflight_supervised_data(config):
-    """Validate each selected training and evaluation part with its phase's loader."""
-    from sequifier.io.memory_budget import plan_data_loading
-
-    plan = SupervisedRunPlan.from_config(config)
-    parts = build_dataset_parts(config, plan, plan_data_loading(config))
-    validated = set()
+def _validate_sources(plan, parts):
     for phase in plan.phases:
-        spec = phase.spec()
-        split_sources: tuple[
-            tuple[Literal["training", "validation"], list[ResolvedTrainingSource]], ...
-        ] = (
-            ("training", spec.sources),
-            ("validation", spec.evaluation_sources),
-        )
-        for split, sources in split_sources:
-            for source in sources:
-                for part in source.parts:
-                    key = (source.dataset, part, split, phase.loading)
-                    if key in validated:
-                        continue
-                    try:
-                        factory = parts[source.dataset][part].factory
-                        if not len(factory._build_dataset(phase.loading, split)):
-                            raise ValueError("no compatible model windows")
-                    except (ValueError, KeyError, FileNotFoundError) as error:
-                        raise ValueError(
-                            f"phases.{spec.name} {split} source {source.dataset}.{part}: {error}"
-                        ) from error
-                    validated.add(key)
+        for name, part, role in phase.part_roles():
+            try:
+                factory = parts[name][part].factory
+                if not factory.count_batches(phase.loading, role):
+                    raise ValueError("no compatible model windows")
+            except (ValueError, KeyError, FileNotFoundError) as error:
+                raise ValueError(
+                    f"phases.{phase.name} {role} source {name}.{part}: {error}"
+                ) from error
+
+
+@dataclass(frozen=True)
+class PreparedSupervisedGroup:
+    config: ResolvedSequifierConfig
+    plan: SupervisedRunPlan
+    parts: dict[str, dict[str, DatasetPartRuntime]]
+
+    @classmethod
+    def compile(cls, config: ResolvedSequifierConfig, *, validate_sources=False):
+        from sequifier.training.scheduler_budgets import resolve_scheduler_budgets
+
+        config = config.model_copy()
+        plan = SupervisedRunPlan.from_config(config)
+        parts = build_dataset_parts(config, plan, plan_data_loading(config))
+        if validate_sources:
+            _validate_sources(plan, parts)
+        plan = resolve_scheduler_budgets(plan, config, parts)
+        config.training_plan = list(plan.phases)
+        return cls(config, plan, parts)
 
 
 def build_dataset_runtimes(
     config: ResolvedSequifierConfig,
-    phase: SupervisedPhaseView,
+    phase: CompiledSupervisedPhase,
     device: torch.device,
     *,
     parts: dict[str, dict[str, DatasetPartRuntime]],
     metrics: dict[str, DatasetMetrics],
-    runtime_metadata: Any,
     masks: dict[str, frozenset[int]],
 ) -> DatasetRuntimeRegistry:
-    spec = phase.spec()
-    settings = phase.objective_settings(config.runtime_settings)
     runtimes = {}
-    for name, base in config.dataset_training.items():
-        dataset = dataset_learning_view(base, spec)
+    for name, dataset in config.dataset_training.items():
+        learning = phase.learning.datasets.get(name) or DatasetLearningConfig()
         interface = config.interface(dataset.model_interface)
         objective_view = SelectedObjectiveConfig(
-            **vars(interface_build_view(config, interface)), runtime_settings=settings
+            interface=interface, learning=phase.learning
         )
         objective = (
             CausalObjective(objective_view)
-            if name not in spec.learning.datasets
+            if name not in phase.learning.datasets
             and objective_view.training_objective == "next_occurrence"
             else create_objective(objective_view)
         )
@@ -593,11 +497,9 @@ def build_dataset_runtimes(
             interface=interface,
             objective=objective,
             parts=parts[name],
-            criteria=_criterion_modules(dataset, interface, device),
-            loss_weights=dataset.loss_weights,
-            class_weights=dataset.class_weights,
+            criteria=_criterion_modules(learning, interface, device),
+            learning=learning,
             frozen_parameter_ids=masks[name],
-            runtime_metadata=runtime_metadata.interfaces[dataset.model_interface],
             metrics=metrics[name],
         )
     return DatasetRuntimeRegistry(runtimes)
@@ -606,10 +508,13 @@ def build_dataset_runtimes(
 def build_source_runtime(
     source: ResolvedTrainingSource,
     datasets: DatasetRuntimeRegistry,
-    phase: SupervisedPhaseView,
+    phase: CompiledSupervisedPhase,
 ) -> TrainingSourceRuntime:
     dataset = datasets.resolve(source.dataset)
     return TrainingSourceRuntime(source, dataset, source.parts, phase)
+
+
+BatchItem = TypeVar("BatchItem")
 
 
 class SourceScheduler:
@@ -618,16 +523,28 @@ class SourceScheduler:
     @beartype
     def __init__(
         self,
-        phase: SupervisedPhaseView,
-        sources: Sequence[ScheduledSource],
+        phase: CompiledSupervisedPhase,
+        datasets: dict[str, ResolvedDatasetTrainingSpec],
     ) -> None:
-        self.phase = phase.spec()
-        self.sources = sources
-        self.phase_index = phase.index
+        self.phase = phase
+        self.sources = phase.sources
+        dataset_names = list(dict.fromkeys(source.dataset for source in self.sources))
+        self.selections = [
+            (
+                phase.index,
+                index,
+                dataset_names.index(source.dataset),
+                -1
+                if source.part is None
+                else list(datasets[source.dataset].parts).index(source.part),
+                source.batches_per_selection,
+            )
+            for index, source in enumerate(self.sources)
+        ]
         self.rng = random.Random(phase.seed)
         self.round_robin_cursor = 0
         self.epoch = 0
-        self.consumed_by_source = [0 for _ in sources]
+        self.consumed_by_source = [0 for _ in self.sources]
         self.exhausted_sources: set[int] = set()
         self.pending_source: int | None = None
         self.pending_batches = 0
@@ -667,9 +584,7 @@ class SourceScheduler:
         if self.phase.selection == "weighted_random":
             return self.rng.choices(
                 active,
-                weights=[
-                    self.sources[index].config.selection_weight for index in active
-                ],
+                weights=[self.sources[index].selection_weight for index in active],
                 k=1,
             )[0]
         for _ in range(len(self.sources)):
@@ -680,9 +595,9 @@ class SourceScheduler:
         raise RuntimeError("No active source remains")
 
     @beartype
-    def iter_epoch(self, epoch: int) -> Iterator[RuntimeBatch]:
-        for source in self.sources:
-            source.set_epoch(epoch, "training")
+    def iter_epoch(
+        self, epoch: int, iterators: Sequence[Iterator[BatchItem]]
+    ) -> Iterator[BatchItem]:
         if self.epoch != epoch:
             self.epoch = epoch
             self.consumed_by_source = [0 for _ in self.sources]
@@ -690,7 +605,6 @@ class SourceScheduler:
             self.pending_source = None
             self.pending_batches = 0
             self.sequential_source = 0
-        iterators = [iter(source.iter_batches("training")) for source in self.sources]
         for source_index, consumed in enumerate(self.consumed_by_source):
             for _ in range(consumed):
                 try:
@@ -714,12 +628,6 @@ class SourceScheduler:
             for index in range(len(iterators))
             if index not in self.exhausted_sources
         ]
-        dataset_indices = {
-            name: index
-            for index, name in enumerate(
-                dict.fromkeys(source.dataset_config.name for source in self.sources)
-            )
-        }
         while active:
             if self.pending_source is None or self.pending_batches == 0:
                 selected = (
@@ -727,19 +635,7 @@ class SourceScheduler:
                     if not dist.is_initialized() or dist.get_rank() == 0
                     else 0
                 )
-                source = self.sources[selected]
-                part_index = (
-                    -1
-                    if source.config.part is None
-                    else list(source.dataset_config.parts).index(source.config.part)
-                )
-                record = (
-                    self.phase_index,
-                    selected,
-                    dataset_indices[source.dataset_config.name],
-                    part_index,
-                    source.config.batches_per_selection,
-                )
+                record = self.selections[selected]
                 if dist.is_initialized():
                     from sequifier.training.distributed import (
                         broadcast_source_selection,
@@ -749,26 +645,12 @@ class SourceScheduler:
                         record if dist.get_rank() == 0 else None
                     )
                     selected = record[1]
-                    if record[0] != self.phase_index or selected not in active:
-                        raise RuntimeError(
-                            "Distributed source selection does not match the "
-                            "active phase/source state"
-                        )
-                    selected_source = self.sources[selected]
-                    expected_part = (
-                        -1
-                        if selected_source.config.part is None
-                        else list(selected_source.dataset_config.parts).index(
-                            selected_source.config.part
-                        )
-                    )
                     if (
-                        record[2]
-                        != dataset_indices[selected_source.dataset_config.name]
-                        or record[3] != expected_part
+                        selected not in active
+                        or tuple(record) != self.selections[selected]
                     ):
                         raise RuntimeError(
-                            "Distributed dataset/part selection is inconsistent"
+                            "Distributed source selection does not match the active phase/source state"
                         )
                 self.pending_source = selected
                 self.pending_batches = record[4]
@@ -791,16 +673,8 @@ class SourceScheduler:
 
 
 def validate_phase_learning(config, plan: SupervisedRunPlan, device):
-    """Validate every phase's losses before native outputs are created."""
+    """Check constructors before training and keep inactive phases off the device."""
     for view in plan.phases:
-        phase = view.spec()
-        for name, learning in phase.learning.datasets.items():
-            dataset = dataset_learning_view(config.dataset_training[name], phase)
-            interface = config.interface(dataset.model_interface)
-            learning.validate_targets(interface.target_columns, f"{phase.name}: {name}")
-            for column in dataset.class_share_log_columns:
-                if interface.target_column_types.get(column) != "categorical":
-                    raise ValueError(
-                        f"{phase.name}: class share columns must be categorical targets"
-                    )
-            _criterion_modules(dataset, interface, device)
+        for name, learning in view.learning.datasets.items():
+            interface = config.interface(config.dataset_training[name].model_interface)
+            _criterion_modules(learning, interface, device)

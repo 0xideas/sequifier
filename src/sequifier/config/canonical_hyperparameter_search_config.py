@@ -15,41 +15,42 @@ import os
 import warnings
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import lru_cache
 from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
-from sequifier.config.composition import load_composed_yaml_config
+from sequifier.config.composition import (
+    ComponentPath,
+    changes_component_variant,
+    component_discriminator,
+    load_composed_yaml_config,
+    merge_component_patch,
+)
 from sequifier.config.naming import ConfigModel, RunSeed
 from sequifier.config.train_config import SequifierConfig, load_train_config_with_source
+from sequifier.config.training_resolution import (
+    initialization_model_config,
+    resolve_execution_settings,
+)
 from sequifier.typechecking import beartype
 
 
-def _validate_training_candidate(values: dict[str, Any]) -> SequifierConfig:
-    from sequifier.config.train_config import validate_training_contract
-
+def _validate_training_candidate(
+    values: dict[str, Any], load_model_config=initialization_model_config
+) -> SequifierConfig:
     candidate = SequifierConfig.model_validate(values)
-    validate_training_contract(candidate, candidate.training_plan.phases)
-    is_next = candidate.runtime_settings.training_objective == "next_occurrence"
-    for phase in candidate.training_plan.phases:
-        if phase.algorithm != "supervised":
-            continue
-        if (phase.learning.next_occurrence_config is not None) != is_next:
-            raise ValueError(
-                f"{phase.name}: learning.next_occurrence_config must be set "
-                "exactly for next_occurrence training"
-            )
+    resolve_execution_settings(candidate, load_model_config)
     return candidate
 
 
-ConfigPath = tuple[str | int, ...]
 _MISSING = object()
 _DISTRIBUTION_KEYS = frozenset({"low", "high", "step", "log", "type"})
 _PRIMITIVE_CATEGORICAL_TYPES = (str, int, float, bool, type(None))
 
 
 @beartype
-def _path_name(path: ConfigPath) -> str:
+def _path_name(path: ComponentPath) -> str:
     """Return a stable, readable Optuna parameter name."""
 
     value = ""
@@ -77,7 +78,7 @@ def _candidate_identity(value: Any) -> str:
 
 @dataclass(frozen=True)
 class _SearchSpace:
-    path: ConfigPath
+    path: ComponentPath
     kind: Literal["categorical", "int", "float"]
     choices: tuple[Any, ...] = ()
     low: int | float | None = None
@@ -225,6 +226,9 @@ class _CompiledValue:
     def materialize(self, trial: Any | None) -> Any:
         raise NotImplementedError
 
+    def materialize_against(self, current: Any, trial: Any | None) -> Any:
+        return self.materialize(trial)
+
     @beartype
     def spaces(self) -> list[_SearchSpace]:
         return []
@@ -254,9 +258,10 @@ class _SampledValue(_CompiledValue):
 
 @dataclass(frozen=True)
 class _MappingValue(_CompiledValue):
-    path: ConfigPath
+    path: ComponentPath
     base: dict[str, Any]
     children: dict[str, _CompiledValue]
+    variants: _SampledValue | None = None
 
     @beartype
     def materialize(self, trial: Any | None) -> dict[str, Any]:
@@ -268,146 +273,37 @@ class _MappingValue(_CompiledValue):
         current: Any,
         trial: Any | None,
     ) -> dict[str, Any]:
-        result = copy.deepcopy(current) if isinstance(current, dict) else {}
-        discriminator = _component_discriminator(self.path)
-        discriminator_child = self.children.get(discriminator or "")
-        if discriminator is not None and discriminator_child is not None:
-            selected = discriminator_child.materialize(trial)
-            if selected != result.get(discriminator, _MISSING):
-                result = {}
-            result[discriminator] = selected
-
-        for key, child in self.children.items():
-            if key != discriminator:
-                result[key] = _materialize_against(
-                    child,
-                    result.get(key, _MISSING),
-                    trial,
-                )
-        return result
-
-    @beartype
-    def spaces(self) -> list[_SearchSpace]:
-        return [space for child in self.children.values() for space in child.spaces()]
-
-
-@beartype
-def _component_discriminator(path: ConfigPath) -> str | None:
-    """Return the discriminator for a typed component mapping, if any."""
-
-    if (
-        len(path) >= 3
-        and path[-1] in {"optimizer", "scheduler"}
-        and "optimization" in path
-    ):
-        return "name"
-    if path and path[-1] in {"weight", "bias"} and "initialization" in path:
-        return "method"
-    if path == ("runtime_settings", "bert_spec", "span_masking"):
-        return "type"
-    if len(path) < 4 or path[:2] != ("model", "interfaces"):
-        return None
-
-    component_path = path[3:]
-    if component_path in {("ingestion",), ("decoder",)}:
-        return "type"
-    if component_path[0] not in {"ingestion", "decoder"}:
-        return None
-    if len(component_path) >= 2 and component_path[-2] == "branches":
-        return "type"
-    if (
-        len(component_path) >= 2
-        and component_path[-2] == "processing_blocks"
-        and isinstance(component_path[-1], int)
-    ):
-        return "type"
-    return None
-
-
-@beartype
-def _changes_discriminator(
-    base: dict[str, Any],
-    patch: dict[str, Any],
-    path: ConfigPath,
-) -> bool:
-    """Return whether a patch selects a different component variant."""
-
-    discriminator = _component_discriminator(path)
-    return (
-        discriminator is not None
-        and discriminator in patch
-        and not isinstance(patch[discriminator], (dict, list))
-        and patch[discriminator] != base.get(discriminator)
-    )
-
-
-@beartype
-def _merge_fixed_patch(base: Any, patch: Any, path: ConfigPath) -> Any:
-    """Merge one fixed partial variant using canonical component semantics."""
-
-    if not isinstance(base, dict) or not isinstance(patch, dict):
-        return copy.deepcopy(patch)
-
-    result = copy.deepcopy(base)
-    if _changes_discriminator(base, patch, path):
-        result = {}
-    for key, value in patch.items():
-        child_key = str(key)
-        result[child_key] = _merge_fixed_patch(
-            result.get(child_key, _MISSING),
-            value,
-            (*path, child_key),
+        base = current if isinstance(current, dict) else {}
+        result = (
+            merge_component_patch(base, self.variants.materialize(trial), self.path)
+            if self.variants
+            else copy.deepcopy(base)
         )
-    return result
-
-
-@beartype
-def _materialize_against(
-    compiled: _CompiledValue,
-    current: Any,
-    trial: Any | None,
-) -> Any:
-    """Materialize a compiled override against a dynamically selected variant."""
-
-    if isinstance(compiled, _MappingValue):
-        return compiled.materialize_against(current, trial)
-    if isinstance(compiled, _ListValue):
-        return compiled.materialize_against(current, trial)
-    return compiled.materialize(trial)
-
-
-@dataclass(frozen=True)
-class _VariantMappingValue(_CompiledValue):
-    """A partial paired variant followed by independent sibling parameters."""
-
-    path: ConfigPath
-    base: dict[str, Any]
-    variants: _SampledValue
-    children: dict[str, _CompiledValue]
-
-    @beartype
-    def materialize(self, trial: Any | None) -> dict[str, Any]:
-        variant = self.variants.materialize(trial)
-        result = _merge_fixed_patch(self.base, variant, self.path)
+        discriminator = component_discriminator(self.path)
+        selectors: dict[str, Any] = dict(self.children)
+        if discriminator is not None and discriminator in self.children:
+            selectors[discriminator] = self.children[discriminator].materialize(trial)
+        if changes_component_variant(result, selectors, self.path):
+            result = {}
         for key, child in self.children.items():
-            result[key] = _materialize_against(
-                child,
-                result.get(key, _MISSING),
-                trial,
+            result[key] = (
+                selectors[key]
+                if key == discriminator
+                else child.materialize_against(result.get(key, _MISSING), trial)
             )
         return result
 
     @beartype
     def spaces(self) -> list[_SearchSpace]:
-        return [
-            *self.variants.spaces(),
-            *(space for child in self.children.values() for space in child.spaces()),
+        spaces = self.variants.spaces() if self.variants else []
+        return spaces + [
+            space for child in self.children.values() for space in child.spaces()
         ]
 
 
 @dataclass(frozen=True)
 class _ListValue(_CompiledValue):
-    path: ConfigPath
+    path: ComponentPath
     base: list[Any]
     children: dict[int, _CompiledValue]
 
@@ -429,7 +325,7 @@ class _ListValue(_CompiledValue):
                     f"{_path_name(self.path)} index {index} is outside the "
                     f"selected variant list of length {len(result)}"
                 )
-            result[index] = _materialize_against(child, result[index], trial)
+            result[index] = child.materialize_against(result[index], trial)
         return result
 
     @beartype
@@ -438,7 +334,7 @@ class _ListValue(_CompiledValue):
 
 
 @beartype
-def _categorical_space(path: ConfigPath, choices: Any) -> _SampledValue:
+def _categorical_space(path: ComponentPath, choices: Any) -> _SampledValue:
     if not isinstance(choices, list) or not choices:
         raise ValueError(f"{_path_name(path)} choices must be a non-empty list")
     identities = [_candidate_identity(value) for value in choices]
@@ -451,7 +347,7 @@ def _categorical_space(path: ConfigPath, choices: Any) -> _SampledValue:
 
 @beartype
 def _distribution_space(
-    path: ConfigPath,
+    path: ComponentPath,
     expression: dict[str, Any],
     base: Any,
 ) -> _SampledValue:
@@ -558,7 +454,7 @@ def _list_index_mapping(expression: dict[Any, Any]) -> dict[int, Any] | None:
 
 
 @beartype
-def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledValue:
+def _compile_value(expression: Any, base: Any, path: ComponentPath) -> _CompiledValue:
     if isinstance(expression, dict):
         if set(expression) == {"$choices"}:
             return _categorical_space(path, expression["$choices"])
@@ -603,7 +499,7 @@ def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledVal
 
     if isinstance(expression, dict):
         base_mapping = copy.deepcopy(base) if isinstance(base, dict) else {}
-        if isinstance(base, dict) and _changes_discriminator(base, expression, path):
+        if isinstance(base, dict) and changes_component_variant(base, expression, path):
             base_mapping = {}
         variant_key = "$variants" if "$variants" in expression else None
         child_expressions = {
@@ -630,11 +526,11 @@ def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledVal
                     f"{_path_name(path)}.{variant_key} must be a non-empty list "
                     "of partial mappings"
                 )
-            return _VariantMappingValue(
+            return _MappingValue(
                 path,
                 base_mapping,
-                _categorical_space((*path, "__variant"), variants),
                 mapping_children,
+                _categorical_space((*path, "__variant"), variants),
             )
         return _MappingValue(path, base_mapping, mapping_children)
 
@@ -775,9 +671,12 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
                     )
                 )
 
+        load_model_config = lru_cache(maxsize=1)(initialization_model_config)
         for description, trial in candidates:
             try:
-                _validate_training_candidate(self._materialized_values(trial, 0))
+                _validate_training_candidate(
+                    self._materialized_values(trial, 0), load_model_config
+                )
             except (ValidationError, ValueError) as error:
                 raise ValueError(
                     "Search parameters produce an invalid "
@@ -918,10 +817,7 @@ def compile_canonical_hyperparameter_search_config(
     if isinstance(search_values.get("run"), dict):
         search_values["run"].setdefault("project_root", base_config.run.project_root)
     try:
-        base_values = base_config.model_dump(mode="python")
-        base_values["run"] = base_config.run.model_dump(
-            mode="python", exclude_unset=True
-        )
+        base_values = base_config.trial_config_values()
         search_config = CanonicalHyperparameterSearchConfig.model_validate(
             search_values
         )

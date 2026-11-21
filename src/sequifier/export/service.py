@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -66,17 +66,16 @@ class ExportService:
             return ExportResult()
         del network
         execution = ModelExecution.from_config(self.config)
-        export_config = replace(execution, device="cpu")
         export_network = build_transformer_network(
-            export_config, device=torch.device("cpu"), initialize=False
-        ).network
+            execution, device=torch.device("cpu"), initialize=False
+        )
         export_network.load_state_dict(state_dict)
         from sequifier.model.factory import validate_hash_contracts
 
-        validate_hash_contracts(export_network, export_config)
+        validate_hash_contracts(export_network, execution)
         export_network.eval()
         paths: list[Path] = []
-        export = self.config.publication.exports
+        export = self.config.run.export
         if export.pt and export.generative_model:
             path = model_artifact_path(
                 self.config.project_root,

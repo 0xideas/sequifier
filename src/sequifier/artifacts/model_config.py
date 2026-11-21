@@ -4,18 +4,11 @@ from __future__ import annotations
 
 import json
 
+from sequifier.config.components import BackboneComponentConfig
 from sequifier.config.metadata import validate_tensor_payload_contract
-from sequifier.config.ownership import ExportSettings
-from sequifier.config.policy_config import ResolvedPolicyBinding
-from sequifier.config.run_capabilities import PublicationPlan
-from sequifier.config.train_config import (
-    BackboneComponentConfig,
-    ModelInterfaceSpecModel,
-    ModelSpecModel,
+from sequifier.config.model_interface import (
     ResolvedInterfaceStorage,
     ResolvedModelInterface,
-    ResolvedSequifierConfig,
-    TrainingRuntimeSettings,
 )
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import ModelWindowView, resolve_window_view
@@ -26,7 +19,6 @@ from sequifier.model.execution_options import (
 )
 from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.objectives import target_offset_for_objective
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
 
 
@@ -38,7 +30,7 @@ def validate_execution_attachment(
 
     from sequifier.artifacts.model_export import model_execution_config
 
-    source_config, _ = model_execution_from_model_config(source, device="cpu")
+    source_config, _ = model_execution_from_model_config(source)
     source = model_execution_config(source_config)
     current = model_execution_config(current_execution)
     if source["backbone"]["architecture"] != current["backbone"]["architecture"]:
@@ -70,8 +62,8 @@ def validate_execution_attachment(
             "ingestion",
             "decoder",
             "id_maps",
+            "n_classes",
             "target_decoder_ids",
-            "target_global_to_decoder",
             "selected_columns_statistics",
             "normalize_real_columns",
             "depth_layouts",
@@ -91,20 +83,6 @@ def validate_execution_attachment(
                 raise ValueError(
                     f"initial model execution differs at interfaces.{name}.{key}"
                 )
-
-
-@beartype
-def resolved_config_from_model_config(
-    values: dict,
-    *,
-    device: str,
-    interface_name: str | None = None,
-) -> tuple[ResolvedSequifierConfig, str]:
-    """Public compatibility projection of a portable model's execution facts."""
-    execution, selected = model_execution_from_model_config(
-        values, device=device, interface_name=interface_name, validate=False
-    )
-    return resolved_training_config(execution), selected
 
 
 def validate_interface_storage_versions(values: dict, depth_layouts=None) -> None:
@@ -153,9 +131,7 @@ def validate_interface_versions(interface: dict) -> None:
 def model_execution_from_model_config(
     values: dict,
     *,
-    device: str,
     interface_name: str | None = None,
-    validate: bool = True,
 ) -> tuple[ModelExecution, str]:
     """Resolve portable model execution without inventing datasets or losses."""
 
@@ -180,7 +156,6 @@ def model_execution_from_model_config(
         layer_type_dtypes=values.get("layer_type_dtypes"),
         max_concat_tensors=values.get("max_concat_tensors", DEFAULT_MAX_CONCAT_TENSORS),
     )
-    authored_interfaces = {}
     resolved_interfaces = {}
     interface_storage = {}
     window_view = ModelWindowView(
@@ -198,47 +173,11 @@ def model_execution_from_model_config(
         if storage is not None:
             resolve_window_view(storage.storage_layout, window_view)
             interface_storage[name] = storage
-        authored = {
-            key: value
-            for key, value in interface.items()
-            if key in ModelInterfaceSpecModel.model_fields
-        }
-        policy_spec = interface.get("policy")
-        authored_interfaces[name] = ModelInterfaceSpecModel.model_validate(authored)
-        target_decoder_ids = interface.get("target_decoder_ids", {})
-        target_n_classes = interface.get(
-            "target_n_classes",
-            {column: len(ids) for column, ids in target_decoder_ids.items()},
-        )
+        fields = dict(interface)
+        actual_schema = ExecutionSchema.from_dict(fields.pop("execution_schema"))
         resolved = ResolvedModelInterface.model_validate(
-            {
-                **{
-                    key: value
-                    for key, value in interface.items()
-                    if key in ResolvedModelInterface.model_fields
-                },
-                "name": name,
-                "policy": ResolvedPolicyBinding.model_validate(policy_spec)
-                if policy_spec is not None
-                else None,
-                "n_classes": interface.get("n_classes", target_n_classes),
-                "target_decoder_ids": target_decoder_ids,
-                "target_n_classes": target_n_classes,
-                "target_global_to_decoder": interface.get(
-                    "target_global_to_decoder", {}
-                ),
-                "id_maps": interface.get("id_maps", {}),
-                "special_token_ids": interface.get(
-                    "special_token_ids", SPECIAL_TOKEN_IDS.ids_by_label
-                ),
-                "categorical_decoder_special_tokens": interface.get(
-                    "categorical_decoder_special_tokens", {}
-                ),
-                "window_view": window_view,
-            }
+            {**fields, "name": name, "window_view": window_view}
         )
-        persisted_schema = interface.get("execution_schema")
-        actual_schema = ExecutionSchema.from_dict(persisted_schema)
         expected_schema = ExecutionSchema.from_interface(resolved, context_length)
         if json.dumps(actual_schema.to_dict(), sort_keys=True) != json.dumps(
             expected_schema.to_dict(), sort_keys=True
@@ -246,56 +185,15 @@ def model_execution_from_model_config(
             raise ValueError(f"Execution schema contradicts interface {name!r}")
         resolved_interfaces[name] = resolved
     config = ModelExecution(
-        ModelSpecModel(backbone=backbone, interfaces=authored_interfaces),
+        backbone,
         resolved_interfaces,
         options,
-        device=device,
         interface_storage=interface_storage,
         embedding_layer_names=values.get(
             "embedding_layer_names", ["backbone.final_norm"]
         ),
     )
-    return config.validate() if validate else config, interface_name
-
-
-def execution_config(model, interfaces, runtime_settings, *, device="cpu", **options):
-    """Adapt model execution to the existing public resolved training contract."""
-    return resolved_training_config(
-        ModelExecution(
-            model,
-            interfaces,
-            ModelExecutionOptions.from_training(runtime_settings),
-            device=device,
-        ),
-        **options,
-    )
-
-
-def resolved_training_config(
-    execution: ModelExecution, **options
-) -> ResolvedSequifierConfig:
-    """Project a model onto the resolved training schema for compatibility callers."""
-    values = {
-        "project_root": execution.project_root,
-        "model_name": execution.model_name,
-        "seed": execution.seed,
-        "device": execution.device,
-        "runtime_settings": TrainingRuntimeSettings(
-            **execution.options.model_dump(), torch_compile="none"
-        ),
-        "model_options": execution.options,
-        "model": execution.model,
-        "interfaces": execution.interfaces,
-        "interface_storage": execution.interface_storage,
-        "dataset_training": {},
-        "training_plan": [],
-        "publication": PublicationPlan(
-            exports=ExportSettings(
-                pt=False, embedding_layer_names=execution.embedding_layer_names
-            )
-        ),
-    }
-    return ResolvedSequifierConfig(**{**values, **options})
+    return config.validate(), interface_name
 
 
 def extend_prediction_distributions(execution, declared_model):
@@ -335,7 +233,6 @@ def extend_prediction_distributions(execution, declared_model):
                 )
             distributions[target] = field
         interface.prediction_distributions = distributions
-        execution.model.interfaces[name].prediction_distributions = dict(distributions)
     return execution
 
 

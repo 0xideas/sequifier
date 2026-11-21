@@ -7,7 +7,6 @@ from uuid import uuid4
 
 Phase = TypeVar("Phase")
 Result = TypeVar("Result")
-Commit = TypeVar("Commit")
 
 
 def new_run_id() -> str:
@@ -41,10 +40,6 @@ def metric_improved(value, best, direction, min_delta=0) -> bool:
     return value < best - min_delta if direction == "min" else value > best + min_delta
 
 
-def select_handoff(handoff: str, last: Result, best: Result | None) -> Result:
-    return best if handoff == "best" and best is not None else last
-
-
 @dataclass(frozen=True)
 class PhaseTransition(Generic[Phase]):
     index: int
@@ -71,11 +66,15 @@ def validate_continuation(previous, phase, *, resolved=False):
         raise ValueError("optimizer continuation cannot change model_interface")
 
 
-def continuation_groups(phases):
-    """A reset starts a new portable execution boundary."""
+def continuation_groups(phases, *, group_supervised=False):
+    """Group optimizer continuations, optionally sharing a supervised runtime across resets."""
     start = 0
     for index, phase in enumerate(phases[1:], 1):
-        if phase.optimizer_state != "continue":
+        supervised_pair = (
+            group_supervised
+            and phase.algorithm == phases[index - 1].algorithm == "supervised"
+        )
+        if phase.optimizer_state != "continue" and not supervised_pair:
             yield start, phases[start:index]
             start = index
     yield start, phases[start:]
@@ -84,13 +83,12 @@ def continuation_groups(phases):
 def run_phases(
     phases: Sequence[Phase],
     run_phase: Callable[[PhaseTransition[Phase]], PhaseOutcome[Result]],
-    commit_phase: Callable[[PhaseTransition[Phase], PhaseOutcome[Result]], Commit],
+    commit_phase: Callable[[PhaseTransition[Phase], PhaseOutcome[Result]], None],
     *,
     start: int = 0,
     stopped: bool = False,
     completion_reason: str = "completed",
     replay: Callable[[], None] | None = None,
-    publish: Callable[[Commit], None] | None = None,
     terminal_reason: str | None = None,
     optimizer_continues: Callable[[Phase], bool] | None = None,
 ) -> str:
@@ -118,9 +116,7 @@ def run_phases(
             ),
         )
         outcome = run_phase(transition)
-        commit = commit_phase(transition, outcome)
-        if publish is not None:
-            publish(commit)
+        commit_phase(transition, outcome)
         if outcome.stop_scope == "end_plan":
             return "early_stopping"
         if outcome.completion_reason is not None:

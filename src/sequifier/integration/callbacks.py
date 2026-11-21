@@ -306,7 +306,7 @@ class IntegrationManager:
             if needs_eager and torch_compile != "none":
                 raise ValueError(
                     f"Integration {item.instance.integration_id!r} requires eager "
-                    "execution; set runtime_settings.torch_compile to 'none'."
+                    "execution; set run.execution.compilation.torch_compile to 'none'."
                 )
             if self.distributed and needs_eager and item.rank_policy == "rank_zero":
                 raise ValueError(

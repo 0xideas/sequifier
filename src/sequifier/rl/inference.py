@@ -1,6 +1,8 @@
 """CLI policy prediction and environment execution using the shared model lifecycle."""
 
-from itertools import islice
+from collections import deque
+from contextlib import contextmanager
+from itertools import chain, islice
 from pathlib import Path
 from typing import cast
 
@@ -17,6 +19,7 @@ from sequifier.io.sequence import ordered_sequence_rows
 from sequifier.rl.checkpoint import load_policy
 from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import load_online_adapter
+from sequifier.rl.history import PolicyFrame, history_inputs
 from sequifier.rl.runtime import collect_policy_rollout
 from sequifier.rollout.history import numeric_scalar
 from sequifier.trajectory.schema import SeedHistory
@@ -25,65 +28,42 @@ from sequifier.trajectory.store import save_trajectory
 
 def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
     configure_determinism(config.seed, config.enforce_determinism)
-    policy = load_policy(
-        config._artifacts.get(config.model_paths[0])
-        or normalize_path(config.model_paths[0], config.project_root),
-        device=config.device,
-        interface_name=config.model_interface,
-        metadata_config_path=config._legacy_metadata_path,
-    )
+    policy = load_policy(config._model, device=config.device)
     spec = policy.config
-    path = normalize_path(config.data_path, config.project_root)
-    if config.input_layout == "raw":
-        from sequifier.io.prepare_inference import fresh_view_from_raw
-
-        auxiliary = set(config.previous_action_columns.values())
-        if spec.return_conditioned and config.desired_return is None:
-            auxiliary.add(config.desired_return_column)
-        with fresh_view_from_raw(
-            config,
-            required_columns=(
-                name
-                for name in spec.observation_columns
-                if name in policy.interface.column_data_types
-            ),
-            passthrough_columns=auxiliary,
-            optional_passthrough=spec.actions if spec.previous_action_inputs else (),
-        ) as view:
-            data = _indexed_policy_frame(view, spec, config)
-            if view.sequence_labels and not data.is_empty():
-                data = data.with_columns(
-                    pl.col("sequenceId").replace_strict(
-                        view.sequence_labels, return_dtype=pl.String
-                    )
-                )
-    elif config._indexed_view is not None:
-        data = _indexed_policy_frame(config._indexed_view, spec, config)
-    else:
-        data = (
-            pl.read_csv(path) if config.read_format == "csv" else pl.read_parquet(path)
-        )
-    if not len(data):
-        raise ValueError("policy inference input must be nonempty")
+    if not spec.return_conditioned and config.desired_return is not None:
+        raise ValueError("behavior cloning has no desired-return input")
     required = set(spec.observation_columns + spec.static_columns)
     if spec.return_conditioned and config.desired_return is None:
         required.add(config.desired_return_column)
-    if not spec.return_conditioned and config.desired_return is not None:
-        raise ValueError("behavior cloning has no desired-return input")
-    if required - set(data.columns):
-        raise ValueError(
-            f"policy inference is missing columns: {sorted(required - set(data.columns))}"
+    with _policy_input_frames(policy, config) as (frames, prepared):
+        first = next((frame for frame in frames if len(frame)), None)
+        if first is None:
+            raise ValueError("policy inference input must be nonempty")
+        if missing := required - set(first.columns):
+            raise ValueError(f"policy inference is missing columns: {sorted(missing)}")
+        frames = chain((first,), frames)
+        if config.rollout is not None:
+            offset = config.rollout.seed_row_index
+            for frame in frames:
+                if offset < len(frame):
+                    infer_rollout(policy, frame.row(offset, named=True), config)
+                    return
+                offset -= len(frame)
+            raise ValueError("policy rollout seed_row_index is outside the input rows")
+        if (
+            prepared
+            and config.sequence_id_column != "sequenceId"
+            and config.sequence_id_column in first.columns
+        ):
+            # A user-defined grouping key can span physical sequences.
+            frames = iter((pl.concat(frames, how="diagonal_relaxed"),))
+        predictions = predict_policy(
+            policy,
+            frames,
+            config,
+            policy_row_key(first, spec, config),
+            prepared=prepared,
         )
-
-    if config.rollout is not None:
-        infer_rollout(policy, data, config)
-        return
-    predictions = predict_policy(
-        policy,
-        data,
-        config,
-        prepared=config.input_layout == "raw" or config._indexed_view is not None,
-    )
     if config.output_path is None:
         from sequifier.infer import inference_output_path
 
@@ -103,7 +83,37 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
     logger.info(f"Wrote {len(predictions)} policy predictions to '{destination}'")
 
 
-def _indexed_policy_frame(view, spec, config):
+@contextmanager
+def _policy_input_frames(policy, config):
+    spec = policy.config
+    if config.input_layout == "raw":
+        from sequifier.io.prepare_inference import fresh_view_from_raw
+
+        auxiliary = set(config.previous_action_columns.values())
+        if spec.return_conditioned and config.desired_return is None:
+            auxiliary.add(config.desired_return_column)
+        with fresh_view_from_raw(
+            config,
+            required_columns=(
+                name
+                for name in spec.observation_columns
+                if name in policy.interface.column_data_types
+            ),
+            passthrough_columns=auxiliary,
+            optional_passthrough=spec.actions if spec.previous_action_inputs else (),
+        ) as view:
+            yield _indexed_policy_frames(view, spec, config), True
+    elif config._indexed_view is not None:
+        yield _indexed_policy_frames(config._indexed_view, spec, config), True
+    else:
+        path = normalize_path(config.data_path, config.project_root)
+        data = (
+            pl.read_csv(path) if config.read_format == "csv" else pl.read_parquet(path)
+        )
+        yield iter((data,)), False
+
+
+def _indexed_policy_frames(view, spec, config):
     from sequifier.trajectory.tables import model_decoder
 
     metadata = view.metadata()
@@ -130,7 +140,6 @@ def _indexed_policy_frame(view, spec, config):
     media = None if metadata.indexed_inline_media else view.image_store()
     bounds = view.split_bounds()
     predict = view.view["view"] == "predict"
-    frames = []
     for key in sorted(view.dataset["sequences"], key=int):
         sequence = int(key)
         if not predict and sequence not in bounds:
@@ -165,8 +174,11 @@ def _indexed_policy_frame(view, spec, config):
                     column, [decode(value, column) for value in rows[column].to_list()]
                 )
             )
-        frames.append(rows)
-    return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+        if view.sequence_labels:
+            rows = rows.with_columns(
+                pl.lit(view.sequence_labels[sequence]).alias("sequenceId")
+            )
+        yield rows
 
 
 def desired_return(config, spec, row):
@@ -182,12 +194,9 @@ def desired_return(config, spec, row):
     )
 
 
-def infer_rollout(policy, data, config):
+def infer_rollout(policy, row, config):
     spec = policy.config
     rollout = config.rollout
-    if rollout.seed_row_index >= len(data):
-        raise ValueError("policy rollout seed_row_index is outside the input rows")
-    row = data.row(rollout.seed_row_index, named=True)
     seed = SeedHistory(
         observations={
             column: [0.0] * (spec.context_length - 1) + [row[column]]
@@ -224,15 +233,8 @@ def infer_rollout(policy, data, config):
     )
 
 
-def policy_windows(data, spec, config, *, prepared=False):
-    # Rows without a sequence ID are independent single-observation decisions.
-    # Within sequences, recorded actions determine the causal previous-action input.
-    yield from joint_policy_windows(data, spec, config, prepared=prepared)
-    return
-
-
 @torch.no_grad()
-def predict_policy(policy, data, config, *, prepared=False):
+def predict_policy(policy, frames, config, row_key, *, prepared=False):
     spec = policy.config
     if prepared:
         spec = spec.model_copy(update={"input_encoding": "model"})
@@ -245,8 +247,7 @@ def predict_policy(policy, data, config, *, prepared=False):
             {name: field.type for name, field in spec.actions.items()},
             1,
         )
-    row_key = policy_row_key(data, spec)
-    windows = policy_windows(data, spec, config, prepared=prepared)
+    windows = policy_windows(frames, spec, config, row_key, prepared=prepared)
     generator = action_generator(policy.device, config.seed)
     outputs = []
     probability_rows = {
@@ -314,10 +315,11 @@ def predict_policy(policy, data, config, *, prepared=False):
     return predictions
 
 
-def policy_row_key(data, spec):
+def policy_row_key(data, spec, config):
     reserved = (
         set(data.columns)
         | set(spec.actions)
+        | {config.sequence_id_column, config.item_position_column}
         | {str(value) for field in spec.actions.values() for value in field.values}
     )
     key = "__policy_row"
@@ -326,64 +328,65 @@ def policy_row_key(data, spec):
     return key
 
 
-def joint_policy_windows(data, spec, config, *, prepared=False):
-    row_key = policy_row_key(data, spec)
-    indexed = data.with_row_index(row_key)
-    groups = (
-        indexed.partition_by(config.sequence_id_column, maintain_order=True)
-        if config.sequence_id_column in data.columns
-        else [indexed.slice(i, 1) for i in range(len(indexed))]
-    )
+def policy_windows(frames, spec, config, row_key, *, prepared):
     view = PolicyWindowView(spec)
-    for group_index, group in enumerate(groups):
-        if config.item_position_column not in group.columns:
-            group = group.with_row_index(config.item_position_column)
-        group = ordered_sequence_rows(group, config.item_position_column)
-        rows = group.to_dicts()
-        previous, observations, budgets = [], [], []
-        for index, row in enumerate(rows):
-            if spec.previous_action_inputs:
-                if index:
-                    prior = {name: rows[index - 1][name] for name in spec.actions}
-                    previous.append(encode_action(prior, spec))
-                elif row.get(config.item_position_column, 0) != 0:
-                    if not config.previous_action_columns:
-                        raise ValueError(
-                            "fragment inference requires previous_action_columns"
+    offset = 0
+    for data in frames:
+        indexed = data.with_row_index(row_key, offset=offset)
+        offset += len(data)
+        groups = (
+            indexed.partition_by(config.sequence_id_column, maintain_order=True)
+            if config.sequence_id_column in indexed.columns
+            else indexed.iter_slices(1)
+        )
+        for group in groups:
+            if config.item_position_column not in group.columns:
+                group = group.with_row_index(config.item_position_column)
+            group = ordered_sequence_rows(group, config.item_position_column)
+            history = deque(maxlen=spec.context_length)
+            prior = None
+            for index, row in enumerate(group.iter_rows(named=True)):
+                position = row[config.item_position_column]
+                previous_action = None
+                if spec.previous_action_inputs:
+                    if prior is not None:
+                        previous_action = encode_action(
+                            {name: prior[name] for name in spec.actions}, spec
                         )
-                    previous.append(
-                        encode_action(
+                    elif position != 0:
+                        if not config.previous_action_columns:
+                            raise ValueError(
+                                "fragment inference requires previous_action_columns"
+                            )
+                        previous_action = encode_action(
                             {
                                 name: row[column]
                                 for name, column in config.previous_action_columns.items()
                             },
                             spec,
                         )
+                observation = {name: row[name] for name in spec.observation_columns}
+                if not prepared and spec.raw_mask_column in row:
+                    observation[spec.raw_mask_column] = row[spec.raw_mask_column]
+                sequence = row.get(config.sequence_id_column, row[row_key])
+                history.append(
+                    PolicyFrame(
+                        tuple(observation.items()),
+                        previous_action,
+                        tuple((name, row[name]) for name in spec.static_columns),
+                        str(sequence),
+                        position,
+                        desired_return(config, spec, row),
                     )
-                else:
-                    previous.append(None)
-            else:
-                previous.append(None)
-            observation = {name: row[name] for name in spec.observation_columns}
-            if not prepared and spec.raw_mask_column in row:
-                observation[spec.raw_mask_column] = row[spec.raw_mask_column]
-            observations.append(observation)
-            if spec.return_conditioned:
-                budgets.append(desired_return(config, spec, row))
-            yield (
-                row[row_key],
-                view.inputs(
-                    observations,
-                    previous,
-                    budgets if spec.return_conditioned else None,
-                    {name: row[name] for name in spec.static_columns},
-                ),
-                {
-                    "sequenceId": row.get(config.sequence_id_column, group_index),
-                    "subsequenceId": index,
-                    "windowStartOffset": rows[max(0, index + 1 - spec.context_length)][
-                        config.item_position_column
-                    ],
-                    "itemPosition": row[config.item_position_column],
-                },
-            )
+                )
+                yield (
+                    row[row_key],
+                    history_inputs(spec, history, window=view),
+                    {
+                        "sequenceId": sequence,
+                        "subsequenceId": index,
+                        "windowStartOffset": history[0].step_id,
+                        "itemPosition": position,
+                    },
+                )
+                prior = row

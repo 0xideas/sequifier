@@ -15,13 +15,16 @@ import zipfile
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from loguru import logger
 
 from sequifier.config.metadata import validate_persisted_metadata_versions
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES, normalize_path
+
+if TYPE_CHECKING:
+    from sequifier.config.train_config import SelectedDatasetPartConfig
 
 
 def resident_bytes(value: Any, seen: set[Any] | None = None) -> int:
@@ -146,7 +149,9 @@ class LoaderMemoryEstimate:
         return self.resident + self.working
 
 
-def _estimate_loader(path: str, config: Any, eager: bool) -> LoaderMemoryEstimate:
+def _estimate_loader(
+    path: str, config: SelectedDatasetPartConfig, eager: bool
+) -> LoaderMemoryEstimate:
     source = Path(normalize_path(path, config.project_root))
     width = config.storage_layout.window_length
     infos = None
@@ -212,7 +217,7 @@ def _estimate_loader(path: str, config: Any, eager: bool) -> LoaderMemoryEstimat
     if config.preconditioning_image is not None:
         image_sources.append(config.preconditioning_image)
     cache = 128 * max((3 * item.crop_size**2 for item in image_sources), default=0)
-    workers = config.runtime_settings.num_workers
+    workers = config.data_loading.num_workers
     copies = max(1, workers)
     batch = _batch_bytes(config)
     # PyTorch's worker queue has four prefetched batches per worker. Pinning
@@ -256,20 +261,25 @@ class DataLoadingBudget:
         dataset.ram_chunk_limit = estimate.chunk_limit
 
 
-def _estimate_indexed(path, config):
-    from sequifier.io.indexed_sequences import WINDOW_CHUNK_SIZE, IndexedView
+def _estimate_indexed(path, config: SelectedDatasetPartConfig):
+    from sequifier.io.indexed_sequences import (
+        WINDOW_CHUNK_SIZE,
+        IndexedView,
+        WindowIndex,
+    )
 
     view = IndexedView.load(path)
     layout = view.layout(config.window_view)
     width = layout.window_length
-    rows = len(view.entries(width))
+    index = WindowIndex(view, width)
+    rows = index.count
     columns = set(config.input_columns + config.target_columns)
     row_bytes = width * (
         sum(_column_bytes(config, column) for column in columns)
         + sum(layout.max_depth_length for _, layout in config.depth_layouts.items())
     )
-    workers = config.runtime_settings.num_workers
-    resident = (workers + 1) * (resident_bytes(view.dataset) + rows * 960)
+    workers = config.data_loading.num_workers
+    resident = (workers + 1) * (resident_bytes(index) + index.chunk_count * 960)
     if config.static_features_path and config.static_columns:
         resident += (
             3
@@ -281,6 +291,7 @@ def _estimate_indexed(path, config):
         )
     batch = _batch_bytes(config)
     chunk = 4 * min(rows, WINDOW_CHUNK_SIZE) * (row_bytes + 256) + 8_000_000
+    chunk += min(rows, WINDOW_CHUNK_SIZE) * (64 + 8 * len(index.curriculum))
     return LoaderMemoryEstimate(
         resident,
         max(1, workers) * chunk + 2 * (4 * workers + 1) * batch,
@@ -293,7 +304,7 @@ def plan_data_loading(config: Any) -> DataLoadingBudget:
     from sequifier.config.train_config import dataset_part_view
     from sequifier.evaluation.compatibility import evaluation_batch_size
 
-    settings = config.runtime_settings
+    settings = config.run.execution.data_loading
     if not math.isfinite(settings.max_ram_gb) or settings.max_ram_gb <= 0:
         raise ValueError("max_ram_gb must be finite and positive")
     budget = DataLoadingBudget(int(Decimal(str(settings.max_ram_gb)) * 10**9), {})
@@ -309,38 +320,32 @@ def plan_data_loading(config: Any) -> DataLoadingBudget:
         if phase.learning.window_stride is not None
     ]
     stride = min(strides) if strides else None
-    for name, dataset in config.dataset_training.items():
-        for part_name, part in dataset.parts.items():
-            selected = dataset_part_view(
-                config,
-                name,
-                part_name,
-                batch_size=batch,
-                window_stride=stride,
-            )
-            for split, path in (
-                ("training", part.training_data_path),
-                ("validation", part.validation_data_path),
-            ):
-                if path is None:
-                    continue
-                normalized = normalize_path(path, config.project_root)
-                splits = [
-                    normalize_path(item, config.project_root)
-                    for item in part.metadata.split_paths
-                ]
-                layout = (
-                    part.metadata.layout_for_split(splits.index(normalized))
-                    if normalized in splits
-                    else selected.storage_layout
-                )
-                view = replace(selected, storage_layout=layout)
-                eager = part.storage_form == "file" or settings.load_full_data_to_ram
-                budget.estimates[f"{name}.{part_name}.{split}"] = (
-                    _estimate_indexed(path, view)
-                    if part.storage_form == "indexed"
-                    else _estimate_loader(path, view, eager)
-                )
+    selected_parts = dict.fromkeys(
+        selection for phase in phases for selection in phase.part_roles()
+    )
+    for name, part_name, split in selected_parts:
+        part = config.dataset_training[name].parts[part_name]
+        path = part.split_paths[split]
+        selected = dataset_part_view(
+            config, name, part_name, batch_size=batch, window_stride=stride
+        )
+        normalized = normalize_path(path, config.project_root)
+        splits = [
+            normalize_path(item, config.project_root)
+            for item in part.metadata.split_paths
+        ]
+        layout = (
+            part.metadata.layout_for_split(splits.index(normalized))
+            if normalized in splits
+            else selected.storage_layout
+        )
+        view = replace(selected, storage_layout=layout)
+        eager = part.storage_form == "file" or settings.load_full_data_to_ram
+        budget.estimates[f"{name}.{part_name}.{split}"] = (
+            _estimate_indexed(path, view)
+            if part.storage_form == "indexed"
+            else _estimate_loader(path, view, eager)
+        )
     budget.check()
     logger.info(
         "Prepared-data RAM plan: {:.3f} GB / {:.3f} GB per rank (including workers)",

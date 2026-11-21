@@ -8,8 +8,8 @@ from typing import Any, Iterable
 import torch
 from torch import nn
 
-from sequifier.config.optimizer_config import OptimizerPlan, OptimizerSelector
-from sequifier.model.parameter_catalog import ParameterCatalog, ParameterDescriptor
+from sequifier.config.optimizer_config import OptimizerPlan
+from sequifier.model.parameter_catalog import ParameterCatalog
 from sequifier.optimizers.optimizers import get_optimizer_class
 
 
@@ -22,10 +22,6 @@ class RoutedOptimizerGroup:
     arguments: dict[str, Any]
 
 
-def _matches(descriptor: ParameterDescriptor, selector: OptimizerSelector) -> bool:
-    return selector.matches(descriptor)
-
-
 def route_optimizer_parameters(
     plan: OptimizerPlan,
     catalog: ParameterCatalog,
@@ -33,45 +29,24 @@ def route_optimizer_parameters(
 ) -> tuple[RoutedOptimizerGroup, ...]:
     """Assign every supplied trainable parameter once, rejecting ambiguous routes."""
 
-    supplied = {
-        id(parameter): parameter for parameter in parameters if parameter.requires_grad
-    }
+    supplied = catalog.parameter_ids(p for p in parameters if p.requires_grad)
     grouped: dict[str, list[nn.Parameter]] = {group.id: [] for group in plan.groups}
-    seen: set[int] = set()
-    explicit = plan.groups[:-1]
-    fallback = plan.groups[-1]
-    eligible_descriptors = [
-        descriptor
-        for descriptor in catalog.descriptors()
-        if id(catalog.parameter(descriptor.parameter_id)) in supplied
-    ]
-    for group in explicit:
-        if isinstance(group.select, OptimizerSelector):
-            group.select.validate_semantic_patterns(eligible_descriptors)
+    routes = {}
+    for group in plan.groups[:-1]:
+        assert group.select != "otherwise"
+        for key in catalog.matching_ids(group.select, supplied):
+            if key in routes:
+                raise ValueError(
+                    f"Parameter {key!r} matches multiple optimizer groups: {routes[key]!r}, {group.id!r}"
+                )
+            routes[key] = group.id
 
-    for descriptor in eligible_descriptors:
-        parameter = catalog.parameter(descriptor.parameter_id)
-        identity = id(parameter)
-        if identity not in supplied or identity in seen:
-            continue
-        seen.add(identity)
-        matches = [
-            group.id
-            for group in explicit
-            if isinstance(group.select, OptimizerSelector)
-            and _matches(descriptor, group.select)
-        ]
-        if len(matches) > 1:
-            raise ValueError(
-                f"Parameter {descriptor.canonical_name!r} matches multiple optimizer "
-                f"groups: {matches!r}."
-            )
-        grouped[matches[0] if matches else fallback.id].append(parameter)
+    fallback = plan.groups[-1].id
+    for descriptor in catalog.descriptors():
+        key = descriptor.parameter_id
+        if key in supplied:
+            grouped[routes.get(key, fallback)].append(catalog.parameter(key))
 
-    if seen != set(supplied):
-        raise ValueError(
-            "The parameter catalog did not cover all trainable optimizer parameters."
-        )
     empty = [group.id for group in plan.groups if not grouped[group.id]]
     if empty:
         raise ValueError(f"Optimizer groups have no trainable parameters: {empty!r}.")

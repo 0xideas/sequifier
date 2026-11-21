@@ -57,7 +57,7 @@ def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
         raise ValueError(
             "Multi-dataset hyperparameter search requires evaluation.monitor"
         )
-    dataset_name = monitor.source.split(".", 1)[0]
+    dataset_name = monitor.dataset
     if dataset_name not in run_config.dataset_training:
         raise ValueError(
             f"evaluation.monitor references unknown dataset {dataset_name!r}"
@@ -114,14 +114,13 @@ def objective(
     monitor = final_phase.evaluation.monitor if final_phase.evaluation else None
     monitor_metric = monitor.metric if monitor is not None else "loss"
     monitor_direction = monitor.direction if monitor is not None else "min"
-    monitor_part = monitor.source.partition(".")[2] if monitor is not None else ""
+    monitor_part = (monitor.part or "") if monitor is not None else ""
     expected_direction = (config.evaluation_metric_directions or ["min"])[0]
     if not config.evaluation_script_path and expected_direction != monitor_direction:
         raise ValueError(
             "search direction must match the final phase evaluation monitor"
         )
-    serialized = run_config.model_dump(mode="python")
-    serialized["run"] = run_config.run.model_dump(mode="python", exclude_unset=True)
+    serialized = run_config.trial_config_values()
     with open(config_path, "w") as f:
         yaml.dump(
             serialized,

@@ -1,14 +1,15 @@
 """Shared categorical vocabulary and stable sample-statistics fitting."""
 
 import math
-import warnings
 from collections.abc import Mapping
-from typing import Union
+from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import polars as pl
 
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS
+from sequifier.helpers import polars_dtype_from_name
+from sequifier.io.categorical import CategoricalCodec, validate_category_values
 from sequifier.typechecking import beartype
 
 
@@ -80,48 +81,6 @@ def get_combined_statistics(
     return combined_mean, combined_std
 
 
-@beartype
-def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]:
-    """Map sorted user values to IDs after reserved tokens."""
-    ids = sorted(
-        [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
-    )  # type: ignore
-
-    if isinstance(ids[0], str):
-        if SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask] in ids:
-            raise ValueError(
-                f"Found value '{SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask]}' in {column}, this is invalid"
-            )
-
-        for special_val in [
-            SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown],
-            SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other],
-        ]:
-            if special_val in ids:
-                warnings.warn(
-                    f"Found special value {special_val} in {column}, these will be combined with the sequifier-internal special value {special_val}"
-                )
-        ids = [
-            id_
-            for id_ in ids
-            if id_
-            not in [
-                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown],
-                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other],
-            ]
-        ]
-        id_map = {id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(ids)}
-        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]] = (
-            SPECIAL_TOKEN_IDS.unknown
-        )
-        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]] = (
-            SPECIAL_TOKEN_IDS.other
-        )
-    else:
-        id_map = {id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(ids)}
-    return dict(id_map)
-
-
 NORMALIZATION_EPSILON = 1e-9
 
 
@@ -179,3 +138,44 @@ def normalize_input_values(
     return (np.asarray(values, dtype=dtype) - dtype(statistics["mean"])) * dtype(
         reciprocal
     )
+
+
+@dataclass(frozen=True)
+class FittedFeatureTransform:
+    """A fitted column's encoding and stored precision, independent of its row role."""
+
+    dtype: str
+    codec: CategoricalCodec | None
+    statistics: Mapping | None
+
+    @staticmethod
+    def inferred_dtype(name, raw_dtype, maps, stats):
+        if name in maps:
+            return "Int64"
+        if name in stats and not str(raw_dtype).startswith("Float"):
+            return "Float64"
+        return str(raw_dtype)
+
+    @property
+    def output_dtype(self):
+        if self.dtype.startswith(("Date", "Time", "Duration")):
+            return pl.Int64
+        return polars_dtype_from_name(self.dtype)
+
+    def expression(self, source: str) -> pl.Expr:
+        if self.codec is not None:
+            return self.codec.expression(source)
+        if self.statistics is not None:
+            return cast(
+                pl.Expr,
+                normalize_input_values(pl.col(source), self.statistics, self.dtype),
+            )
+        return pl.col(source)
+
+    def stored_expression(self, column: pl.Series, *, preserve_nulls=False) -> pl.Expr:
+        if self.codec is not None and self.codec.cardinality:
+            validate_category_values(column, hashing=self.codec.hashing is not None)
+        value = self.expression(column.name)
+        if preserve_nulls:
+            value = pl.when(pl.col(column.name).is_not_null()).then(value)
+        return value.cast(self.output_dtype).alias(column.name)

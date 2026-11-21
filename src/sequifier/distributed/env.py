@@ -15,6 +15,7 @@ def setup_distributed_env(
     os.environ["MASTER_ADDR"] = os.getenv("MASTER_ADDR", "localhost")
     os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
 
+    os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = "1"
     os.environ["NCCL_DEBUG"] = "INFO"
     os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
     if not dist.is_initialized():

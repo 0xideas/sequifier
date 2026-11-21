@@ -13,18 +13,12 @@ structure below directly.
 | `training_plan.phases[]` | Learning, trainability, budgets, optimization, evaluation, stopping and checkpoint snapshots. |
 | `training_plan` | Ordered phase transitions. |
 
-Preprocessing and inference share `run.project_root`, `run.execution` and
-`run.reproducibility`. Their command-specific source/output and operation fields
-remain on the command. Inference batching is `run.execution.batch_size`;
-preprocessing workers are `run.execution.data_loading.num_workers`. Unsupported
-execution controls fail validation. Component initialization and hash seeds stay
-on their components; evaluation seeds define a benchmark and stay in evaluation.
-Unsupported fields must be omitted even when their values match the defaults.
-Inference does not accept `run.execution.data_loading`, `distribution`,
-`precision`, `compilation`, or `max_concat_tensors`. Preprocessing accepts
-only `run.execution.data_loading.num_workers` within execution, and only `seed`
-within reproducibility. Sequence import accepts `run.project_root` but no
-execution or reproducibility settings.
+Each command declares the run settings it consumes. All support `run.project_root`.
+Inference accepts `run.execution.device`, `run.execution.batch_size`, and the
+seed and determinism controls under `run.reproducibility`. Dataset preprocessing
+and `prepare_inference` accept `run.execution.data_loading.num_workers` and
+`run.reproducibility.seed`. The `prepare_policy` operation accepts the seed.
+Sequence import and metadata export use the project root alone.
 
 ## Run settings
 
@@ -57,13 +51,10 @@ batched exports are rejected. Runs default to PT export. Supervised runs can req
 request those capabilities. Random run seeds resolve once; derived phase streams
 and resolved phase declarations are recorded in native recovery/provenance.
 
-For policy-containing plans, omit `run.execution.distribution`, `precision`,
-`compilation`, and `max_concat_tensors`. Policy-only plans also omit
-`run.logging.log_interval_batches`.
-Data loading may configure `episode_cache_size`, but not `num_workers`,
-`load_full_data_to_ram`, or `max_ram_gb`. Omit the fixed export controls
-`onnx`, `pt`, `generative_model`, `embedding_model`, `with_dropout`, and
-`batch_size`; the PT actor export is selected automatically.
+Policy-containing plans accept explicit defaults for fixed execution and export
+settings, so a serialized configuration can be loaded again. They support
+`run.execution.data_loading.episode_cache_size` and always export the portable
+PT actor. Changing a supervised-only setting from its default fails validation.
 
 Native supervised `data_loading.max_ram_gb` budgets prepared-data loading per rank,
 including workers, all cached loaders, chunk working space and prefetched batches.

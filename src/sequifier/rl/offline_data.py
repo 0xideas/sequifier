@@ -115,10 +115,9 @@ def prepare_iql(run, phase, catalog, cache, membership):
 
 def phase_validation_fraction(run, phase):
     """A combined leakage-safe split requires a single agreed fraction."""
-    refs = [phase.preferences] if phase.algorithm == "dpo" else phase.sources
     fractions = {
-        run.source_validation_fractions.get(ref.source, run.validation_fraction)
-        for ref in refs
+        run.source_validation_fractions[ref.source]
+        for ref in phase.data_sources.training
     }
     if len(fractions) != 1:
         raise ValueError(

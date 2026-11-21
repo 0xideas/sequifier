@@ -3,10 +3,13 @@
 import math
 from typing import Annotated, Any, Literal
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.metadata import FeatureTransforms, RawInputMetadata
 from sequifier.config.naming import ConfigModel
 from sequifier.io.values import DomainValue
+from sequifier.model.execution_schema import ExecutionSchema
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
 NonemptyStr = Annotated[str, Field(min_length=1)]
 
@@ -100,6 +103,46 @@ class PolicyBinding(PolicyConfigBase):
     def episode_horizon(self) -> int | None:
         return self.returns.finite_horizon if self.return_conditioned else None
 
+    def categorical_id_maps(self) -> dict[str, dict[str | int, int]]:
+        """Build target and feedback vocabularies in declared action order."""
+        maps: dict[str, dict[str | int, int]] = {}
+        for name, action in self.actions.items():
+            if action.type == "categorical":
+                if not action.values:
+                    raise ValueError(
+                        f"{name}: fresh categorical targets need values or metadata"
+                    )
+                mapping: dict[str | int, int] = {
+                    str(label): index
+                    for index, label in enumerate(
+                        action.values, SPECIAL_TOKEN_IDS.user_start
+                    )
+                }
+                if len(mapping) != len(action.values):
+                    raise ValueError(
+                        f"{name}: action labels must have distinct serialized keys"
+                    )
+                maps[name] = mapping
+
+        feedback = {}
+        for column, action_name in self.previous_action_inputs.items():
+            if action_name in maps:
+                mapping = maps[action_name].copy()
+                initial = self.initial_inputs.get(column)
+                if (
+                    initial is not None
+                    and initial not in self.actions[action_name].values
+                ):
+                    key = str(initial)
+                    mapping.setdefault(
+                        key,
+                        SPECIAL_TOKEN_IDS.ids_by_label.get(
+                            key, SPECIAL_TOKEN_IDS.user_start + len(mapping)
+                        ),
+                    )
+                feedback[column] = mapping
+        return maps | feedback
+
     @model_validator(mode="after")
     def validate_input_bindings(self):
         if any(not name for name in self.actions):
@@ -112,24 +155,37 @@ class PolicyBinding(PolicyConfigBase):
 
 
 class ResolvedPolicyBinding(PolicyBinding):
-    """Fitted task binding persisted with a model's execution contract."""
+    """Executable view of a task with its model-owned input schema and transforms."""
 
     context_length: int = Field(gt=0)
     interface_name: NonemptyStr
     observation_columns: list[str] = Field(default_factory=list)
     static_columns: list[str] = Field(default_factory=list)
-    categorical_columns: list[str] = Field(default_factory=list)
-    observation_n_classes: dict[str, int] = Field(default_factory=dict)
-    static_n_classes: dict[str, int] = Field(default_factory=dict)
-    id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
-    categorical_encoding: Literal["global"] = "global"
     action_order: list[str] = Field(default_factory=list)
-    input_schema: dict[str, Any]
-    input_statistics: dict[str, dict[str, float]] = Field(default_factory=dict)
+    input_schema: ExecutionSchema | None = None
+    transforms: FeatureTransforms = Field(default_factory=FeatureTransforms)
+    raw_inputs: RawInputMetadata | None = None
     input_encoding: Literal["raw", "model"] = "raw"
-    input_column_types: dict[str, str] = Field(default_factory=dict)
-    cardinality_config: dict[str, dict[str, Any]] | None = None
-    raw_mask_column: str | None = None
+
+    @field_validator("input_schema", mode="before")
+    @classmethod
+    def read_schema(cls, value):
+        return ExecutionSchema.from_dict(value) if isinstance(value, dict) else value
+
+    @property
+    def task_binding(self) -> PolicyBinding:
+        # These fields were validated together and belong to the same attached task.
+        return PolicyBinding.model_construct(
+            **{name: getattr(self, name) for name in PolicyBinding.model_fields}
+        )
+
+    @property
+    def raw_mask_column(self):
+        return self.raw_inputs.raw_mask_column if self.raw_inputs else None
+
+    @property
+    def id_maps(self):
+        return self.transforms.id_maps
 
     @property
     def action_columns(self):
@@ -137,4 +193,4 @@ class ResolvedPolicyBinding(PolicyBinding):
 
     @property
     def categorical_n_classes(self):
-        return {**self.observation_n_classes, **self.static_n_classes}
+        return self.transforms.n_classes

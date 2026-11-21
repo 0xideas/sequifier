@@ -4,48 +4,8 @@ from collections.abc import Mapping
 
 import torch
 
+from sequifier.io.action_record import action_record_layout
 from sequifier.io.values import domain_scalar, numeric_scalar
-
-
-def _metadata_key(name, config, prefix):
-    key = prefix + name
-    if key not in config.actions:
-        return key
-
-    # Give longer action names first claim on their keys so a shorter name
-    # cannot take a key reached by adding the same prefix to a longer name.
-    used = set(config.actions)
-    longer_real_names = (
-        other
-        for other, field in config.actions.items()
-        if field.type == "real" and len(other) > len(name)
-    )
-    for other in sorted(longer_real_names, key=len, reverse=True):
-        other_key = prefix + other
-        while other_key in used:
-            other_key = prefix + other_key
-        used.add(other_key)
-
-    while key in used:
-        key = prefix + key
-    return key
-
-
-def action_latent_key(name, config):
-    return _metadata_key(name, config, "__policy_latent:")
-
-
-def action_component_key(name, config):
-    return _metadata_key(name, config, "__policy_component:")
-
-
-def action_record_fields(config):
-    return set(config.actions) | {
-        key(name, config)
-        for name, field in config.actions.items()
-        if field.type == "real"
-        for key in (action_latent_key, action_component_key)
-    }
 
 
 def inactive_action(field):
@@ -69,27 +29,24 @@ def encode_action(value, config):
         else:
             item = numeric_scalar(item, name)
         result[name] = item
-    allowed = set(config.actions)
-    for name, field in config.actions.items():
-        if field.type != "real":
-            continue
-        key = action_latent_key(name, config)
-        allowed.add(key)
-        component_key = action_component_key(name, config)
-        allowed.add(component_key)
-        if component_key in value and value[component_key] is not None:
-            component = numeric_scalar(value[component_key], component_key)
-            if (
-                component != int(component)
-                or component < -2
-                or component >= len(field.atoms)
-            ):
-                raise ValueError("invalid real mixture component")
-            result[component_key] = int(component)
-        if key in value and value[key] is not None:
-            result[key] = numeric_scalar(value[key], key)
-    if set(value) - allowed:
+    layout = action_record_layout(config)
+    if value.keys() - layout.keys:
         raise ValueError("action record contains unknown fields")
+    latents, components = layout.unpack_auxiliary(value)
+    for name, item in components.items():
+        if item is None:
+            continue
+        key = layout.components[name]
+        component = numeric_scalar(item, key)
+        if component != int(component) or not -2 <= component < len(
+            config.actions[name].atoms
+        ):
+            raise ValueError("invalid real mixture component")
+        result[key] = int(component)
+    for name, item in latents.items():
+        if item is not None:
+            key = layout.latents[name]
+            result[key] = numeric_scalar(item, key)
     return result
 
 
@@ -103,32 +60,16 @@ def action_batch(values, config, *, device=None, encoded=True):
         else torch.float64
     )
 
-    def tensor(key, dtype, *, default=None, required=False):
-        return torch.tensor(
-            [value[key] if required else value.get(key, default) for value in values],
-            dtype=dtype,
-            device=device,
+    result = {}
+    for field in action_record_layout(config).fields:
+        missing = field.missing
+        entries = (
+            [value[field.key] for value in values]
+            if missing is None
+            else [value.get(field.key, missing) for value in values]
         )
-
-    result = {
-        name: tensor(
-            name,
-            torch.long if field.type == "categorical" else real_dtype,
-            required=True,
-        )
-        for name, field in config.actions.items()
-    }
-    latent_keys = {
-        action_latent_key(name, config)
-        for name, field in config.actions.items()
-        if field.type == "real"
-    }
-    for key in latent_keys:
-        result[key] = tensor(key, real_dtype, default=float("nan"))
-    for name, field in config.actions.items():
-        if field.type == "real":
-            key = action_component_key(name, config)
-            result[key] = tensor(key, torch.long, default=-2)
+        dtype = torch.long if field.kind in {"categorical", "component"} else real_dtype
+        result[field.key] = torch.tensor(entries, dtype=dtype, device=device)
     return result
 
 

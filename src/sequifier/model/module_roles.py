@@ -24,13 +24,12 @@ _INGESTION_PROJECTION_MODULES = {
 }
 
 
-def decoder_module(model: nn.Module) -> nn.Module | None:
-    if isinstance(model, (TargetDecoding, TargetDecoderBranch)):
-        return model
-    try:
-        return model.get_submodule("decoder")
-    except AttributeError:
-        return None
+def decoder_modules(model: nn.Module):
+    for name, module in model.named_modules():
+        if name.rsplit(".", 1)[-1] == "decoder" or isinstance(
+            module, (TargetDecoding, TargetDecoderBranch)
+        ):
+            yield module
 
 
 def position_embedding_ids(model: nn.Module) -> set[int]:

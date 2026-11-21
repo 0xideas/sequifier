@@ -1,6 +1,5 @@
 """Ordered, bounded preprocessing for one repeated-row depth layout."""
 
-import hashlib
 import heapq
 import json
 import math
@@ -10,7 +9,7 @@ import tempfile
 from collections import Counter, deque
 from contextlib import closing
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Generator
 
@@ -20,25 +19,24 @@ import pyarrow.parquet as pq
 import torch
 from loguru import logger
 
-from sequifier.config.depth_layout import DepthLayoutRegistryModel
-from sequifier.config.metadata import validate_persisted_metadata_versions
+from sequifier.config.depth_layout import DepthLayoutModel, DepthLayoutRegistryModel
 from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.fingerprints import file_checksum
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES
+from sequifier.io.feature_fitting import (
+    FeatureStatistics,
+    FittedColumns,
+    FittingRules,
+    cast_input_columns,
+    validate_cardinality_values,
+)
 from sequifier.io.pt_payload import (
     StoredTensorBatch,
     concatenate_pt_batches,
     save_pt_payload,
 )
 from sequifier.io.sample_order import curriculum_columns
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
-
-
-@dataclass
-class CanonicalItemFrame:
-    """A bounded dense window: shallow scalars, depth arrays, and boolean masks."""
-
-    sequences: dict[str, torch.Tensor]
-    depth_valid_masks: dict[str, torch.Tensor]
+from sequifier.io.window_placement import split_intervals
 
 
 @dataclass
@@ -422,378 +420,296 @@ def _validated_item_rows(item, columns, shallow, layout, curriculum_columns):
     )
 
 
-def _fit_parquet_group(job):
-    from sequifier.preprocess import (
-        _apply_configured_input_casting,
-        _get_column_statistics,
-        _validate_cardinality_reserved_values,
-        assign_sequence_to_split,
-    )
+@dataclass(frozen=True)
+class DepthFitPlan:
+    layout: DepthLayoutModel
+    columns: list[str]
+    shallow: list[str]
+    curriculum: tuple[str, ...]
+    schema: dict
+    configured_types: dict | None
+    rules: FittingRules
+    fit_end: dict[int, int]
 
-    (
-        path,
-        row_groups,
-        required,
-        columns,
-        shallow,
-        layout,
-        curriculum_columns,
-        schema_types,
-        configured_types,
-        normalize_on_all_data,
-        split_method,
-        split_ratios,
-        seed,
-        sequence_counts,
-        first_positions,
-        assignments,
-        precomputed,
-        cardinality_config,
-        categorical_columns,
-        real_columns,
-    ) = job
-    stats = {}
-    categorical_sets = {}
-    categorical_counts = {}
-    for item in _file_items(
-        path,
-        "parquet",
-        required,
-        layout.max_depth_length,
-        row_groups=row_groups,
-    ):
-        sid, pos = item.sequence_id, item.position
-        rows, _ = _validated_item_rows(
-            item, columns, shallow, layout, curriculum_columns
+    def observe_items(self, items):
+        features = FeatureStatistics()
+        for item in items:
+            rows, _ = _validated_item_rows(
+                item, self.columns, self.shallow, self.layout, self.curriculum
+            )
+            end = self.fit_end.get(item.sequence_id)
+            fitting = end is not None and item.position < end
+            for name in self.columns if fitting else self.rules.cardinality:
+                values = (
+                    [raw[name] for _, raw in rows]
+                    if name in self.layout.columns
+                    else [rows[0][1][name]]
+                )
+                frame = pl.DataFrame({name: values}, schema={name: self.schema[name]})
+                if name in self.rules.cardinality:
+                    validate_cardinality_values(
+                        frame, {name: self.rules.cardinality[name]}
+                    )
+                if fitting:
+                    types = _observation_types(frame, [name], self.configured_types)
+                    frame = cast_input_columns(frame, [name], types)
+                    features.observe(frame, [name], self.rules)
+        return features
+
+    def fit_parquet_group(self, path, required, group):
+        return self.observe_items(
+            _file_items(
+                path,
+                "parquet",
+                required,
+                self.layout.max_depth_length,
+                row_groups=group,
+            )
         )
-        for column in cardinality_config:
-            observations = (
-                [raw[column] for _, raw in rows]
-                if column in layout.columns
-                else [rows[0][1][column]]
-            )
-            _validate_cardinality_reserved_values(
-                pl.DataFrame(
-                    {column: observations}, schema={column: schema_types[column]}
-                ),
-                {column: cardinality_config[column]},
-            )
-        fit_on_item = normalize_on_all_data or (
-            assignments.get(sid, assign_sequence_to_split(sid, split_ratios, seed)) == 0
-            if split_method == "between_sequence"
-            else pos
-            < first_positions[sid] + int(split_ratios[0] * sequence_counts[sid])
+
+
+@dataclass
+class DepthItemEncoder:
+    layout_name: str
+    layouts: DepthLayoutRegistryModel
+    features: FittedColumns
+    shallow: list[str]
+    curriculum: tuple[str, ...]
+    schema: dict
+    configured_types: dict
+    normalize: bool
+    cardinality: dict
+
+    @property
+    def layout(self):
+        return self.layouts[self.layout_name]
+
+    def encode(self, item):
+        rows, curriculum = _validated_item_rows(
+            item, self.features.data_columns, self.shallow, self.layout, self.curriculum
         )
-        if not fit_on_item:
-            continue
-        for column in columns:
-            observations = (
-                [raw[column] for _, raw in rows]
-                if column in layout.columns
-                else [rows[0][1][column]]
+        slots = [slot for slot, _ in rows]
+        data = pl.DataFrame([raw for _, raw in rows], schema=self.schema)
+        data = self.features.transform(
+            data,
+            self.normalize,
+            self.cardinality,
+            input_types=_observation_types(
+                data, self.features.data_columns, self.configured_types
+            ),
+        )
+        capacity = self.layout.max_depth_length
+        mask = np.zeros(capacity, dtype=bool)
+        mask[slots] = True
+        values = {}
+        for column in self.features.data_columns:
+            if column in self.shallow:
+                values[column] = data[column][0]
+            else:
+                observed = data[column].to_numpy()
+                dense = np.zeros(capacity, dtype=observed.dtype)
+                dense[slots] = observed
+                values[column] = dense
+        return values, mask, curriculum
+
+    def window(self, encoded, sid, subsequence, placement, start, pad):
+        width = placement.width
+        capacity = self.layout.max_depth_length
+        tensors = {
+            c: torch.zeros(
+                (1, width) if c in self.shallow else (1, width, capacity),
+                dtype=PANDAS_TO_TORCH_TYPES[self.features.col_types[c]],
             )
-            data = pl.DataFrame(
-                {column: observations}, schema={column: schema_types[column]}
-            )
-            configured = _observation_types(data, [column], configured_types)
-            data = _apply_configured_input_casting(data, [column], configured)
-            _, stats = _get_column_statistics(
-                data,
-                [column],
-                {},
-                stats,
-                0,
-                precomputed,
-                categorical_value_sets=categorical_sets,
-                categorical_columns=categorical_columns,
-                real_columns=real_columns,
-                categorical_value_counts=categorical_counts,
-                cardinality_config=cardinality_config,
-            )
-    return stats, categorical_sets, categorical_counts
+            for c in self.features.data_columns
+        }
+        mask = torch.zeros((1, width, capacity), dtype=torch.bool)
+        sample_position = None
+        for time in range(pad, width):
+            position = start + time
+            if position not in encoded:
+                raise ValueError(
+                    f"Missing depth item {(sid, position)} in ordered stream"
+                )
+            values, valid, curriculum = encoded[position]
+            if sample_position is not None and sample_position != curriculum:
+                raise ValueError(
+                    f"Curriculum columns must agree within window {(sid, subsequence)}"
+                )
+            sample_position = curriculum
+            mask[0, time] = torch.from_numpy(valid)
+            for column, value in values.items():
+                tensors[column][0, time] = torch.as_tensor(
+                    value, dtype=tensors[column].dtype
+                )
+        batch = StoredTensorBatch(
+            tensors,
+            torch.tensor([sid]),
+            torch.tensor([subsequence]),
+            torch.tensor([start]),
+            torch.tensor([pad]),
+            split_start_item_positions=torch.tensor([placement.low], dtype=torch.int64),
+            split_end_item_positions=torch.tensor([placement.high], dtype=torch.int64),
+            depth_valid_masks={self.layout_name: mask},
+            sample_positions=torch.tensor([sample_position], dtype=torch.int64)
+            if sample_position is not None
+            else None,
+            curriculum_columns=self.curriculum,
+        )
+        batch.validate(self.layouts, n_classes=self.features.n_classes)
+        return batch
+
+
+def _render_depth_windows(
+    items,
+    sequences,
+    plan,
+    batches_per_file,
+    encoder,
+    scratch_root,
+    completed,
+    shard_path,
+    record,
+):
+    """Stream ordered items once, retaining at most one window and one shard per split."""
+    output = [[] for _ in plan.widths]
+    counts = Counter()
+    expected = set()
+    max_width = max(plan.widths)
+
+    def flush(split, filename):
+        destination = scratch_root / filename
+        temporary = destination.with_suffix(".pt.tmp")
+        batch = concatenate_pt_batches(output[split])
+        save_pt_payload(
+            batch,
+            temporary,
+            layouts=encoder.layouts,
+            n_classes=encoder.features.n_classes,
+        )
+        os.replace(temporary, destination)
+        record(
+            filename,
+            {"size": destination.stat().st_size, "sha256": file_checksum(destination)},
+        )
+        output[split].clear()
+
+    with closing(items):
+        item = next(items, None)
+        for sid, first, count, assigned in sequences:
+            encoded = {}
+            order = deque()
+            for split, placement in plan.placements(first, count, assigned=assigned):
+                for subsequence, (start, pad) in enumerate(placement):
+                    filename = shard_path(split, counts[split] // batches_per_file)
+                    expected.add(filename)
+                    counts[split] += 1
+                    if filename in completed:
+                        continue
+                    stop = start + placement.width
+                    # A wider aligned window in the next split may need earlier items.
+                    while item is not None and (item.sequence_id, item.position) < (
+                        sid,
+                        stop - max_width,
+                    ):
+                        item = next(items, None)
+                    while (
+                        item is not None
+                        and item.sequence_id == sid
+                        and item.position < stop
+                    ):
+                        encoded[item.position] = encoder.encode(item)
+                        order.append(item.position)
+                        if len(order) > max_width:
+                            del encoded[order.popleft()]
+                        item = next(items, None)
+                    output[split].append(
+                        encoder.window(encoded, sid, subsequence, placement, start, pad)
+                    )
+                    if len(output[split]) == batches_per_file:
+                        flush(split, filename)
+        for split, pending in enumerate(output):
+            if pending:
+                flush(split, shard_path(split, counts[split] // batches_per_file))
+    return expected
 
 
 def _render_parquet_sequence(job):
-    """Render one complete sequence in a worker with bounded window state."""
-    from sequifier.preprocess import (
-        _apply_column_statistics,
-        _apply_configured_input_casting,
-        _apply_output_type_casting,
-        get_subsequence_starts,
+    encoder = job["encoder"]
+    sequence = job["sequence"]
+    items = _file_items(
+        job["path"],
+        "parquet",
+        job["required"],
+        encoder.layout.max_depth_length,
+        row_groups=job["row_groups"],
+        sequence_id=sequence[0],
     )
-
-    path = job["path"]
-    sid = job["sequence_id"]
-    count = job["count"]
-    first_position = job["first_position"]
-    layout = job["layout"]
-    layouts = job["layouts"]
-    name = job["layout_name"]
-    columns = job["columns"]
-    shallow = job["shallow"]
-    curriculum = job["curriculum_columns"]
-    schema_types = job["schema_types"]
-    col_types = job["col_types"]
-    n_classes = job["n_classes"]
-    split_paths = job["split_paths"]
-    scratch_root = Path(job["scratch_root"])
-    completed = job["completed"]
-    max_width = max(job["window_lengths"])
-    output = {i: [] for i in range(len(job["split_ratios"]))}
-    window_counts = Counter()
-    expected = set()
-    records = {}
-    encoded = {}
-    order = deque()
 
     def shard_path(split, index):
         return (
-            Path(split_paths[split]).stem
+            Path(job["split_paths"][split]).stem
             + f"-0-{job['sequence_index']:012d}{index:012d}.pt"
         )
 
-    def flush(split, index):
-        if not output[split]:
-            return
-        filename = shard_path(split, index)
-        destination = scratch_root / filename
-        temporary = scratch_root / f"{filename}.tmp"
-        batch = concatenate_pt_batches(output[split])
-        save_pt_payload(batch, temporary, layouts=layouts, n_classes=n_classes)
-        os.replace(temporary, destination)
-        checksum = hashlib.sha256()
-        with destination.open("rb") as payload:
-            for chunk in iter(lambda: payload.read(1024 * 1024), b""):
-                checksum.update(chunk)
-        records[filename] = {
-            "size": destination.stat().st_size,
-            "sha256": checksum.hexdigest(),
-        }
-        output[split].clear()
-
-    stream = iter(
-        _file_items(
-            path,
-            "parquet",
-            job["required"],
-            layout.max_depth_length,
-            row_groups=job["row_groups"],
-            sequence_id=sid,
-        )
+    records = {}
+    expected = _render_depth_windows(
+        items,
+        [sequence],
+        job["plan"],
+        job["batches_per_file"],
+        encoder,
+        job["scratch_root"],
+        job["completed"],
+        shard_path,
+        records.__setitem__,
     )
-    next_item = next(stream, None)
-
-    def encode_until(stop):
-        nonlocal next_item
-        while next_item is not None and next_item.position <= stop:
-            item = next_item
-            rows, item_sample_position = _validated_item_rows(
-                item, columns, shallow, layout, curriculum
-            )
-            data = pl.DataFrame([raw for _, raw in rows], schema=schema_types)
-            data = _apply_configured_input_casting(
-                data,
-                columns,
-                _observation_types(data, columns, job["configured_types"]),
-            )
-            data, _, _ = _apply_column_statistics(
-                data,
-                columns,
-                job["id_maps"],
-                job["stats"],
-                job["normalize_real_columns"],
-                n_classes,
-                col_types,
-                job["cardinality_config"],
-            )
-            data = _apply_output_type_casting(data, columns, col_types)
-            encoded[item.position] = (rows, data, item_sample_position)
-            order.append(item.position)
-            if len(order) > max_width:
-                encoded.pop(order.popleft())
-            next_item = next(stream, None)
-
-    def advance_before(position):
-        nonlocal next_item
-        while next_item is not None and next_item.position < position:
-            next_item = next(stream, None)
-
-    try:
-        if job["split_method"] == "within_sequence":
-            uppers = [int(x * count) for x in np.cumsum(job["split_ratios"])]
-            bounds = [
-                (i, low, high)
-                for i, (low, high) in enumerate(zip([0] + uppers[:-1], uppers))
-            ]
-        else:
-            bounds = [(job["assigned_split"], 0, count)]
-        for split, low, high in bounds:
-            width = job["window_lengths"][split]
-            if high - low <= 0:
-                continue
-            alignment = job["alignment"]
-            aligned = alignment is not None and split in alignment.splits
-            context_low = 0 if aligned else low
-            length = high - context_low
-            split_start_position = _coordinate(
-                first_position + low, "splitStartItemPosition"
-            )
-            split_last_position = _coordinate(
-                first_position + high - 1, "splitEndItemPosition"
-            )
-            if split_last_position == 2**63 - 1:
-                raise ValueError("splitEndItemPosition falls outside signed Int64")
-            split_end_position = split_last_position + 1
-            pad = max(0, width - length)
-            starts = (
-                alignment.starts(low, high, width)
-                if aligned and alignment is not None
-                else get_subsequence_starts(
-                    max(length, width), width, job["window_stride"]
-                )
-            )
-            for subsequence, start in enumerate(starts):
-                window_pad = max(0, -int(start)) if aligned else pad
-                absolute_start = _coordinate(
-                    first_position
-                    + context_low
-                    + int(start)
-                    - (0 if aligned else window_pad),
-                    "startItemPosition",
-                )
-                shard_index = window_counts[split] // job["batches_per_file"]
-                filename = shard_path(split, shard_index)
-                expected.add(filename)
-                if filename in completed:
-                    advance_before(absolute_start)
-                    window_counts[split] += 1
-                    continue
-                advance_before(absolute_start)
-                encode_until(absolute_start + width - 1)
-                tensors = {
-                    c: torch.zeros(
-                        (1, width, layout.max_depth_length)
-                        if c in layout.columns
-                        else (1, width),
-                        dtype=PANDAS_TO_TORCH_TYPES[col_types[c]],
-                    )
-                    for c in columns
-                }
-                mask = torch.zeros(
-                    (1, width, layout.max_depth_length), dtype=torch.bool
-                )
-                sample_position = None
-                for time in range(window_pad, width):
-                    position = absolute_start + time
-                    if position not in encoded:
-                        raise ValueError(
-                            f"Missing depth item {(sid, position)} in ordered stream"
-                        )
-                    rows, data, item_sample_position = encoded[position]
-                    if job["has_sample_positions"]:
-                        if sample_position is None:
-                            sample_position = item_sample_position
-                        elif sample_position != item_sample_position:
-                            raise ValueError(
-                                "Curriculum columns must be identical within each "
-                                "generated subsequence; "
-                                f"sequenceId={sid}, subsequenceId={subsequence}"
-                            )
-                    for row_index, (slot, _) in enumerate(rows):
-                        mask[0, time, slot] = True
-                        for column in columns:
-                            value = data[column][row_index]
-                            if column in layout.columns:
-                                tensors[column][0, time, slot] = value
-                            elif row_index == 0:
-                                tensors[column][0, time] = value
-                canonical = CanonicalItemFrame(tensors, {name: mask})
-                batch = StoredTensorBatch(
-                    canonical.sequences,
-                    torch.tensor([sid], dtype=torch.int64),
-                    torch.tensor([subsequence], dtype=torch.int64),
-                    torch.tensor([absolute_start], dtype=torch.int64),
-                    torch.tensor([window_pad], dtype=torch.int64),
-                    split_start_item_positions=torch.tensor(
-                        [split_start_position], dtype=torch.int64
-                    ),
-                    split_end_item_positions=torch.tensor(
-                        [split_end_position], dtype=torch.int64
-                    ),
-                    depth_valid_masks=canonical.depth_valid_masks,
-                    sample_positions=(
-                        torch.tensor([sample_position], dtype=torch.int64)
-                        if sample_position is not None
-                        else None
-                    ),
-                    curriculum_columns=curriculum,
-                )
-                batch.validate(layouts, n_classes=n_classes)
-                output[split].append(batch)
-                window_counts[split] += 1
-                if len(output[split]) >= job["batches_per_file"]:
-                    flush(split, shard_index)
-        for split in output:
-            flush(split, window_counts[split] // job["batches_per_file"])
-    finally:
-        stream.close()
     return expected, records
 
 
 def preprocess_depth(owner, selected_columns):
     from sequifier.preprocess import (
-        _apply_column_statistics,
-        _apply_configured_input_casting,
-        _apply_output_type_casting,
-        _assigned_split_row_counts,
-        _balanced_sequence_split_assignments,
-        _check_split_window_proportions,
-        _estimate_window_proportions,
-        _finalize_cardinality_maps,
+        _between_sequence_assignments,
         _folder_input_files,
-        _get_column_statistics,
         _validate_cardinality_columns,
-        _validate_cardinality_reserved_values,
         _validate_declared_column_roles,
-        _validate_declared_roles_against_metadata,
         assign_sequence_to_split,
-        get_subsequence_starts,
         load_precomputed_id_maps,
     )
 
-    if owner.max_rows is not None and owner.max_rows <= 0:
+    config = owner.config
+    if config.max_rows is not None and config.max_rows <= 0:
         raise ValueError("Depth max_rows must be a positive logical item count")
-    layouts = owner.depth_layouts
+    layouts = config.depth_layouts
     name, layout = next(iter(layouts.items()))
     files = (
         _folder_input_files(
-            owner.preprocessing_data_path,
-            owner.read_format,
-            owner.static_data_path,
+            config.preprocessing_data_path,
+            config.read_format,
+            config.static_data_path,
         )
-        if Path(owner.preprocessing_data_path).is_dir()
-        else [owner.preprocessing_data_path]
+        if Path(config.preprocessing_data_path).is_dir()
+        else [config.preprocessing_data_path]
     )
-    configured_curriculum_columns = curriculum_columns(owner.curriculum_column)
+    configured_curriculum_columns = curriculum_columns(config.curriculum_column)
     reserved_columns = {
         "sequenceId",
         "itemPosition",
         layout.position_column,
         *configured_curriculum_columns,
-        *owner.indexed_passthrough,
+        *config.indexed_passthrough,
     }
     columns = [c for c in selected_columns or [] if c not in reserved_columns]
     _validate_declared_column_roles(
-        columns, owner.categorical_columns, owner.real_columns
+        columns, config.categorical_columns, config.real_columns
     )
-    scratch_root = Path(owner.project_root) / "data" / owner.target_dir
+    scratch_root = Path(config.project_root) / "data" / owner.target_dir
     schema_types = None
     sample_position_presence = None
     required: list[str] = []
     for filename in files:
         scan = (
             pl.scan_csv(filename)
-            if owner.read_format == "csv"
+            if config.read_format == "csv"
             else pl.scan_parquet(filename)
         )
         schema = scan.collect_schema()
@@ -834,7 +750,7 @@ def preprocess_depth(owner, selected_columns):
                     layout.position_column,
                     *configured_curriculum_columns,
                     *columns,
-                    *owner.indexed_passthrough,
+                    *config.indexed_passthrough,
                 ]
             )
         )
@@ -866,12 +782,12 @@ def preprocess_depth(owner, selected_columns):
     def check_sources():
         current_files = (
             _folder_input_files(
-                owner.preprocessing_data_path,
-                owner.read_format,
-                owner.static_data_path,
+                config.preprocessing_data_path,
+                config.read_format,
+                config.static_data_path,
             )
-            if Path(owner.preprocessing_data_path).is_dir()
-            else [owner.preprocessing_data_path]
+            if Path(config.preprocessing_data_path).is_dir()
+            else [config.preprocessing_data_path]
         )
         if current_files != files:
             raise ValueError("Depth source file set changed during preprocessing")
@@ -889,9 +805,9 @@ def preprocess_depth(owner, selected_columns):
     parallel_groups = None
     parallel_audits = None
     if (
-        owner.read_format == "parquet"
+        config.read_format == "parquet"
         and len(files) == 1
-        and owner.max_rows is None
+        and config.max_rows is None
         and owner.num_workers > 1
         and pq.ParquetFile(files[0]).num_row_groups > 1
     ):
@@ -906,11 +822,11 @@ def preprocess_depth(owner, selected_columns):
     else:
         for item in _merged_items(
             files,
-            owner.read_format,
+            config.read_format,
             ["sequenceId", "itemPosition"],
             layout.max_depth_length,
         ):
-            if owner.max_rows is not None and selected_count >= owner.max_rows:
+            if config.max_rows is not None and selected_count >= config.max_rows:
                 continue
             sid, pos = item.sequence_id, item.position
             if previous is not None and sid == previous[0] and pos != previous[1] + 1:
@@ -929,7 +845,7 @@ def preprocess_depth(owner, selected_columns):
     def selected_items():
         check_sources()
         stream = _merged_items(
-            files, owner.read_format, required, layout.max_depth_length, selected_stop
+            files, config.read_format, required, layout.max_depth_length, selected_stop
         )
         try:
             for _ in range(selected_count):
@@ -943,47 +859,20 @@ def preprocess_depth(owner, selected_columns):
 
     shallow = [c for c in columns if c not in layout.columns]
 
-    def item_rows(item):
-        return _validated_item_rows(
-            item, columns, shallow, layout, configured_curriculum_columns
-        )
-
     precomputed = load_precomputed_id_maps(
-        owner.project_root, columns, owner.use_precomputed_maps
+        config.project_root, columns, config.use_precomputed_maps
     )
     _validate_cardinality_columns(owner.cardinality_config, columns, precomputed)
-    id_maps, stats = dict(precomputed), {}
-    categorical_value_counts = {}
-    existing = None
     sequence_counts = dict(sequence_counts)
     assignments = (
-        _balanced_sequence_split_assignments(
-            list(sequence_counts), owner.split_ratios, owner.seed
-        )
-        if owner.split_method == "between_sequence"
+        _between_sequence_assignments(sequence_counts, owner.window_plan, config.seed)
+        if config.split_method == "between_sequence"
         else {}
     )
-    if owner.split_method == "between_sequence":
-        _check_split_window_proportions(
-            _estimate_window_proportions(
-                _assigned_split_row_counts(
-                    sequence_counts,
-                    owner.split_ratios,
-                    owner.seed,
-                    assignments,
-                ),
-                owner.window_stride,
-                owner.alignment,
-            )
-        )
     first_positions = dict(first_positions)
-    existing_col_types = None
-    if owner.metadata_config_path:
-        existing = json.loads(
-            (Path(owner.project_root) / owner.metadata_config_path).read_text()
-        )
-        validate_persisted_metadata_versions(existing)
-        owner.metadata_fitted_on_all_data = existing.get("normalize_on_all_data", True)
+    existing = owner._frozen_metadata
+    fitted = None
+    if existing is not None:
         if (
             DepthLayoutRegistryModel.model_validate(existing.get("depth_layouts", {}))
             != layouts
@@ -991,255 +880,99 @@ def preprocess_depth(owner, selected_columns):
             raise ValueError(
                 "metadata_config_path requires identical complete depth layouts"
             )
-        validate_special_token_ids(
-            existing["special_token_ids"], source="depth metadata"
-        )
         if existing.get("normalize_real_columns", True) != owner.normalize_real_columns:
             raise ValueError(
                 "Metadata normalization policy does not match preprocessing"
             )
-        id_maps = {
-            column: mapping
-            for column, mapping in existing["id_maps"].items()
-            if column in columns
-        }
-        owner._use_metadata_cardinality_config(existing)
-        _validate_cardinality_columns(owner.cardinality_config, columns, {})
-        stats = {
-            column: values
-            for column, values in existing["selected_columns_statistics"].items()
-            if column in columns
-        }
-        metadata_types = existing.get("column_data_types") or existing.get(
-            "column_types"
-        )
-        if metadata_types is not None:
-            existing_col_types = {
-                column: dtype
-                for column, dtype in metadata_types.items()
-                if column in columns
-            }
-        _validate_declared_roles_against_metadata(
-            owner.categorical_columns,
-            owner.real_columns,
-            id_maps,
-            stats,
-            existing_col_types,
-        )
+        fitted = owner._frozen_temporal_features(data_columns=columns)
+    rules = FittingRules(
+        precomputed,
+        owner.cardinality_config,
+        config.categorical_columns,
+        config.real_columns,
+    )
+    fit_end = {}
+    if existing is None:
+        for sid, count in sequence_counts.items():
+            if not config.normalize_on_all_data:
+                if config.split_method == "between_sequence":
+                    split = assignments.get(
+                        sid,
+                        assign_sequence_to_split(sid, config.split_ratios, config.seed),
+                    )
+                    if split != 0:
+                        continue
+                else:
+                    _, count = split_intervals(count, config.split_ratios)[0]
+            fit_end[sid] = first_positions[sid] + count
+    fit_plan = DepthFitPlan(
+        layout,
+        columns,
+        shallow,
+        configured_curriculum_columns,
+        schema_types,
+        owner.column_data_types,
+        rules,
+        fit_end,
+    )
     if parallel_groups is not None and existing is None:
-        from sequifier.preprocess import (
-            _create_preprocess_pool,
-            create_id_map,
-            get_combined_statistics,
-        )
+        from sequifier.preprocess import _create_preprocess_pool
 
-        categorical_sets = {}
-
-        def fit_jobs():
-            for group in parallel_groups:
-                yield (
-                    files[0],
-                    group,
-                    required,
-                    columns,
-                    shallow,
-                    layout,
-                    configured_curriculum_columns,
-                    schema_types,
-                    owner.column_data_types,
-                    owner.normalize_on_all_data,
-                    owner.split_method,
-                    owner.split_ratios,
-                    owner.seed,
-                    sequence_counts,
-                    first_positions,
-                    assignments,
-                    precomputed,
-                    owner.cardinality_config,
-                    owner.categorical_columns,
-                    owner.real_columns,
-                )
-
+        workers = min(owner.num_workers, len(parallel_groups))
         logger.info(
             "Depth metadata fit: {} source partitions across {} workers",
             len(parallel_groups),
-            min(owner.num_workers, len(parallel_groups)),
+            workers,
         )
-        with _create_preprocess_pool(
-            min(owner.num_workers, len(parallel_groups))
-        ) as pool:
-            for local_stats, local_sets, local_counts in pool.imap(
-                _fit_parquet_group, fit_jobs()
-            ):
-                for column, values in local_sets.items():
-                    categorical_sets.setdefault(column, set()).update(values)
-                for column, counts in local_counts.items():
-                    categorical_value_counts.setdefault(column, Counter()).update(
-                        counts
-                    )
-                for column, chunk in local_stats.items():
-                    previous_stats = stats.get(column)
-                    if previous_stats is None:
-                        stats[column] = chunk
-                    else:
-                        count = int(chunk["count"])
-                        previous_count = int(previous_stats["count"])
-                        mean, std = get_combined_statistics(
-                            count,
-                            chunk["mean"],
-                            chunk["std"],
-                            previous_count,
-                            previous_stats["mean"],
-                            previous_stats["std"],
-                        )
-                        stats[column] = {
-                            "mean": mean,
-                            "std": std,
-                            "count": float(count + previous_count),
-                        }
-        for column, values in categorical_sets.items():
-            id_maps[column] = create_id_map(
-                pl.DataFrame(
-                    {column: list(values)}, schema={column: schema_types[column]}
-                ),
-                column,
-            )
+        features = FeatureStatistics()
+        with _create_preprocess_pool(workers) as pool:
+            worker = partial(fit_plan.fit_parquet_group, files[0], required)
+            for summary in pool.imap(worker, parallel_groups):
+                features.merge(summary)
         check_sources()
-
-    for item in (
-        [] if parallel_groups is not None and existing is None else selected_items()
-    ):
-        sid, pos = item.sequence_id, item.position
-        rows, _ = item_rows(item)
-        for column in owner.cardinality_config:
-            observations = (
-                [raw[column] for _, raw in rows]
-                if column in layout.columns
-                else [rows[0][1][column]]
-            )
-            cardinality_data = pl.DataFrame(
-                {column: observations},
-                schema={column: schema_types[column]},
-            )
-            _validate_cardinality_reserved_values(
-                cardinality_data, {column: owner.cardinality_config[column]}
-            )
-        if existing is None:
-            fit_on_item = owner.normalize_on_all_data or (
-                assignments.get(
-                    sid,
-                    assign_sequence_to_split(sid, owner.split_ratios, owner.seed),
-                )
-                == 0
-                if owner.split_method == "between_sequence"
-                else pos
-                < first_positions[sid]
-                + int(owner.split_ratios[0] * sequence_counts[sid])
-            )
-            if not fit_on_item:
-                continue
-            for column in columns:
-                observations = (
-                    [raw[column] for _, raw in rows]
-                    if column in layout.columns
-                    else [rows[0][1][column]]
-                )
-                data = pl.DataFrame(
-                    {column: observations},
-                    schema={column: schema_types[column]},
-                )
-                configured = _observation_types(data, [column], owner.column_data_types)
-                data = _apply_configured_input_casting(data, [column], configured)
-                id_maps, stats = _get_column_statistics(
-                    data,
-                    [column],
-                    id_maps,
-                    stats,
-                    0,
-                    precomputed,
-                    categorical_columns=owner.categorical_columns,
-                    real_columns=owner.real_columns,
-                    categorical_value_counts=categorical_value_counts,
-                    cardinality_config=owner.cardinality_config,
-                )
-    if existing is None:
-        id_maps = _finalize_cardinality_maps(
-            id_maps,
-            categorical_value_counts,
-            owner.cardinality_config,
+    else:
+        features = fit_plan.observe_items(selected_items())
+    if fitted is None:
+        id_maps, stats = features.finish(rules)
+        fitted = FittedColumns.resolve(
+            columns, id_maps, stats, schema_types, types=owner.column_data_types
         )
-    col_types = (
-        owner.column_data_types
-        or existing_col_types
-        or {
-            c: (
-                "Int64"
-                if c in id_maps
-                else (
-                    "Float64"
-                    if c in stats and not schema_types[c].is_float()
-                    else str(schema_types[c])
-                )
-            )
-            for c in columns
-        }
+        if set(columns) - set(fitted.col_types):
+            raise ValueError("Column dtypes must cover selected features")
+    encoder = DepthItemEncoder(
+        layout_name=name,
+        layouts=layouts,
+        features=fitted,
+        shallow=shallow,
+        curriculum=configured_curriculum_columns,
+        schema=schema_types,
+        configured_types=owner.column_data_types,
+        normalize=owner.normalize_real_columns,
+        cardinality=owner.cardinality_config,
     )
-    if set(columns) - set(col_types):
-        raise ValueError("Column dtypes must cover selected features")
-    if existing and any(
-        col_types[c] != existing["column_data_types"].get(c) for c in columns
-    ):
-        raise ValueError("Configured output types differ from reused metadata")
-    n_classes = {
-        c: max(SPECIAL_TOKEN_IDS.user_start, max(mapping.values()) + 1)
-        for c, mapping in id_maps.items()
-        if c in columns
-    }
-    if owner.indexed_writer is not None:
+    if owner.output.indexed:
         from itertools import groupby
 
         from sequifier.config.depth_layout import depth_mask_metadata_key
         from sequifier.io.sample_order import curriculum_storage_column
 
-        owner._export_metadata(
-            id_maps, n_classes, col_types, stats, data_columns=columns
-        )
+        owner._export_metadata(fitted)
         for sid, items in groupby(selected_items(), key=lambda item: item.sequence_id):
             records = []
             for item in items:
-                rows, curriculum = item_rows(item)
-                data = pl.DataFrame([raw for _, raw in rows], schema=schema_types)
-                data = _apply_configured_input_casting(
-                    data,
-                    columns,
-                    _observation_types(data, columns, owner.column_data_types),
-                )
-                data, _, _ = _apply_column_statistics(
-                    data,
-                    columns,
-                    id_maps,
-                    stats,
-                    owner.normalize_real_columns,
-                    n_classes,
-                    col_types,
-                    owner.cardinality_config,
-                )
-                data = _apply_output_type_casting(data, columns, col_types)
-                record = {"sequenceId": sid, "itemPosition": item.position}
-                mask = [False] * layout.max_depth_length
-                for slot, _ in rows:
-                    mask[slot] = True
-                record[depth_mask_metadata_key(name)] = mask
-                for column in columns:
-                    values = data[column]
-                    if column in layout.columns:
-                        dense = [0] * layout.max_depth_length
-                        for index, (slot, _) in enumerate(rows):
-                            dense[slot] = values[index]
-                        record[column] = dense
-                    else:
-                        record[column] = values[0]
-                for column in owner.indexed_passthrough:
+                values, mask, curriculum = encoder.encode(item)
+                record = {
+                    "sequenceId": sid,
+                    "itemPosition": item.position,
+                    depth_mask_metadata_key(name): mask.tolist(),
+                    **{
+                        column: value.tolist()
+                        if isinstance(value, np.ndarray)
+                        else value
+                        for column, value in values.items()
+                    },
+                }
+                for column in config.indexed_passthrough:
                     value = item.rows[0][column]
                     if any(row[column] != value for row in item.rows[1:]):
                         raise ValueError(
@@ -1254,12 +987,10 @@ def preprocess_depth(owner, selected_columns):
                         )
                     )
                 records.append(record)
-            owner._write_indexed_items(pl.DataFrame(records), assignments)
+            owner.output.write_sequences(pl.DataFrame(records), assignments)
         return
 
-    owner._write_or_validate_resume_manifest(
-        selected_columns, "pt", columns, id_maps, n_classes, col_types, stats
-    )
+    owner._write_or_validate_resume_manifest(selected_columns, "pt", fitted)
     # A shard is reusable only after both its payload and its ledger entry have
     # been committed. The ledger also ties completed shards to this source set.
     ledger_path = scratch_root / "depth-shards.json"
@@ -1269,7 +1000,7 @@ def preprocess_depth(owner, selected_columns):
         "serial": ContractVersions.SERIAL_DEPTH_LEDGER,
         "parallel": ContractVersions.PARALLEL_DEPTH_LEDGER,
     }
-    if owner.continue_preprocessing and ledger_path.exists():
+    if config.continue_preprocessing and ledger_path.exists():
         ledger = json.loads(ledger_path.read_text())
         mode = ledger.get("mode") if isinstance(ledger, dict) else None
         if not isinstance(mode, str) or mode not in ledger_versions:
@@ -1296,20 +1027,13 @@ def preprocess_depth(owner, selected_columns):
             "shards": {},
         }
 
-    owner._export_metadata(id_maps, n_classes, col_types, stats)
+    owner._export_metadata(fitted)
 
     def shard_path(split, index):
         return Path(owner.split_paths[split]).stem + f"-0-{index:08d}.pt"
 
     def shard_location(split, filename):
         return Path(owner.split_paths[split]).with_suffix("") / filename
-
-    def digest(path):
-        checksum = hashlib.sha256()
-        with path.open("rb") as payload:
-            for chunk in iter(lambda: payload.read(1024 * 1024), b""):
-                checksum.update(chunk)
-        return checksum.hexdigest()
 
     completed = set()
     for split in range(len(owner.split_paths)):
@@ -1321,12 +1045,12 @@ def preprocess_depth(owner, selected_columns):
             valid_scratch = (
                 scratch.is_file()
                 and scratch.stat().st_size == record["size"]
-                and digest(scratch) == record["sha256"]
+                and file_checksum(scratch) == record["sha256"]
             )
             valid_final = (
                 final.is_file()
                 and final.stat().st_size == record["size"]
-                and digest(final) == record["sha256"]
+                and file_checksum(final) == record["sha256"]
             )
             if valid_scratch or valid_final:
                 completed.add(filename)
@@ -1340,6 +1064,20 @@ def preprocess_depth(owner, selected_columns):
 
     if not ledger_path.exists():
         commit_ledger()
+
+    sequences = (
+        (
+            sid,
+            first_positions[sid],
+            count,
+            assignments.get(
+                sid, assign_sequence_to_split(sid, config.split_ratios, config.seed)
+            )
+            if config.split_method == "between_sequence"
+            else None,
+        )
+        for sid, count in sequence_counts.items()
+    )
 
     if parallel_render:
         from sequifier.preprocess import _create_preprocess_pool
@@ -1358,45 +1096,22 @@ def preprocess_depth(owner, selected_columns):
         expected_shards = set()
 
         def render_jobs():
-            for index, (sid, count) in enumerate(sequence_counts.items()):
+            for index, sequence in enumerate(sequences):
+                sid = sequence[0]
                 yield {
                     "path": files[0],
                     "row_groups": [
                         audit.index for audit in row_group_audits if sid in audit.counts
                     ],
                     "required": required,
-                    "sequence_id": sid,
+                    "sequence": sequence,
                     "sequence_index": index,
-                    "count": count,
-                    "first_position": first_positions[sid],
-                    "layout": layout,
-                    "layouts": layouts,
-                    "layout_name": name,
-                    "columns": columns,
-                    "shallow": shallow,
-                    "curriculum_columns": configured_curriculum_columns,
-                    "schema_types": schema_types,
-                    "configured_types": owner.column_data_types,
-                    "col_types": col_types,
-                    "n_classes": n_classes,
-                    "id_maps": id_maps,
-                    "stats": stats,
-                    "normalize_real_columns": owner.normalize_real_columns,
-                    "cardinality_config": owner.cardinality_config,
+                    "encoder": encoder,
                     "split_paths": owner.split_paths,
-                    "scratch_root": str(scratch_root),
+                    "scratch_root": scratch_root,
                     "completed": completed,
-                    "window_lengths": owner.window_lengths,
-                    "split_ratios": owner.split_ratios,
-                    "split_method": owner.split_method,
-                    "assigned_split": assignments.get(
-                        sid,
-                        assign_sequence_to_split(sid, owner.split_ratios, owner.seed),
-                    ),
-                    "alignment": owner.alignment,
-                    "window_stride": owner.window_stride,
-                    "batches_per_file": owner.batches_per_file,
-                    "has_sample_positions": owner.has_sample_positions,
+                    "plan": owner.window_plan,
+                    "batches_per_file": config.batches_per_file,
                 }
 
         logger.info(
@@ -1414,227 +1129,23 @@ def preprocess_depth(owner, selected_columns):
                 ledger["shards"].update(records)
                 commit_ledger()
         check_sources()
-        for stale in scratch_root.glob("*.pt"):
-            if stale.name not in expected_shards:
-                raise ValueError(
-                    f"Depth temp folder contains stale output {stale}; "
-                    "use a fresh output location"
-                )
-        for split_path in owner.split_paths:
-            folder = Path(split_path).with_suffix("")
-            if folder.exists():
-                for stale in folder.glob("*.pt"):
-                    if stale.name not in expected_shards:
-                        raise ValueError(
-                            f"Existing split folder contains stale output {stale}; "
-                            "use a fresh output location"
-                        )
-        owner._cleanup("pt")
-        return
+    else:
 
-    # Materialize only requested windows, never a whole sequence/folder densely.
-    max_width = max(owner.window_lengths)
-    output = {i: [] for i in range(len(owner.split_ratios))}
-    window_counts = Counter()
+        def record_shard(filename, record):
+            ledger["shards"][filename] = record
+            commit_ledger()
 
-    def flush(split, index):
-        if not output[split]:
-            return
-        filename = shard_path(split, index)
-        destination = scratch_root / filename
-        temporary = scratch_root / f"{filename}.tmp"
-        batch = concatenate_pt_batches(output[split])
-        save_pt_payload(batch, temporary, layouts=layouts, n_classes=n_classes)
-        os.replace(temporary, destination)
-        ledger["shards"][filename] = {
-            "size": destination.stat().st_size,
-            "sha256": digest(destination),
-        }
-        commit_ledger()
-        output[split].clear()
-
-    # Encode each item once and retain only the previous window's worth of items.
-    encoded = {}
-    order = deque()
-    stream = iter(selected_items())
-    next_item = next(stream, None)
-
-    def encode_until(sid, stop):
-        nonlocal next_item
-        while (
-            next_item is not None
-            and next_item.sequence_id == sid
-            and next_item.position <= stop
-        ):
-            item = next_item
-            rows, item_sample_position = item_rows(item)
-            data = pl.DataFrame([raw for _, raw in rows], schema=schema_types)
-            data = _apply_configured_input_casting(
-                data,
-                columns,
-                _observation_types(data, columns, owner.column_data_types),
-            )
-            data, _, _ = _apply_column_statistics(
-                data,
-                columns,
-                id_maps,
-                stats,
-                owner.normalize_real_columns,
-                n_classes,
-                col_types,
-                owner.cardinality_config,
-            )
-            data = _apply_output_type_casting(data, columns, col_types)
-            encoded[item.position] = (rows, data, item_sample_position)
-            order.append(item.position)
-            if len(order) > max_width:
-                encoded.pop(order.popleft())
-            next_item = next(stream, None)
-
-    def advance_before(sid, position):
-        """Discard items preceding the next window without encoding them."""
-        nonlocal next_item
-        while next_item is not None and (
-            next_item.sequence_id < sid
-            or (next_item.sequence_id == sid and next_item.position < position)
-        ):
-            next_item = next(stream, None)
-
-    try:
-        for sid, count in sequence_counts.items():
-            if owner.split_method == "within_sequence":
-                uppers = [int(x * count) for x in np.cumsum(owner.split_ratios)]
-                bounds = [
-                    (i, low, high)
-                    for i, (low, high) in enumerate(zip([0] + uppers[:-1], uppers))
-                ]
-            else:
-                assigned_split = assignments.get(
-                    sid, assign_sequence_to_split(sid, owner.split_ratios, owner.seed)
-                )
-                bounds = [(assigned_split, 0, count)]
-            first_position = first_positions[sid]
-            encoded.clear()
-            order.clear()
-            for split, low, high in bounds:
-                width = owner.window_lengths[split]
-                target_length = high - low
-                if target_length <= 0:
-                    continue
-                aligned = (
-                    owner.alignment is not None and split in owner.alignment.splits
-                )
-                context_low = 0 if aligned else low
-                length = high - context_low
-                split_start_position = _coordinate(
-                    first_position + low, "splitStartItemPosition"
-                )
-                split_last_position = _coordinate(
-                    first_position + high - 1, "splitEndItemPosition"
-                )
-                if split_last_position == 2**63 - 1:
-                    raise ValueError("splitEndItemPosition falls outside signed Int64")
-                split_end_position = split_last_position + 1
-                pad = max(0, width - length)
-                starts = (
-                    owner.alignment.starts(low, high, width)
-                    if aligned and owner.alignment is not None
-                    else get_subsequence_starts(
-                        max(length, width), width, owner.window_stride
-                    )
-                )
-                for subsequence, start in enumerate(starts):
-                    window_pad = max(0, -int(start)) if aligned else pad
-                    absolute_start = _coordinate(
-                        first_position
-                        + context_low
-                        + int(start)
-                        - (0 if aligned else window_pad),
-                        "startItemPosition",
-                    )
-                    shard_index = window_counts[split] // owner.batches_per_file
-                    if shard_path(split, shard_index) in completed:
-                        advance_before(sid, absolute_start)
-                        window_counts[split] += 1
-                        continue
-                    advance_before(sid, absolute_start)
-                    encode_until(sid, absolute_start + width - 1)
-                    tensors = {
-                        c: torch.zeros(
-                            (1, width, layout.max_depth_length)
-                            if c in layout.columns
-                            else (1, width),
-                            dtype=PANDAS_TO_TORCH_TYPES[col_types[c]],
-                        )
-                        for c in columns
-                    }
-                    mask = torch.zeros(
-                        (1, width, layout.max_depth_length), dtype=torch.bool
-                    )
-                    sample_position = None
-                    for time in range(window_pad, width):
-                        position = absolute_start + time
-                        if position not in encoded:
-                            raise ValueError(
-                                f"Missing depth item {(sid, position)} "
-                                "in ordered stream"
-                            )
-                        rows, data, item_sample_position = encoded[position]
-                        if owner.has_sample_positions:
-                            if sample_position is None:
-                                sample_position = item_sample_position
-                            elif sample_position != item_sample_position:
-                                raise ValueError(
-                                    "Curriculum columns must be identical within each "
-                                    "generated subsequence; "
-                                    f"sequenceId={sid}, subsequenceId={subsequence}"
-                                )
-                        for row_index, (slot, _) in enumerate(rows):
-                            mask[0, time, slot] = True
-                            for column in columns:
-                                value = data[column][row_index]
-                                if column in layout.columns:
-                                    tensors[column][0, time, slot] = value
-                                elif row_index == 0:
-                                    tensors[column][0, time] = value
-                    canonical = CanonicalItemFrame(tensors, {name: mask})
-                    batch = StoredTensorBatch(
-                        canonical.sequences,
-                        torch.tensor([sid], dtype=torch.int64),
-                        torch.tensor([subsequence], dtype=torch.int64),
-                        torch.tensor([absolute_start], dtype=torch.int64),
-                        torch.tensor([window_pad], dtype=torch.int64),
-                        split_start_item_positions=torch.tensor(
-                            [split_start_position], dtype=torch.int64
-                        ),
-                        split_end_item_positions=torch.tensor(
-                            [split_end_position], dtype=torch.int64
-                        ),
-                        depth_valid_masks=canonical.depth_valid_masks,
-                        sample_positions=(
-                            torch.tensor([sample_position], dtype=torch.int64)
-                            if sample_position is not None
-                            else None
-                        ),
-                        curriculum_columns=configured_curriculum_columns,
-                    )
-                    batch.validate(layouts, n_classes=n_classes)
-                    output[split].append(batch)
-                    window_counts[split] += 1
-                    if len(output[split]) >= owner.batches_per_file:
-                        flush(split, shard_index)
-        for split in output:
-            flush(split, window_counts[split] // owner.batches_per_file)
-    finally:
-        stream.close()
-    expected_shards = {
-        shard_path(split, index)
-        for split in range(len(owner.split_paths))
-        for index in range(
-            (window_counts[split] + owner.batches_per_file - 1)
-            // owner.batches_per_file
+        expected_shards = _render_depth_windows(
+            selected_items(),
+            sequences,
+            owner.window_plan,
+            config.batches_per_file,
+            encoder,
+            scratch_root,
+            completed,
+            shard_path,
+            record_shard,
         )
-    }
     for stale in scratch_root.glob("*.pt"):
         if stale.name not in expected_shards:
             raise ValueError(
@@ -1650,4 +1161,3 @@ def preprocess_depth(owner, selected_columns):
                         f"Existing split folder contains stale output {stale}; "
                         "use a fresh output location"
                     )
-    owner._cleanup("pt")

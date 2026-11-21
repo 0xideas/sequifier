@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -16,12 +16,16 @@ from sequifier.artifacts.dependencies import (
     add_backbone_revision,
     supervised_dependencies,
 )
-from sequifier.artifacts.run_checkpoint import RunCheckpointStore, select_run_checkpoint
+from sequifier.artifacts.phase import CommittedPhases, PhasePublication
+from sequifier.artifacts.run_checkpoint import (
+    RunCheckpointStore,
+    checkpoint_path,
+    select_run_checkpoint,
+)
 from sequifier.config.optimizer_config import OptimizerPlan
 from sequifier.evaluation.service import EvaluationService
 from sequifier.export.service import ExportService
 from sequifier.integration.callbacks import IntegrationManager
-from sequifier.io.memory_budget import plan_data_loading
 from sequifier.model.factory import build_transformer_network, compile_unique_layers
 from sequifier.model.parameter_catalog import (
     ParameterCatalog,
@@ -42,16 +46,15 @@ from sequifier.training.loader_state import LoaderStateService
 from sequifier.training.loss import LossService
 from sequifier.training.metrics_service import MetricsService
 from sequifier.training.optimization import GradientPolicy, OptimizationRuntime
-from sequifier.training.plan import SupervisedPhaseView, SupervisedRunPlan
+from sequifier.training.plan import CompiledSupervisedPhase, SupervisedRunPlan
 from sequifier.training.runtime import (
     DatasetMetrics,
     DatasetRuntimeRegistry,
     PhaseTrainabilityPlan,
-    build_dataset_parts,
+    PreparedSupervisedGroup,
     build_dataset_runtimes,
     validate_phase_learning,
 )
-from sequifier.training.scheduler_budgets import resolve_scheduler_budgets
 from sequifier.training.state import RunState
 
 
@@ -63,8 +66,8 @@ class TrainingRun:
     callable_network: Any
     datasets: DatasetRuntimeRegistry
     optimization: OptimizationRuntime
-    dataset_factory: Callable[[SupervisedPhaseView], DatasetRuntimeRegistry]
-    optimization_factory: Callable[[SupervisedPhaseView], OptimizationRuntime]
+    dataset_factory: Callable[[CompiledSupervisedPhase], DatasetRuntimeRegistry]
+    optimization_factory: Callable[[CompiledSupervisedPhase], OptimizationRuntime]
     optimization_phase_index: int
     state: RunState
     distributed: DistributedStrategy
@@ -82,22 +85,21 @@ class TrainingRun:
 
     def start_phase(
         self,
-        view: SupervisedPhaseView,
+        phase: CompiledSupervisedPhase,
         datasets: DatasetRuntimeRegistry,
         *,
         continue_optimizer: bool,
     ) -> None:
         """Enter the phase with its resolved reset or continuation policy."""
-        phase = view.spec()
         optimizer_step = self.optimization.optimizer_step
         if not continue_optimizer:
-            self.optimization = self.optimization_factory(view)
+            self.optimization = self.optimization_factory(phase)
         self.optimization.gradient_policy = GradientPolicy(
             phase.accumulation_batches,
             phase.optimization["model"].gradient_clip_norm,
         )
         self.optimization.optimizer_step = optimizer_step
-        self.optimization_phase_index = view.index
+        self.optimization_phase_index = phase.index
         self.datasets = datasets
 
 
@@ -110,13 +112,13 @@ class RunBuilder:
     ) -> DistributedStrategy:
         if not execution.distributed:
             return LocalStrategy(device=execution.device)
-        if config.runtime_settings.data_parallelism == "fsdp":
+        if config.run.execution.distribution.strategy == "fsdp":
             return FullyShardedStrategy(
                 rank=execution.rank,
                 local_rank=execution.local_rank,
                 world_size=execution.world_size,
                 device=execution.device,
-                cpu_offload=bool(config.runtime_settings.fsdp_cpu_offload),
+                cpu_offload=bool(config.run.execution.distribution.cpu_offload),
                 mixed_precision_dtype=precision.autocast_dtype,
             )
         return DistributedDataParallelStrategy(
@@ -149,7 +151,7 @@ class RunBuilder:
             for dataset in run.datasets.values():
                 schema = ExecutionSchema.from_interface(
                     dataset.interface,
-                    run.config.runtime_settings.context_length,
+                    run.config.execution.options.context_length,
                 )
                 features, metadata = schema.bind(
                     schema.example_inputs(batch_size, str(run.distributed.device))
@@ -163,14 +165,11 @@ class RunBuilder:
             manager.restore(state)
 
     def _construct_loaders(self, run: TrainingRun) -> None:
-        """Construct every configured loader before final RNG restoration."""
+        """Construct active phase loaders before final RNG restoration."""
 
         phase = run.plan.phases[run.state.phase_index]
-        for dataset in run.datasets.values():
-            for part_name, part in dataset.parts.items():
-                part.loader(phase, "training")
-                if dataset.config.parts[part_name].validation_data_path is not None:
-                    part.loader(phase, "validation")
+        for name, part, role in phase.part_roles():
+            run.datasets.resolve(name).parts[part].loader(phase, role)
 
     def build(
         self,
@@ -181,32 +180,34 @@ class RunBuilder:
         initial_artifact=None,
         phase_offset: int = 0,
         identity: RunIdentity | None = None,
-        on_checkpoint=None,
+        publication: PhasePublication = PhasePublication(),
         backbone_revision=None,
         dependencies: DependencyManifest | None = None,
     ) -> TrainingRun:
-        from sequifier.artifacts.run_checkpoint import (
-            checkpoint_path as output_checkpoint_path,
-        )
         from sequifier.io.output_paths import validate_training_destinations
 
-        config = config.model_copy()
-        precision = PrecisionPolicy.from_settings(
-            config.runtime_settings, execution.device
+        group_data = (
+            config
+            if isinstance(config, PreparedSupervisedGroup)
+            else PreparedSupervisedGroup.compile(config)
         )
-        memory_budget = plan_data_loading(config)
+        config, plan, parts = group_data.config, group_data.plan, group_data.parts
+        precision = PrecisionPolicy.from_settings(
+            config.run.execution, execution.device
+        )
         strategy = self._strategy(config, execution, precision)
         random_manager = RandomStateManager(execution.device)
         loader_state = LoaderStateService()
         restorer = CheckpointRestorer()
-        checkpoint_path = select_run_checkpoint(config)
-        loaded = restorer.load(checkpoint_path) if checkpoint_path is not None else None
+        destination = checkpoint_path(config)
+        selected = select_run_checkpoint(destination, config.run.recovery.resume)
+        loaded = restorer.load(selected) if selected is not None else None
         if (
             loaded is not None
             and identity is not None
             and loaded.checkpoint.run_state["run_id"] != identity.run_id
         ):
-            if config.runtime_settings.resume.policy == "required":
+            if config.run.recovery.resume.policy == "required":
                 raise ValueError("Supervised recovery belongs to another run")
             loaded = None
         revision = None
@@ -214,7 +215,7 @@ class RunBuilder:
         if initial_artifact is None and config.initialize_from is None:
             if loaded is None:
                 revision = (
-                    select_revision(config.model.backbone, config.project_root)
+                    select_revision(config.execution.backbone, config.project_root)
                     if backbone_revision is None
                     else backbone_revision or None
                 )
@@ -228,10 +229,12 @@ class RunBuilder:
             add_backbone_revision(dependencies, config, revision_id)
         validate_training_destinations(
             config,
-            output_checkpoint_path(config),
+            destination,
             dependencies.protected_paths,
             phase_offset=phase_offset,
+            group=not publication.standalone,
         )
+        validate_phase_learning(config, plan, execution.device)
         if loaded is not None:
             restorer.validate_for_restore(loaded, config, dependencies)
             # Optimizer state uses the parameter order of the saved network.
@@ -239,10 +242,12 @@ class RunBuilder:
                 name: config.interfaces[name]
                 for name in loaded.checkpoint.model.model_config.values["interfaces"]
             }
-            config = config.model_copy(update={"interfaces": interfaces})
-            state = RunState.from_state_dict(loaded.checkpoint.run_state)
+            config.execution = replace(config.execution, interfaces=interfaces)
+            state = RunState.from_state_dict(loaded.checkpoint.run_state, plan.phases)
         else:
-            state = RunState(phase_offset=phase_offset)
+            state = RunState(
+                CommittedPhases(plan.phases, phase_offset), phase_offset=phase_offset
+            )
         if state.phase_offset != phase_offset:
             raise ValueError("Supervised recovery has a different phase offset")
         if identity is None:
@@ -253,19 +258,15 @@ class RunBuilder:
                 raise RuntimeError("Rank zero did not provide a run identity")
         state.run_id, state.session_id = identity.run_id, identity.session_id
 
-        plan = SupervisedRunPlan.from_config(config)
-        validate_phase_learning(config, plan, execution.device)
-
         from sequifier.export.preflight import ensure_export_preflight
 
         ensure_export_preflight(config, strategy)
-        built = build_transformer_network(
+        network = build_transformer_network(
             config,
             device=execution.device,
             initialize=loaded is None,
             logger=logger,
         )
-        network = built.network
         if loaded is None and initial_artifact is not None:
             from sequifier.artifacts.model_artifact import read_execution_artifact
             from sequifier.model.execution import ModelExecution
@@ -283,12 +284,14 @@ class RunBuilder:
             load_revision(network.backbone, revision)
             state.backbone_parent_revision_id = revision["revision_id"]
 
+        catalog = ParameterCatalog(network)
         freezing_plans = []
         planned_phases = []
         permanent_masks = []
-        for view in plan.phases:
-            phase = view.spec()
-            freezing_plan = PhaseTrainabilityPlan.resolve(config, network, phase)
+        for phase in plan.phases:
+            freezing_plan = PhaseTrainabilityPlan.resolve(
+                config, network, phase, catalog
+            )
             masks = freezing_plan.parameter_ids_by_dataset
             if phase.optimizer_state == "continue" and (
                 not freezing_plans or freezing_plan != freezing_plans[-1]
@@ -303,22 +306,19 @@ class RunBuilder:
                 for name in dict.fromkeys(source.dataset for source in phase.sources)
             }
             planned_phases.append(
-                view.with_spec(
-                    phase.model_copy(update={"trainability_summary": summary})
-                )
+                phase.model_copy(update={"trainability_summary": summary})
             )
         plan = SupervisedRunPlan(tuple(planned_phases))
         # Compatibility: avoid building backward graphs for parameters that
         # every dataset in every phase leaves frozen.
         if permanent_masks:
-            catalog = ParameterCatalog(network)
             for parameter_id in set.intersection(*permanent_masks):
                 catalog.parameter(parameter_id).requires_grad_(False)
 
         compile_before_ddp = (
             execution.distributed
-            and config.runtime_settings.data_parallelism == "ddp"
-            and config.runtime_settings.torch_compile == "outer"
+            and config.run.execution.distribution.strategy == "ddp"
+            and config.run.execution.compilation.torch_compile == "outer"
         )
         network_to_prepare = (
             cast(torch.nn.Module, torch.compile(network))
@@ -333,36 +333,34 @@ class RunBuilder:
             )
         if loaded is not None:
             restorer.restore_model(loaded, network, strategy)
-
-        parts = build_dataset_parts(config, plan, memory_budget)
         dataset_metrics = {name: DatasetMetrics() for name in parts}
-        plan = resolve_scheduler_budgets(plan, config, parts)
         active_phase = plan.phases[state.phase_index]
 
-        def dataset_factory(view: SupervisedPhaseView) -> DatasetRuntimeRegistry:
+        if execution.distributed:
+            # Distributed preparation can replace parameter objects.
+            catalog = ParameterCatalog(network)
+
+        def dataset_factory(view: CompiledSupervisedPhase) -> DatasetRuntimeRegistry:
             return build_dataset_runtimes(
                 config,
                 view,
                 execution.device,
                 parts=parts,
                 metrics=dataset_metrics,
-                runtime_metadata=built.runtime_metadata,
-                masks=freezing_plans[view.index].bind(network),
+                masks=freezing_plans[view.index].bind(catalog),
             )
 
         datasets = dataset_factory(active_phase)
         parameters: Any = tuple(strategy.prepare_optimizer_parameters(network))
-        catalog = ParameterCatalog(network)
 
-        def optimization_factory(view: SupervisedPhaseView) -> OptimizationRuntime:
-            phase = view.spec()
+        def optimization_factory(phase: CompiledSupervisedPhase) -> OptimizationRuntime:
             role = phase.optimization["model"]
             selected_parameters = parameters
             if self.semantic_optimizer_grouping and not isinstance(
                 role.optimizer, OptimizerPlan
             ):
                 selected_parameters = semantic_optimizer_groups(
-                    catalog, parameters={id(parameter) for parameter in parameters}
+                    catalog, parameters=catalog.parameter_ids(parameters)
                 )
             return OptimizationRuntime.create(
                 role,
@@ -370,7 +368,7 @@ class RunBuilder:
                 selected_parameters,
                 parameter_catalog=catalog,
                 accumulation_batches=phase.accumulation_batches,
-                layer_type_dtypes=config.runtime_settings.layer_type_dtypes,
+                layer_type_dtypes=config.execution.options.layer_type_dtypes,
                 autocast_dtype=precision.autocast_dtype,
             )
 
@@ -379,14 +377,15 @@ class RunBuilder:
             restorer.restore_optimization(loaded, optimization, network, strategy)
 
         callable_network = prepared.callable_network
-        if config.runtime_settings.torch_compile == "inner":
+        if config.run.execution.compilation.torch_compile == "inner":
             from sequifier.model.encoder_stack import TransformerEncoderStack
 
             for stack in list(network.modules()):
                 if isinstance(stack, TransformerEncoderStack):
                     compile_unique_layers(stack.layers)
         elif (
-            config.runtime_settings.torch_compile == "outer" and not compile_before_ddp
+            config.run.execution.compilation.torch_compile == "outer"
+            and not compile_before_ddp
         ):
             callable_network = torch.compile(callable_network)
 
@@ -421,7 +420,7 @@ class RunBuilder:
                 strategy,
                 random_manager,
                 loader_state,
-                on_checkpoint=on_checkpoint,
+                publication=publication,
             ),
             metrics=MetricsService(context, config),
             loss=loss_service,
@@ -433,8 +432,6 @@ class RunBuilder:
         self._construct_loaders(run)
         if loaded is not None:
             restorer.restore_runtime(loaded, run)
-            run.state.run_id = context.run_id
-            run.state.session_id = context.session_id
         self._warm_up(run)
         if loaded is not None:
             restorer.restore_randomness(loaded, run)

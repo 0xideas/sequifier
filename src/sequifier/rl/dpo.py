@@ -87,8 +87,7 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
             lambda: evaluate_dpo(actor, reference, data.validation, phase), **record
         )
 
-    if session.should_evaluate_initial():
-        evaluate(initial=True)
+    session.evaluate_initial(evaluate)
     for update in range(session.transaction + 1, phase.iterations + 1):
         if session.stopping.triggered:
             break
@@ -120,7 +119,7 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
             final=update == phase.iterations,
             training={"training_dpo_loss": loss_total},
             evaluate=evaluate,
-            checkpoint={"batch_order": batches.state_dict()},
+            checkpoint=lambda: {"batch_order": batches.state_dict()},
         )
     return session.finish(
         {"optimizer_steps": session.steps["actor"]},

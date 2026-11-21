@@ -1,40 +1,31 @@
 """Named dataset and part references shared by training algorithms."""
 
-from typing import Optional
+from dataclasses import dataclass
+from typing import Literal, Optional
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import Field, field_validator
 
 from sequifier.config.identifiers import identifier as _identifier
 from sequifier.config.naming import ConfigModel
 from sequifier.typechecking import beartype
 
 
-def phase_sources(phase):
-    """All authored references, including held-out and preference sources."""
-    if phase.algorithm in {"ppo", "grpo"}:
-        return []
-    refs = [] if phase.algorithm == "dpo" else list(phase.sources)
-    if phase.evaluation is not None:
-        refs.extend(phase.evaluation.sources or [])
-    if phase.algorithm == "dpo":
-        refs.append(phase.preferences)
-    return refs
-
-
-def validate_source(config, source, usage):
-    name, _, part = source.partition(".")
-    if name not in config.dataset_training or (
-        part and part not in config.dataset_training[name].parts
-    ):
-        raise ValueError(f"unknown {usage} source {source!r}")
-
-
-class TrainingSourceSpecModel(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
+class SourceReference(ConfigModel):
     source: str
-    selection_weight: Optional[float] = Field(default=None, gt=0)
-    batches_per_selection: Optional[int] = Field(default=None, gt=0)
+
+    @property
+    def dataset(self) -> str:
+        return self.source.partition(".")[0]
+
+    @property
+    def part(self) -> str | None:
+        return self.source.partition(".")[2] or None
+
+    def validate_location(self, datasets, usage):
+        if self.dataset not in datasets or (
+            self.part and self.part not in datasets[self.dataset].parts
+        ):
+            raise ValueError(f"unknown {usage} source {self.source!r}")
 
     @field_validator("source")
     @classmethod
@@ -46,3 +37,33 @@ class TrainingSourceSpecModel(ConfigModel):
         for part in parts:
             _identifier(part, "Source reference component")
         return value
+
+
+class TrainingSourceSpecModel(SourceReference):
+    selection_weight: Optional[float] = Field(default=None, gt=0)
+    batches_per_selection: Optional[int] = Field(default=None, gt=0)
+
+
+SourceKind = Literal["sequence", "preference", "none"]
+
+
+@dataclass(frozen=True)
+class PhaseSources:
+    kind: SourceKind
+    training: tuple[TrainingSourceSpecModel, ...] = ()
+    evaluation: tuple[TrainingSourceSpecModel, ...] = ()
+
+    @classmethod
+    def from_phase(cls, phase):
+        kind = phase.source_kind
+        if kind == "none":
+            return cls(kind)
+        training = (
+            (phase.preferences,) if kind == "preference" else tuple(phase.sources)
+        )
+        evaluation = tuple(phase.evaluation.sources or ()) if phase.evaluation else ()
+        return cls(kind, training, evaluation)
+
+    def __iter__(self):
+        yield from self.training
+        yield from self.evaluation

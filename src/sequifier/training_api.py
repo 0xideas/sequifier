@@ -10,7 +10,7 @@ from sequifier.config.phase_controls import Cadence, StoppingConfig
 from sequifier.config.train_config import ResolvedSequifierConfig, SequifierConfig
 from sequifier.integration.contexts import StepIdentity
 from sequifier.integration.controls import TrainingDirective
-from sequifier.training.coordinator import LearningRunResult, run_learning_plan
+from sequifier.training.coordinator import LearningRunResult, run_training
 from sequifier.training.distributed_strategy import (
     DistributedDataParallelStrategy,
     DistributedStrategy,
@@ -39,5 +39,5 @@ __all__ = [
     "SequifierConfig",
     "ResolvedSequifierConfig",
     "LearningRunResult",
-    "run_learning_plan",
+    "run_training",
 ]

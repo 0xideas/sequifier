@@ -13,7 +13,6 @@ from sequifier.io.batch import SequifierInputs
 from sequifier.io.policy_window import checked_policy_features
 from sequifier.io.preprocessing import normalization_statistics
 from sequifier.model.execution import ModelExecution
-from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.model.prediction_distribution import PredictionScales
 from sequifier.rl.action_plan import ActionDecision, ActionExecutionPlan
 from sequifier.rl.joint_distribution import JointActionDistribution
@@ -29,28 +28,20 @@ class Policy(nn.Module):
     execution_config: ModelExecution
     interface_name: str
     network: ComposableTransformerNetwork
-    units: dict[str, str]
     transfer_report: dict | None
     ppo_policy_version: int
     grpo_policy_version: int
 
     def __init__(self):
         super().__init__()
-        self.units = {}
         self.transfer_report = None
 
     @classmethod
-    def from_network(cls, network, execution_config, interface_name: str):
-        interface = execution_config.interface(interface_name)
-        if interface.policy is None:
-            raise ValueError(
-                f"Model interface {interface_name!r} has no policy alignment"
-            )
+    def from_network(cls, network, execution_config, binding: ResolvedPolicyBinding):
         policy = cls()
-        policy.config = interface.policy
-        policy.units = dict(interface.policy.units)
+        policy.config = binding
         policy.execution_config = execution_config
-        policy.interface_name = interface_name
+        policy.interface_name = binding.interface_name
         policy.network = network
         policy._resolve_actions()
         return policy
@@ -58,6 +49,10 @@ class Policy(nn.Module):
     @property
     def interface(self):
         return self.execution_config.interface(self.interface_name)
+
+    @property
+    def units(self) -> dict[str, str]:
+        return self.config.units
 
     @property
     def device(self) -> torch.device:
@@ -120,7 +115,6 @@ class Policy(nn.Module):
             if self.interface.normalize_real_columns
             else {name: dict(values) for name, values in statistics.items()}
         )
-        return
 
     def model_inputs(
         self, inputs: SequifierInputs, *, input_encoding=None
@@ -164,9 +158,8 @@ class Policy(nn.Module):
         return self.distribution(inputs).log_prob(actions)
 
     def validate_inputs(self, inputs: SequifierInputs) -> None:
-        schema = ExecutionSchema.from_interface(
-            self.interface, self.config.context_length
-        )
+        schema = self.config.input_schema
+        assert schema is not None
         expected = {item.key for item in schema.inputs if item.role != "metadata"}
         if set(inputs.inputs) != expected:
             raise ValueError(
@@ -186,9 +179,7 @@ class Policy(nn.Module):
             raise ValueError(
                 "policy histories require left padding followed by valid positions"
             )
-        ExecutionSchema.from_interface(
-            self.interface, self.config.context_length
-        ).validate(inputs.inputs, inputs.metadata)
+        schema.validate(inputs.inputs, inputs.metadata)
         if any(
             value.device != self.device
             for value in [*inputs.inputs.values(), *inputs.metadata.values()]

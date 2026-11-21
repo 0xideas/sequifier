@@ -9,11 +9,13 @@ from typing import Any, Mapping
 from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.artifacts.model_artifact import build_model_artifact
 from sequifier.artifacts.model_export import model_execution_config
+from sequifier.artifacts.phase import PhaseCommit, PhasePublication
 from sequifier.artifacts.run_checkpoint import (
     IntegrationState,
     RunCheckpoint,
     RunCheckpointStore,
     load_run_checkpoint,
+    phase_contract,
 )
 from sequifier.contract_versions import ContractVersions
 from sequifier.integration.contexts import CheckpointSaved, CheckpointSaving
@@ -89,7 +91,6 @@ class CheckpointCompatibility:
         for interface in execution.get("interfaces", {}).values():
             # The loader paths are compared with their owning dataset parts.
             interface.pop("split_paths", None)
-        training = config.runtime_settings
         datasets = {
             name: {
                 "model_interface": dataset.model_interface,
@@ -101,40 +102,28 @@ class CheckpointCompatibility:
             }
             for name, dataset in config.dataset_training.items()
         }
-        phases = [phase.model_dump(mode="python") for phase in config.training_plan]
+        phases = [phase_contract(phase) for phase in config.training_plan]
         for phase in phases:
             phase.pop("trainability_summary", None)
             for source in phase["sources"] + phase["evaluation_sources"]:
                 source.pop("parts", None)
-            for role in phase["optimization"].values():
-                if role["scheduler"]["name"] == "OneCycleLR":
-                    # Recomputed from the phase/data budget before optimizer construction.
-                    role["scheduler"]["arguments"].pop("total_steps", None)
         return {
             "model": execution,
             "initialization_provenance": {
-                "backbone": config.model.backbone.model_dump(
+                "backbone": config.execution.backbone.model_dump(
                     mode="python", exclude={"architecture", "repository"}
                 ),
                 "interfaces": {
                     name: interface.ingestion.model_dump(mode="python")
-                    for name, interface in config.model.interfaces.items()
+                    for name, interface in config.interfaces.items()
                 },
             },
-            "owned_execution": config.ownership.get("run", {}).get("execution", {}),
+            "owned_execution": config.run.execution.model_dump(mode="python"),
             "normalization_by_interface": {
                 name: value.model_dump(mode="python")
                 for name, value in config.normalization_by_interface.items()
             },
-            "source_validation_fractions": config.source_validation_fractions,
-            "resume_training": {
-                "seed": config.seed,
-                "distributed": training.distributed,
-                "data_parallelism": training.data_parallelism,
-                "world_size": training.world_size,
-                "num_workers": training.num_workers,
-                "load_full_data_to_ram": training.load_full_data_to_ram,
-            },
+            "seed": config.seed,
             "datasets": datasets,
             "training_plan": phases,
         }
@@ -188,16 +177,18 @@ class CheckpointService:
         random_state: Any,
         loader_state: LoaderStateService,
         compatibility: CheckpointCompatibility | None = None,
-        on_checkpoint=None,
+        publication: PhasePublication = PhasePublication(),
     ) -> None:
-        self.on_checkpoint = on_checkpoint
+        self.publication = publication
         self.store = store
         self.distributed = distributed
         self.random_state = random_state
         self.loader_state = loader_state
         self.compatibility = compatibility or CheckpointCompatibility()
 
-    def save(self, request: CheckpointRequest, run: Any) -> Path | None:
+    def save(
+        self, request: CheckpointRequest, run: Any, *, commit: PhaseCommit | None = None
+    ) -> Path | None:
         path = self.store.path_for(
             request.suffix, run.state.phase_index, phase_offset=run.state.phase_offset
         )
@@ -233,13 +224,12 @@ class CheckpointService:
             integration_state=IntegrationState(values=integration_state),
             dependencies=run.dependencies.identity,
             training_config=run.config.model_copy(
-                update={"training_plan": [phase.spec() for phase in run.plan.phases]}
+                update={"training_plan": list(run.plan.phases)}
             ),
         )
         self.compatibility.validate(checkpoint)
         written = self.store.save(checkpoint, request.suffix)
-        if self.on_checkpoint is not None:
-            self.on_checkpoint(self.store.latest_path, run.state.phase_commits)
+        self.publication.after_checkpoint(self.store.latest_path, commit)
         run.integrations.emit(
             CheckpointSaved(access=access, identity=request.identity, path=written)
         )
@@ -285,21 +275,17 @@ class CheckpointRestorer:
         optimization.load_non_optimizer_state(loaded.checkpoint.optimization)
 
     def restore_runtime(self, loaded: LoadedRunCheckpoint, run: Any) -> None:
-        from sequifier.training.state import RunState
-
-        restored = RunState.from_state_dict(loaded.checkpoint.run_state)
-        if restored.optimizer_step != loaded.checkpoint.optimization.optimizer_step:
+        if run.state.optimizer_step != loaded.checkpoint.optimization.optimizer_step:
             raise ValueError(
                 "Checkpoint optimizer-step values disagree between run and "
                 "optimization state."
             )
-        run.state = restored
         run.optimization.optimizer_step = run.state.optimizer_step
         run.integrations.load_state_dict(loaded.checkpoint.integration_state.values)
         run.loader_state.load_state_dict(
             run.datasets,
             loaded.checkpoint.loader_state,
-            resume_from_iterator_start=not restored.phase_epoch_complete,
+            resume_from_iterator_start=not run.state.phase_epoch_complete,
         )
 
     def restore_randomness(self, loaded: LoadedRunCheckpoint, run: Any) -> None:

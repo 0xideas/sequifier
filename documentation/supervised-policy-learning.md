@@ -79,9 +79,9 @@ Prepared and sequence/preference parts belong to `dataset_training`. Each phase 
 its batching and role optimization (`model` for supervised; policy roles in the guide).
 All interfaces survive handoff, though shared backbone updates can affect inactive
 interfaces. The coordinator preflights the plan, commits incoming artifacts, and uses
-native checkpoints plus atomic completion receipts. Mixed plans execute locally and
-reject optimizer continuation; compatible native plans follow the
-[continuation rules](configs/train.md#optimization-across-phases).
+native checkpoints plus atomic completion receipts. Mixed plans execute locally. Adjacent
+phases can continue their optimizer under the [continuation rules](configs/train.md#optimization-across-phases).
+Adjacent supervised phases also share compatible best-model history across optimizer resets.
 
 Existing supervised losses retain their meanings. Real `prediction_distributions`
 and `GaussianNLLLoss` opt into the shared distribution implementation; learned scales

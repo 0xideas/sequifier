@@ -1,0 +1,49 @@
+training_plan:
+  phases:
+  - name: group_improvement
+    algorithm: grpo
+    total_groups: 32
+    groups_per_iteration: 2
+    group_size: 4
+    max_steps: 8
+    environment:
+      factory: sequifier.rl.control:CategoricalControlAdapter
+      config:
+        horizon: 8
+    evaluation:
+      environment:
+        factory: sequifier.rl.control:CategoricalControlAdapter
+        config:
+          horizon: 8
+      seeds:
+      - 17
+      - 29
+      - 43
+      - 71
+      max_episode_steps: 8
+      timeout_seconds: 30
+      monitor:
+        metric: score_mean
+        direction: max
+      cadence:
+        iterations: 1
+      batch_size: 1
+      before_phase: false
+      on_snapshot: false
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 1
+run:
+  project_root: .
+  model_name: grpo-control
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export: {}

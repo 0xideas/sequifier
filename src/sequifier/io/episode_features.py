@@ -5,14 +5,9 @@ from dataclasses import replace
 
 import polars as pl
 
-from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_inputs import PolicyFittingSpec
+from sequifier.io.feature_fitting import FeatureStatistics, create_id_map
 from sequifier.io.policy_window import encode_feature
-from sequifier.io.preprocessing import (
-    _finite_mean_and_std,
-    create_id_map,
-    get_combined_statistics,
-)
 from sequifier.trajectory.returns import return_to_go
 
 
@@ -45,50 +40,22 @@ class EpisodeFeatures:
             else [episode.static_inputs[column]]
         )
 
-    def fit_categorical_config(self) -> ResolvedPolicyBinding | PolicyFittingSpec:
+    def fit_categorical_config(self) -> PolicyFittingSpec:
         """Fit only declared raw categorical features, using the training episodes."""
-        values = deepcopy(
-            {
-                "id_maps": self.config.id_maps,
-                "observation_n_classes": self.config.observation_n_classes,
-                "static_n_classes": self.config.static_n_classes,
-            }
-        )
+        if not isinstance(self.config, PolicyFittingSpec):
+            raise ValueError("Feature fitting requires a pre-resolution episode view")
+        id_maps = self.config.id_maps.copy()
+        n_classes = self.config.categorical_n_classes.copy()
         for column in self.config.categorical_columns:
-            if (
-                column in self.config.id_maps
-                or column in self.config.categorical_n_classes
-            ):
+            if column in id_maps or column in n_classes:
                 continue
             vocabulary = set()
             for episode, length in zip(self.episodes, self.lengths):
                 vocabulary.update(self.values(episode, length, column))
-            if not vocabulary:
-                raise ValueError(f"cannot fit empty categorical column {column!r}")
-            if len({isinstance(value, str) for value in vocabulary}) > 1:
-                raise ValueError(
-                    f"{column}: mixed string/numeric category labels are ambiguous"
-                )
-            if any(
-                not isinstance(value, str) and value != int(value)
-                for value in vocabulary
-            ):
-                raise ValueError(
-                    f"{column}: categorical numeric labels must be integers"
-                )
-            mapping = create_id_map(pl.DataFrame({column: sorted(vocabulary)}), column)
-            values["id_maps"][column] = mapping
-            key = (
-                "observation_n_classes"
-                if column in self.config.observation_columns
-                else "static_n_classes"
-            )
-            values[key][column] = max(mapping.values()) + 1
-        if isinstance(self.config, PolicyFittingSpec):
-            return replace(self.config, **values)
-        return ResolvedPolicyBinding.model_validate(
-            {**self.config.model_dump(), **values}
-        )
+            mapping = create_id_map(vocabulary, column)
+            id_maps[column] = mapping
+            n_classes[column] = max(mapping.values()) + 1
+        return replace(self.config, id_maps=id_maps, categorical_n_classes=n_classes)
 
     def validate_features(self) -> None:
         if self._features_validated:
@@ -126,23 +93,15 @@ class EpisodeFeatures:
 
     def normalization_statistics(self):
         """Use the same stable sample moments as supervised preprocessing."""
-        moments = {}
+        statistics = FeatureStatistics()
         columns = self.config.observation_columns + self.config.static_columns
         for episode, length in zip(self.episodes, self.lengths):
             for column in columns:
                 if column in self.config.categorical_n_classes:
                     continue
                 values = self.values(episode, length, column)
-                mean, std = _finite_mean_and_std(pl.Series(column, values), column)
-                size = len(values)
-                if column in moments:
-                    count, old_mean, old_std = moments[column]
-                    mean, std = get_combined_statistics(
-                        size, mean, std, count, old_mean, old_std
-                    )
-                    size += count
-                moments[column] = size, mean, std
+                statistics.observe_real(pl.Series(column, values))
         return {
-            column: {"mean": mean, "std": std}
-            for column, (_, mean, std) in moments.items()
+            column: {"mean": values["mean"], "std": values["std"]}
+            for column, values in statistics.moments.items()
         }

@@ -10,6 +10,7 @@ from itertools import groupby, islice
 from pathlib import Path
 from shutil import rmtree
 from tempfile import mkdtemp
+from typing import Literal
 
 import numpy as np
 import polars as pl
@@ -20,11 +21,16 @@ import torch
 from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
 from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.fingerprints import file_checksum
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES, StoredWindowLayout
 from sequifier.io.preprocessing import normalization_statistics
 from sequifier.io.pt_payload import StoredTensorBatch
 from sequifier.io.sequence import ordered_sequence_rows
-from sequifier.trajectory.sources import file_checksum
+from sequifier.io.window_placement import (
+    PredictionAlignment,
+    WindowPlacement,
+    window_count,
+)
 
 DATASET_FORMAT = "sequifier.indexed-sequences"
 VIEW_FORMAT = "sequifier.sequence-view"
@@ -64,37 +70,43 @@ def is_indexed_view(path):
     return isinstance(values, dict) and values.get("format") == VIEW_FORMAT
 
 
+def prepared_split_form(path: Path) -> Literal["file", "folder", "indexed"]:
+    if path.is_dir():
+        return "folder"
+    if not path.is_file():
+        raise ValueError(f"Training data path {str(path)!r} does not exist")
+    return "indexed" if is_indexed_view(path) else "file"
+
+
+def _index_rows(sequence, placement, start_index=0):
+    for index, (start, pad) in enumerate(placement, start_index):
+        yield {
+            "sequence": sequence,
+            "id": index,
+            "start": start,
+            "pad": pad,
+            "low": placement.low,
+            "high": placement.high,
+            "curriculum": [],
+        }
+
+
 class SplitIndexWriter:
     def __init__(self, path):
         self.path = path
-        self.ranges = {}
+        self.ranges = []
         self.count = 0
         self.buffer = []
         self.writer = pq.ParquetWriter(path, WINDOW_INDEX_SCHEMA)
 
-    def add(self, sequence_id, view):
-        self.ranges[sequence_id] = [
-            int(view.split_start_item_positions[0]),
-            int(view.split_end_item_positions[0]),
-        ]
-        for i in range(len(view.subsequence_ids)):
-            self.buffer.append(
-                {
-                    "sequence": sequence_id,
-                    "id": int(view.subsequence_ids[i]),
-                    "start": int(view.start_item_positions[i]),
-                    "pad": int(view.left_pad_lengths[i]),
-                    "low": int(view.split_start_item_positions[i]),
-                    "high": int(view.split_end_item_positions[i]),
-                    "curriculum": (
-                        view.sample_positions[i].tolist()
-                        if view.sample_positions is not None
-                        else []
-                    ),
-                }
-            )
+    def add(self, sequence_id, placement, samples):
+        self.ranges.append((sequence_id, placement.low, placement.high))
+        for row in _index_rows(sequence_id, placement):
+            if samples is not None:
+                row["curriculum"] = samples[row["id"]].tolist()
+            self.buffer.append(row)
             self.count += 1
-            if len(self.buffer) == ROW_GROUP_SIZE:
+            if len(self.buffer) == WINDOW_CHUNK_SIZE:
                 self.flush()
 
     def flush(self):
@@ -165,19 +177,17 @@ class IndexedSequenceWriter:
             "group_id": group_id,
             "content_key": content_key,
         }
-        for split, view in windows.items():
-            if view is None:
-                continue
+        for split, (placement, samples) in windows.items():
             name = str(split)
             if name not in self.views:
                 self.views[name] = SplitIndexWriter(
                     self.root / f"{name}-windows.parquet"
                 )
-            self.views[name].add(sequence_id, view)
+            self.views[name].add(sequence_id, placement, samples)
 
     def split_sequence_ids(self, split):
         view = self.views.get(str(split))
-        return set(view.ranges) if view else set()
+        return {sequence for sequence, _, _ in view.ranges} if view else set()
 
     def write_static(self, static):
         path = self.root / "static.parquet"
@@ -236,7 +246,7 @@ class IndexedSequenceWriter:
                     "view": name,
                     "windows": index.path.name if index else None,
                     "window_count": index.count if index else 0,
-                    "ranges": index.ranges if index else {},
+                    "ranges": index.ranges if index else [],
                 },
             )
         self.files.extend(self.root.glob("*.split.json"))
@@ -449,9 +459,24 @@ class IndexedView:
                     )
 
     def split_bounds(self):
-        return {
-            entry["sequence"]: (entry["low"], entry["high"]) for entry in self.entries()
-        }
+        return {sequence: (low, high) for sequence, low, high in self.view["ranges"]}
+
+    @property
+    def is_fitting_split(self) -> bool:
+        return (
+            self.view["view"] != "predict"
+            and int(self.view["view"]) in self._metadata.fit_split_indices
+        )
+
+    @cached_property
+    def fitted_sequences(self) -> frozenset[int]:
+        return frozenset(
+            sequence
+            for split in self._metadata.fit_split_indices
+            for sequence in IndexedView.load(
+                self._metadata.split_paths[split]
+            ).split_bounds()
+        )
 
     def selection_keys(self):
         keys = {
@@ -474,69 +499,10 @@ class IndexedView:
         base = metadata.layout_for_split(index)
         offset = max(base.max_target_offset, window_view.target_offset)
         width = window_view.context_length + offset
-        if index in metadata.prediction_aligned_splits:
-            width += (metadata.prediction_alignment_steps - 1) * (
-                metadata.prediction_length or 1
-            )
+        alignment = PredictionAlignment.for_split(metadata, index)
+        if alignment:
+            width = alignment.required_width(window_view.context_length, offset)
         return StoredWindowLayout(max(width, base.window_length), offset, base.version)
-
-    def entries(self, width=None):
-        windows = self.view["windows"]
-        rows = pl.read_parquet(self.root / windows).to_dicts() if windows else []
-        if width is None:
-            return rows
-        metadata = self.metadata()
-        index = int(self.view["view"])
-        if width == metadata.width_for_split(index):
-            return rows
-        return list(self._place_windows(rows, index, metadata, width))
-
-    def _place_windows(self, rows, index, metadata, width):
-        from sequifier.preprocess import PredictionAlignment, get_subsequence_starts
-
-        stride = getattr(metadata, "window_stride", None) or width
-        curriculum = getattr(metadata, "indexed_curriculum_columns", [])
-        aligned = index in metadata.prediction_aligned_splits
-        for sequence, entries in groupby(rows, key=lambda row: row["sequence"]):
-            first = next(entries)
-            low, high = first["low"], first["high"]
-            start = (
-                self.dataset["sequences"][str(sequence)]["position"] if aligned else low
-            )
-            if aligned:
-                alignment = PredictionAlignment(
-                    (index,),
-                    metadata.prediction_length,
-                    metadata.target_offset,
-                    metadata.prediction_alignment_steps,
-                )
-                offsets = alignment.starts(low - start, high - start, width)
-            else:
-                span = high - start
-                pad = max(0, width - span)
-                offsets = get_subsequence_starts(span + pad, width, stride) - pad
-            for subsequence, offset in enumerate(offsets):
-                position = start + int(offset)
-                pad = max(0, start - position)
-                values = []
-                if curriculum:
-                    selected = self.read(
-                        sequence, position + pad, position + width, curriculum
-                    )
-                    if any(selected[column].n_unique() != 1 for column in curriculum):
-                        raise ValueError(
-                            f"Curriculum values vary within window for sequence {sequence}"
-                        )
-                    values = selected.row(0)
-                yield {
-                    "sequence": sequence,
-                    "id": subsequence,
-                    "start": position,
-                    "pad": pad,
-                    "low": low,
-                    "high": high,
-                    "curriculum": values,
-                }
 
     def prediction_entries(self, context, offset, stride, right_edge, forecast):
         """Build prediction coordinates for a dataset without training splits."""
@@ -567,7 +533,7 @@ class IndexedView:
                     "curriculum": [],
                 }
 
-    def read(self, sequence, start=None, end=None, columns=None):
+    def read(self, sequence, start=None, end=None, columns=None) -> pl.DataFrame:
         record = self.dataset["sequences"][str(sequence)]
         first = record["position"]
         low = 0 if start is None else max(0, start - first)
@@ -580,20 +546,15 @@ class IndexedView:
             stop_group = bisect_right(offsets, high - 1)
             groups = range(first_group, stop_group)
             table = file.read_row_groups(list(groups), columns=columns)
-            return pl.from_arrow(table.slice(low - offsets[first_group], high - low))
+            return pl.DataFrame(table.slice(low - offsets[first_group], high - low))
 
     def tensor_batches(self, metadata, columns, width, entries=None):
-        if entries is None and self.view["windows"] is not None:
-            base = self.metadata().width_for_split(int(self.view["view"]))
-            if width == base:
-                with pq.ParquetFile(self.root / self.view["windows"]) as index:
-                    for chunk in index.iter_batches(batch_size=WINDOW_CHUNK_SIZE):
-                        yield self.tensor_batch(
-                            chunk.to_pylist(), metadata, columns, width
-                        )
-                return
-        rows = iter(self.entries(width) if entries is None else entries)
-        while chunk := list(islice(rows, WINDOW_CHUNK_SIZE)):
+        if entries is None:
+            chunks = WindowIndex(self, width).chunks()
+        else:
+            rows = iter(entries)
+            chunks = iter(lambda: list(islice(rows, WINDOW_CHUNK_SIZE)), [])
+        for chunk in chunks:
             yield self.tensor_batch(chunk, metadata, columns, width)
 
     def tensor_batch(self, entries, metadata: DatasetMetadata, columns, width):
@@ -683,34 +644,100 @@ class IndexedView:
         )
 
 
+class WindowIndex:
+    """Count and read bounded slices of stored or resized split windows."""
+
+    def __init__(self, view: IndexedView, width: int):
+        self.view = view
+        self.width = width
+        metadata = view._metadata
+        split = int(view.view["view"])
+        self.stored = width == metadata.width_for_split(split)
+        self.stride = getattr(metadata, "window_stride", None) or width
+        self.curriculum = getattr(metadata, "indexed_curriculum_columns", ())
+        self.alignment = PredictionAlignment.for_split(metadata, split)
+        self.ends = []
+        self.ranges = view.view["ranges"]
+        if self.stored:
+            self.count = view.view["window_count"]
+        else:
+            self.count = 0
+            for _, low, high in self.ranges:
+                self.count += window_count(
+                    high - low, width, self.stride, self.alignment
+                )
+                self.ends.append(self.count)
+
+    @property
+    def chunk_count(self):
+        return (self.count + WINDOW_CHUNK_SIZE - 1) // WINDOW_CHUNK_SIZE
+
+    def chunks(self, *, coordinates_only=False):
+        if self.stored and self.count:
+            columns = ["pad", "start", "low"] if coordinates_only else None
+            with pq.ParquetFile(self.view.root / self.view.view["windows"]) as index:
+                for group in range(index.num_row_groups):
+                    yield index.read_row_group(group, columns=columns).to_pylist()
+            return
+        for group in range(self.chunk_count):
+            yield self._resized_chunk(group, coordinates_only)
+
+    def read_chunk(self, group):
+        if self.stored:
+            with pq.ParquetFile(self.view.root / self.view.view["windows"]) as index:
+                return index.read_row_group(group).to_pylist()
+        return self._resized_chunk(group, False)
+
+    def _resized_chunk(self, group, coordinates_only):
+        start = group * WINDOW_CHUNK_SIZE
+        end = min(start + WINDOW_CHUNK_SIZE, self.count)
+        rows = []
+        part = bisect_right(self.ends, start)
+        while start < end:
+            sequence, low, high = self.ranges[part]
+            base = self.ends[part - 1] if part else 0
+            stop = min(end, self.ends[part])
+            placement = WindowPlacement.for_split(
+                self.view.dataset["sequences"][str(sequence)]["position"],
+                low,
+                high,
+                self.width,
+                self.stride,
+                self.alignment,
+                begin=start - base,
+                end=stop - base,
+            )
+            for row in _index_rows(sequence, placement, start - base):
+                if self.curriculum and not coordinates_only:
+                    first = row["start"]
+                    selected = self.view.read(
+                        sequence,
+                        first + row["pad"],
+                        first + self.width,
+                        self.curriculum,
+                    )
+                    if any(
+                        selected[column].n_unique() != 1 for column in self.curriculum
+                    ):
+                        raise ValueError(
+                            f"Curriculum values vary within window for sequence {sequence}"
+                        )
+                    row["curriculum"] = selected.row(0)
+                rows.append(row)
+            start, part = stop, part + 1
+        return rows
+
+
 def feature_contract_id(path):
     """Hash feature semantics independently of split and media locations."""
     metadata = load_dataset_metadata(str(path))
-    values = metadata.model_dump(
-        mode="json",
-        include={
-            "column_data_types",
-            "static_columns",
-            "depth_layouts",
-            "id_maps",
-            "n_classes",
-            "cardinality_config",
-            "special_token_ids",
-            "selected_columns_statistics",
-            "normalize_real_columns",
-            "time_alignment_column",
-        },
+    values = metadata.feature_contract(
+        metadata.column_data_types,
+        metadata.image_sources,
+        use_prefix=metadata.preconditioning_image is not None,
+        raw_inputs=True,
     )
-    values["raw_mask_column"] = getattr(metadata, "raw_mask_column", None)
-    values["image_sources"] = {
-        name: source.compatibility_signature()
-        for name, source in metadata.image_sources.items()
-    }
-    prefix = metadata.preconditioning_image
-    if prefix is not None:
-        values["preconditioning_image"] = prefix.model_dump(
-            mode="json", exclude={"paths", "signature"}
-        )
+    values["static_columns"] = metadata.static_columns
     encoded = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 

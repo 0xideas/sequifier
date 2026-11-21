@@ -5,7 +5,7 @@ from pathlib import Path
 
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.config.policy_train_config import SequenceSourceConfig
-from sequifier.io.actions import action_component_key, action_latent_key
+from sequifier.io.action_record import action_record_layout
 from sequifier.io.sequence import SequenceEpisode, TransitionColumns
 from sequifier.trajectory.schema import Trajectory, validate_trajectory
 from sequifier.trajectory.sources import ResolvedSequenceSource, resolve_source
@@ -27,6 +27,7 @@ def sequence_from_trajectory(
         )
     if episode.prediction_columns != policy.action_columns:
         raise ValueError("recorded actions do not match the policy action column")
+    layout = action_record_layout(policy)
     steps = episode.transitions
     return SequenceEpisode(
         episode_id=episode.episode_id,
@@ -36,17 +37,7 @@ def sequence_from_trajectory(
             for column in episode.seed.observations
         },
         actions=tuple(
-            {
-                **step.predictions,
-                **{
-                    action_latent_key(name, policy): value
-                    for name, value in step.action_latents.items()
-                },
-                **{
-                    action_component_key(name, policy): value
-                    for name, value in step.action_components.items()
-                },
-            }
+            layout.pack(step.predictions, step.action_latents, step.action_components)
             for step in steps
         ),
         static_inputs=episode.seed.static_inputs,
@@ -82,7 +73,7 @@ def source_episodes(
     resolved: ResolvedSequenceSource = (
         resolve_source(source) if isinstance(source, SequenceSourceConfig) else source
     )
-    source_config = resolved.source
+    source_config = resolved.declaration
     if resolved.kind == "trajectory":
         return [
             TrajectoryReference(
@@ -93,6 +84,4 @@ def source_episodes(
             )
             for path in resolved.paths
         ]
-    return table_episodes(
-        source_config, policy, resolved.paths, prepared=resolved.kind == "prepared"
-    )
+    return table_episodes(resolved, policy)

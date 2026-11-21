@@ -2,7 +2,7 @@
 
 import torch
 
-from sequifier.rl.batching import MetricTotals, shuffled_groups
+from sequifier.rl.batching import MetricTotals, optimize_groups
 from sequifier.rl.clipped_objective import clipped_policy_objective
 
 
@@ -54,55 +54,46 @@ def update_grpo(session, buffer):
         "old_policy_approximate_kl",
         "clip_fraction",
     )
-    scored, stopped = 0, False
-    size = phase.batch_size * phase.accumulation_batches
-    epoch = -1
-    for epoch in range(phase.optimization_epochs):
-        for indices in shuffled_groups(len(trajectories), size, session.sampler):
-            if phase.old_policy_target_kl is not None:
-                old_kl = 0.0
-                with torch.no_grad():
-                    for i in indices:
-                        trajectory = trajectories[i]
-                        for inputs, actions, old, ref in trajectory.batches(
-                            actor, phase.scoring_chunk_size
-                        ):
-                            _, _, kl, _ = grpo_objective(
-                                actor.evaluate_actions(inputs, actions),
-                                old,
-                                ref,
-                                trajectory.advantage,
-                                phase,
-                            )
-                            old_kl += (
-                                float(kl.sum()) / len(trajectory.actions) / len(indices)
-                            )
-                            del inputs, actions, old, ref
-                if old_kl > phase.old_policy_target_kl:
-                    stopped = True
-                    break
-            session.zero_grad()
-            for i in indices:
-                trajectory = trajectories[i]
-                for inputs, actions, old, ref in trajectory.batches(
-                    actor, phase.scoring_chunk_size
-                ):
-                    values = grpo_objective(
-                        actor.evaluate_actions(inputs, actions),
-                        old,
-                        ref,
-                        trajectory.advantage,
-                        phase,
-                    )
-                    (
-                        values[0].sum() / len(trajectory.actions) / len(indices)
-                    ).backward()
-                    totals.add(dict(zip(totals, values)), len(trajectory.actions))
-                    del inputs, actions, old, ref
-                scored += 1
-            session.step()
-        if stopped:
-            break
+    scored = 0
+
+    def group_kl(indices):
+        old_kl = 0.0
+        for i in indices:
+            trajectory = trajectories[i]
+            for inputs, actions, old, ref in trajectory.batches(
+                actor, phase.scoring_chunk_size
+            ):
+                _, _, kl, _ = grpo_objective(
+                    actor.evaluate_actions(inputs, actions),
+                    old,
+                    ref,
+                    trajectory.advantage,
+                    phase,
+                )
+                old_kl += float(kl.sum()) / len(trajectory.actions) / len(indices)
+                del inputs, actions, old, ref
+        return old_kl
+
+    def backward(indices):
+        nonlocal scored
+        for i in indices:
+            trajectory = trajectories[i]
+            for inputs, actions, old, ref in trajectory.batches(
+                actor, phase.scoring_chunk_size
+            ):
+                values = grpo_objective(
+                    actor.evaluate_actions(inputs, actions),
+                    old,
+                    ref,
+                    trajectory.advantage,
+                    phase,
+                )
+                (values[0].sum() / len(trajectory.actions) / len(indices)).backward()
+                totals.add(dict(zip(totals, values)), len(trajectory.actions))
+                del inputs, actions, old, ref
+            scored += 1
+
+    epochs, stopped, _ = optimize_groups(session, len(trajectories), group_kl, backward)
     if not scored:
         raise ValueError("GRPO old-policy KL stopped all optimizer transactions")
     buffer.consume()
@@ -110,6 +101,6 @@ def update_grpo(session, buffer):
     return {
         **totals.means(scored),
         "optimizer_steps": session.steps["actor"],
-        "optimization_epochs": epoch + 1,
+        "optimization_epochs": epochs,
         "old_policy_kl_stopped": stopped,
     }

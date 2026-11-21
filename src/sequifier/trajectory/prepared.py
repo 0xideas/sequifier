@@ -1,32 +1,32 @@
 """Reconstruct split-owned decisions from overlapping prepared histories."""
 
-from pathlib import Path
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import polars as pl
 
-from sequifier.config.metadata import load_dataset_metadata
-from sequifier.config.policy_train_config import SequenceSourceConfig
+if TYPE_CHECKING:
+    from sequifier.trajectory.sources import ResolvedSequenceSource
 
 
-def prepared_table(
-    paths: tuple[Path, ...], source: SequenceSourceConfig
-) -> pl.DataFrame:
+def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
     """Recover unique positions from existing windows, validating overlaps.
 
     Split target bounds select decisions. A preceding action may be recovered
     from stored context, but observations outside the split are not targets.
     """
-    if source.metadata_config_path is None:
+    metadata = source.metadata
+    if metadata is None:
         raise ValueError("prepared histories require metadata_config_path")
     from sequifier.config.depth_layout import depth_mask_metadata_key
     from sequifier.helpers import PANDAS_TO_TORCH_TYPES, read_data
     from sequifier.io.pt_payload import load_pt_payload, tabular_tensor_batch
 
-    metadata = load_dataset_metadata(source.metadata_config_path)
-    split_index = source.selected_split_index
+    split_index = source.declaration.split_index
 
     rows = {}
-    for path in paths:
+    for path in source.paths:
         if path.suffix.lower() == ".pt":
             batch = load_pt_payload(
                 path, layouts=metadata.depth_layouts, n_classes=metadata.n_classes

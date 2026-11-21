@@ -1,9 +1,8 @@
 """Typed configuration for model-parameter initialization overrides."""
 
-import math
-from typing import Annotated, Any, Literal, TypeAlias, Union
+from typing import Annotated, Literal, TypeAlias, Union
 
-from pydantic import ConfigDict, Field, RootModel, field_serializer, model_validator
+from pydantic import Field, RootModel, field_serializer, model_validator
 
 from sequifier.config.layer_groups import LayerGroup
 from sequifier.config.naming import ConfigModel
@@ -15,8 +14,6 @@ InitializationTarget: TypeAlias = tuple[LayerGroup, ParameterKind]
 
 class _InitializationMethod(ConfigModel):
     """Base class for strictly validated initialization methods."""
-
-    model_config = ConfigDict(extra="forbid")
 
 
 class PreserveInitialization(_InitializationMethod):
@@ -66,18 +63,31 @@ class XavierNormalInitialization(_InitializationMethod):
         return "xavier_normal"
 
 
-class KaimingUniformInitialization(_InitializationMethod):
+class _KaimingInitialization(_InitializationMethod):
+    a: float = 0.0
+    mode: Literal["fan_in", "fan_out"] = "fan_in"
+    nonlinearity: Literal[
+        "linear",
+        "conv1d",
+        "conv2d",
+        "conv3d",
+        "conv_transpose1d",
+        "conv_transpose2d",
+        "conv_transpose3d",
+        "sigmoid",
+        "tanh",
+        "relu",
+        "leaky_relu",
+        "selu",
+    ] = "leaky_relu"
+
+
+class KaimingUniformInitialization(_KaimingInitialization):
     method: Literal["kaiming_uniform"]
-    a: float = 0.0
-    mode: Literal["fan_in", "fan_out"] = "fan_in"
-    nonlinearity: str = "leaky_relu"
 
 
-class KaimingNormalInitialization(_InitializationMethod):
+class KaimingNormalInitialization(_KaimingInitialization):
     method: Literal["kaiming_normal"]
-    a: float = 0.0
-    mode: Literal["fan_in", "fan_out"] = "fan_in"
-    nonlinearity: str = "leaky_relu"
 
 
 class ConstantInitialization(_InitializationMethod):
@@ -122,8 +132,6 @@ InitializationMethodConfig: TypeAlias = Annotated[
 class LayerGroupInitialization(ConfigModel):
     """Optional weight and bias overrides for one semantic layer group."""
 
-    model_config = ConfigDict(extra="forbid")
-
     weight: InitializationMethodConfig | None = None
     bias: InitializationMethodConfig | None = None
 
@@ -159,141 +167,3 @@ class ModelInitializationConfig(RootModel[dict[LayerGroup, LayerGroupInitializat
             for group, initialization in self.root.items()
             for parameter_kind in initialization.parameter_kinds()
         }
-
-
-class InitializationMethodCandidates(ConfigModel):
-    """Candidate initialization methods for one weight or bias group."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    candidates: list[InitializationMethodConfig] = Field(..., min_length=1)
-
-
-InitializationMethodSamplingConfig: TypeAlias = Union[
-    InitializationMethodConfig,
-    InitializationMethodCandidates,
-]
-
-
-class LayerGroupInitializationSampling(ConfigModel):
-    """Fixed or sampled weight and bias initialization for one layer group."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    weight: InitializationMethodSamplingConfig | None = None
-    bias: InitializationMethodSamplingConfig | None = None
-
-    def parameter_kinds(self) -> tuple[ParameterKind, ...]:
-        kinds: list[ParameterKind] = []
-        if self.weight is not None:
-            kinds.append("weight")
-        if self.bias is not None:
-            kinds.append("bias")
-        return tuple(kinds)
-
-    @model_validator(mode="after")
-    @beartype
-    def validate_not_empty(self):
-        if self.weight is None and self.bias is None:
-            raise ValueError("layer initialization must configure weight or bias")
-        return self
-
-
-class ModelInitializationSamplingConfig(
-    RootModel[dict[LayerGroup, LayerGroupInitializationSampling]]
-):
-    """Hyperparameter sampling configuration for initialization overrides."""
-
-    root: dict[LayerGroup, LayerGroupInitializationSampling] = Field(
-        default_factory=dict
-    )
-
-    @staticmethod
-    @beartype
-    def _validation_method(
-        value: InitializationMethodSamplingConfig,
-    ) -> InitializationMethodConfig:
-        if isinstance(value, InitializationMethodCandidates):
-            return value.candidates[0].model_copy(deep=True)
-        return value.model_copy(deep=True)
-
-    @staticmethod
-    @beartype
-    def _sample_method(
-        trial: Any,
-        name: str,
-        value: InitializationMethodSamplingConfig,
-    ) -> InitializationMethodConfig:
-        if not isinstance(value, InitializationMethodCandidates):
-            return value.model_copy(deep=True)
-        candidate_index = int(
-            trial.suggest_categorical(
-                name,
-                list(range(len(value.candidates))),
-            )
-        )
-        return value.candidates[candidate_index].model_copy(deep=True)
-
-    @beartype
-    def validation_config(self) -> ModelInitializationConfig:
-        """Build a concrete config from the first value in every candidate list."""
-
-        values: dict[LayerGroup, LayerGroupInitialization] = {}
-        for group, sampling in self.root.items():
-            values[group] = LayerGroupInitialization(
-                weight=(
-                    self._validation_method(sampling.weight)
-                    if sampling.weight is not None
-                    else None
-                ),
-                bias=(
-                    self._validation_method(sampling.bias)
-                    if sampling.bias is not None
-                    else None
-                ),
-            )
-        return ModelInitializationConfig(values)
-
-    @beartype
-    def sample_trial(
-        self,
-        trial: Any,
-        parameter_prefix: str = "initialization",
-    ) -> ModelInitializationConfig:
-        """Sample candidate methods and return one concrete initialization config."""
-
-        values: dict[LayerGroup, LayerGroupInitialization] = {}
-        for group, sampling in self.root.items():
-            group_prefix = f"{parameter_prefix}_{group.replace('.', '_')}"
-            values[group] = LayerGroupInitialization(
-                weight=(
-                    self._sample_method(
-                        trial,
-                        f"{group_prefix}_weight_idx",
-                        sampling.weight,
-                    )
-                    if sampling.weight is not None
-                    else None
-                ),
-                bias=(
-                    self._sample_method(
-                        trial,
-                        f"{group_prefix}_bias_idx",
-                        sampling.bias,
-                    )
-                    if sampling.bias is not None
-                    else None
-                ),
-            )
-        return ModelInitializationConfig(values)
-
-    @beartype
-    def grid_size(self) -> int:
-        """Return the cartesian count of configured initialization candidates."""
-
-        candidate_counts = []
-        for sampling in self.root.values():
-            for value in (sampling.weight, sampling.bias):
-                if isinstance(value, InitializationMethodCandidates):
-                    candidate_counts.append(len(value.candidates))
-        return math.prod(candidate_counts)

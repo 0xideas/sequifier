@@ -75,12 +75,19 @@ class RoleOptimizationConfig(ConfigModel):
             raise ValueError(str(error)) from error
         return self
 
-    def continuation_settings(self):
-        """Compare optimizer settings independently of optional budget assertions."""
-        values = self.model_dump(mode="python")
-        if self.scheduler.name == "OneCycleLR":
-            values["scheduler"]["arguments"].pop("total_steps", None)
-        return values
+    def compatibility_settings(self, *, compare_budget: bool = True):
+        """OneCycle budgets derived from the phase are validated separately."""
+        exclude = (
+            {"scheduler": {"arguments": {"total_steps"}}}
+            if self.scheduler.name == "OneCycleLR"
+            and not (compare_budget and self.has_update_budget_override)
+            else None
+        )
+        return self.model_dump(mode="json", exclude=exclude)
+
+    @property
+    def has_update_budget_override(self) -> bool:
+        return False
 
     def validate_budget(self, step_budget):
         if (
@@ -169,6 +176,14 @@ class SupervisedOptimizationConfig(RoleOptimizationConfig):
             name="StepLR", arguments={"step_size": 1, "gamma": 0.99}
         )
     )
+
+    @property
+    def has_update_budget_override(self) -> bool:
+        return (
+            self.scheduler_step_on == "optimizer_step"
+            and self.scheduler.name == "OneCycleLR"
+            and self.scheduler.arguments.get("total_steps") is not None
+        )
 
     @model_validator(mode="after")
     def validate_supervised_scheduler(self):

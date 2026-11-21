@@ -166,7 +166,7 @@ class LossService:
                 # range before the decoder lookup and any hash-code encoding.
                 safe_global_ids = global_ids.masked_fill(~flat_mask, 0)
                 lookup = torch.tensor(
-                    dataset.runtime_metadata.target_global_to_decoder[target],
+                    dataset.interface.target_global_to_decoder[target],
                     device=global_ids.device,
                 )
                 target_for_loss = lookup[safe_global_ids]
@@ -213,7 +213,9 @@ class LossService:
                     sums[target] = sum(component_sums) / len(component_sums)
                     for index, value in enumerate(component_sums):
                         sums[f"@hash/{target}/{index}"] = value
-                    weight = float((dataset.loss_weights or {}).get(target, 1.0))
+                    weight = float(
+                        (dataset.learning.loss_weights or {}).get(target, 1.0)
+                    )
                     scaled = tuple(
                         value
                         * (weight / len(component_sums))
@@ -231,7 +233,7 @@ class LossService:
                         )
                     continue
                 logits_for_loss = logits.float().reshape(
-                    -1, dataset.runtime_metadata.target_n_classes[target]
+                    -1, dataset.interface.target_n_classes[target]
                 )
             elif kind == "real":
                 logits_for_loss = logits.float().reshape(-1)
@@ -292,7 +294,7 @@ class LossService:
                         f"{raw.numel()} != {flat_mask.numel()}."
                     )
                 sums[target] = raw.reshape(-1).masked_select(flat_mask).sum()
-            weight = float((dataset.loss_weights or {}).get(target, 1.0))
+            weight = float((dataset.learning.loss_weights or {}).get(target, 1.0))
             if weight == 0.0:
                 components[target] = sums[target].detach().new_zeros(())
                 continue
@@ -375,14 +377,15 @@ class LossService:
         target_losses = {}
         for target in targets:
             if target in logical_targets:
-                weight = float((dataset.loss_weights or {}).get(target, 1.0))
+                weight = float((dataset.learning.loss_weights or {}).get(target, 1.0))
             else:
                 logical = target[len("@hash/") :].rsplit("/", 1)[0]
                 width_count = len(
                     dataset.interface.categorical_hash_contracts[logical]["widths"]
                 )
                 weight = (
-                    float((dataset.loss_weights or {}).get(logical, 1.0)) / width_count
+                    float((dataset.learning.loss_weights or {}).get(logical, 1.0))
+                    / width_count
                 )
             target_losses[target] = sums[target] / count * weight
         zero = next(iter(sums.values())).new_zeros(())

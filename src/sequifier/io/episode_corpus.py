@@ -12,6 +12,7 @@ from sequifier.io.policy_window import action_index
 from sequifier.io.sequence import SequenceEpisode
 from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.sources import ResolvedSequenceSource
+from sequifier.trajectory.tables import TableEpisodeReference
 
 
 def _load(source) -> SequenceEpisode:
@@ -123,6 +124,11 @@ class EpisodeView:
     def metadata(self, index):
         corpus, position = self.entries[index]
         return corpus.records.metadata[position]
+
+    def used_for_fitting(self, index):
+        corpus, position = self.entries[index]
+        source = corpus.records.sources[position]
+        return isinstance(source, TableEpisodeReference) and source.used_for_fitting
 
     def subset(self, indices):
         return EpisodeView([self.entries[i] for i in indices])

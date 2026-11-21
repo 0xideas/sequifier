@@ -64,11 +64,7 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
             **{phase.evaluation.monitor.metric: score},
         )
 
-    if session.should_evaluate_initial():
-        session.record_evaluation(
-            evaluate_imitation(actor, data.validation, phase.evaluation.batch_size),
-            initial=True,
-        )
+    session.evaluate_initial(evaluate)
     while batches.epoch < phase.epochs and not session.stopping.triggered:
         group = batches.next()
         session.zero_grad()
@@ -88,7 +84,7 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
             final=batches.epoch == phase.epochs,
             training={"training_action_nll": total},
             evaluate=evaluate,
-            checkpoint={"batch_order": batches.state_dict()},
+            checkpoint=lambda: {"batch_order": batches.state_dict()},
         )
     return session.finish(
         {"optimizer_steps": session.steps["actor"], "epochs": batches.epoch},

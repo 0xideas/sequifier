@@ -3,9 +3,10 @@
 from copy import deepcopy
 from pathlib import Path
 
+from sequifier.artifacts.state_dict import weight_fingerprint
+from sequifier.fingerprints import file_checksum
 from sequifier.rl.checkpoint import load_policy
-from sequifier.rl.run_state import require_equal, weight_fingerprint
-from sequifier.trajectory.sources import file_checksum
+from sequifier.rl.run_state import require_equal
 
 
 class PolicyReferences:
@@ -65,13 +66,11 @@ class PolicyReferences:
             source = load_policy(
                 path,
                 device="cpu",
-                interface_name=self.config.policy_interface,
+                interface_name=self.config.policy.interface_name,
                 binding=self.config.policy,
-                model=self.config.execution.model,
+                model=self.config.parent.execution.model,
             )
-            self.recovery.representation.validate_actor(
-                source, self.config.units, f"reference.{path}"
-            )
+            self.recovery.representation.validate_actor(source, f"reference.{path}")
             weights = source.network.state_dict()
             self.artifacts[path] = weights, weight_fingerprint(weights)
             self.checksums[path] = checksum
