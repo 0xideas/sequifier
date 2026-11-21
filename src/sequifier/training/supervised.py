@@ -35,7 +35,7 @@ def execute_supervised(
         config, dataset_names = group.config, ()
     else:
         config, dataset_names = group, tuple(group.dataset_training)
-    settings = config.run.execution
+    settings = config.run.execution.supervised_settings
     torch.set_float32_matmul_precision(settings.precision.float32_matmul_precision)
     logger = configure_logger(
         config.project_root,
@@ -90,7 +90,7 @@ def train_worker(
     """Initialize one execution environment and run the composed runtime."""
 
     global_rank = local_rank if global_rank is None else global_rank
-    distribution = config.run.execution.distribution
+    distribution = config.run.execution.supervised_settings.distribution
     dependencies = supervised_dependencies(config)
     validate_training_destinations(
         config, checkpoint_path(config), dependencies.protected_paths
@@ -102,7 +102,7 @@ def train_worker(
         device=_execution_device(config, local_rank),
         distributed=distribution.distributed,
     )
-    if execution.distributed:
+    if distribution.strategy != "local":
         if execution.device.type == "cuda":
             torch.cuda.set_device(local_rank)
         setup_distributed_env(global_rank, local_rank, world_size, distribution.backend)
@@ -129,7 +129,7 @@ def launch_supervised(
     semantic_optimizer_grouping: bool,
 ) -> None:
     """Launch the native supervised runtime in its execution environment."""
-    distribution = config.run.execution.distribution
+    distribution = config.run.execution.supervised_settings.distribution
     if distribution.distributed and integration_instances:
         raise ValueError(
             "Distributed runs require IntegrationSpec; direct instances cannot "

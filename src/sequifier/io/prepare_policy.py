@@ -200,6 +200,7 @@ def prepare_policy(config):
         metadata = dict(
             split_paths=["0.split.json", "1.split.json"],
             indexed_views=["0", "1"],
+            split_names=["train", "validation"],
             fit_split_indices=[0] if frozen is None else [],
             depth_layouts=layouts,
             window_length=config.window_lengths[0],
@@ -253,7 +254,7 @@ def _action_features(rows, policy):
     result = rows.with_columns(*targets, *previous)
     if any(result[name].null_count() for name in policy.previous_action_inputs):
         raise ValueError(
-            "Policy preparation requires initial_inputs for missing lagged actions"
+            "Policy preparation requires feedback initial values for missing lagged actions"
         )
     return result
 

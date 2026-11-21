@@ -34,30 +34,53 @@ model:
         action: []
   execution:
     context_length: 4
-    training_objective: causal
-dataset_training:
+    prediction_view: causal
+policy_bindings:
+  actor:
+    return_conditioned: true
+    actions:
+      action:
+        type: categorical
+        values:
+        - 0.0
+        - 1.0
+    feedback:
+      __policy_previous_action:
+        action: action
+        initial: start
+run:
+  project_root: .
+  model_name: supervised-to-policy
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+    offline:
+      episode_cache_size: 8
+  recovery:
+    resume:
+      policy: never
+datasets:
   demonstrations:
-    parts:
+    model_interface: actor
+    sources:
       recorded:
         type: sequence
         paths:
         - PLEASE_FILL.csv
-    model_interface: actor
-    split:
+    partition:
       validation_fraction: 0.2
   observations:
     model_interface: actor
-    parts:
+    sources:
       train:
         metadata_config_path: configs/metadata_configs/observations.json
         read_format: parquet
-    split:
-      validation_fraction: 0.2
-training_plan:
-  phases:
-  - name: supervised
+        type: prepared
+phases:
+  supervised:
     algorithm: supervised
-    epochs: 10
     mode: sequential
     sources:
     - source: observations.train
@@ -84,13 +107,15 @@ training_plan:
     learning:
       datasets:
         observations:
-          criterion:
-            action: CrossEntropyLoss
-  - algorithm: policy_imitation
-    epochs: 80
+          losses:
+            action:
+              criterion: CrossEntropyLoss
+    budget:
+      epochs: 10
+  policy_imitation:
+    algorithm: policy_imitation
     sources:
-    - source: demonstrations.recorded
-    name: policy_imitation
+    - source: demonstrations.train
     batch_size: 64
     optimization:
       actor:
@@ -104,34 +129,10 @@ training_plan:
       cadence:
         iterations: 1
       batch_size: 64
-      before_phase: false
-      on_snapshot: false
-policy_bindings:
-  actor:
-    previous_action_inputs:
-      __policy_previous_action: action
-    initial_inputs:
-      __policy_previous_action: start
-    return_conditioned: true
-    actions:
-      action:
-        type: categorical
-        values:
-        - 0.0
-        - 1.0
-run:
-  project_root: .
-  model_name: supervised-to-policy
-  reproducibility:
-    seed: 1010
-    enforce_determinism: false
-  execution:
-    device: cpu
-    data_loading:
-      episode_cache_size: 8
-  recovery:
-    resume:
-      policy: never
-  logging: {}
-  outputs: {}
-  export: {}
+      sources:
+      - source: demonstrations.validation
+    budget:
+      epochs: 80
+plan:
+- supervised
+- policy_imitation

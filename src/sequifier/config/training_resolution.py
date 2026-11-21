@@ -10,17 +10,19 @@ from sequifier.config.metadata import (
     load_dataset_metadata,
 )
 from sequifier.config.naming import resolve_run_seed
+from sequifier.config.ownership import OfflineExecution, SupervisedExecution
+from sequifier.config.policy_plan import OnlinePhaseConfig
 from sequifier.config.policy_train_config import (
+    PartitionView,
     PolicyDataSettings,
     SequenceSourceConfig,
 )
-from sequifier.config.run_capabilities import (
-    training_run_mode,
-    validate_runner_settings,
-)
+from sequifier.config.run_capabilities import training_run_mode
 from sequifier.config.sources import SourceReference, TrainingSourceSpecModel
 from sequifier.config.train_config import (
     DatasetPartSpecModel,
+    DatasetView,
+    IndexedSource,
     OwnedModelSpec,
     PreferencePartSpecModel,
     ResolvedInterfaceStorage,
@@ -54,11 +56,17 @@ def _normalization(config, name):
 
 @dataclass(frozen=True)
 class TrainingPart:
-    spec: DatasetPartSpecModel | SequencePartSpecModel | PreferencePartSpecModel
+    spec: (
+        DatasetPartSpecModel
+        | IndexedSource
+        | SequencePartSpecModel
+        | PreferencePartSpecModel
+    )
     interface: str
     metadata: DatasetMetadata | None
     metadata_path: Path | None
     indexed: IndexedView | None
+    split: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,54 +110,138 @@ class IndexedSelection:
                 )
 
 
+def _active_datasets(config, phases, root, prepared_inputs):
+    """Include scheduled views and the episode datasets addressed by DPO spans."""
+    names = {ref.dataset for phase in phases for ref in phase.data_sources}
+    for phase in phases:
+        if phase.source_kind != "preference":
+            continue
+        for ref in phase.data_sources:
+            dataset = config.datasets[ref.dataset]
+            view = dataset.views.get(ref.part)
+            if view is None:
+                raise ValueError(f"{ref.source}: expected a preference view")
+            keys = (
+                dataset.sources if dataset.partition or not view.parts else view.parts
+            )
+            for key in keys:
+                source = dataset.sources[key]
+                if not isinstance(source, PreferencePartSpecModel):
+                    raise ValueError(f"{ref.source}: DPO requires a preferences source")
+                path = str((root / source.manifest_path).resolve())
+                for pair in prepared_inputs.preference_pairs(path):
+                    for span in (pair.chosen, pair.rejected):
+                        names.add(span.source.partition(".")[0])
+    return {name: dataset for name, dataset in config.datasets.items() if name in names}
+
+
 class TrainingSources:
     """Resolve named parts and share their metadata throughout compilation."""
 
     def __init__(self, config, root, supplied):
         self.root = root
         self.project_root = config.run.project_root
-        self.datasets = config.dataset_training
+        self.datasets = config.datasets
         self.parts = {}
-        self.validation_fractions = {}
+        self.partitions = {}
+        self.physical = {}
+        self.view_parts = {}
+        self.members = {}
         self._views = {}
         self._metadata = {}
         for name, dataset in self.datasets.items():
-            for part_name, spec in dataset.parts.items():
-                ref = f"{name}.{part_name}"
-                view = metadata = path = None
-                if (
-                    isinstance(spec, DatasetPartSpecModel)
-                    and spec.type == "indexed_sequence"
-                ):
-                    view = self.indexed_view(spec.path)
-                    path = view.metadata_path
-                    metadata = view.metadata()
+            for part, spec in dataset.sources.items():
+                ref = f"{name}.{part}"
+                metadata = path = indexed = None
+                if isinstance(spec, IndexedSource):
+                    indexed = self.indexed_view(spec.path)
+                    path = indexed.metadata_path
+                    metadata = indexed.metadata()
                 elif (
-                    not isinstance(spec, PreferencePartSpecModel)
+                    isinstance(spec, (DatasetPartSpecModel, SequencePartSpecModel))
                     and spec.metadata_config_path
                 ):
                     path = root / spec.metadata_config_path
                     metadata = (
-                        supplied.get(ref)
-                        if supplied is not None
-                        and isinstance(spec, DatasetPartSpecModel)
+                        supplied[ref]
+                        if supplied is not None and ref in supplied
                         else self.read_metadata(path)
                     )
-                self.parts[ref] = TrainingPart(
-                    spec, dataset.model_interface, metadata, path, view
+                self.physical[ref] = TrainingPart(
+                    spec, dataset.model_interface, metadata, path, indexed
                 )
-                self.validation_fractions[ref] = dataset.split.validation_fraction
+            if dataset.uses_metadata_views:
+                metadata = [
+                    self.physical[f"{name}.{key}"].metadata for key in dataset.sources
+                ]
+                first, *rest = metadata
+                dataset.views = {
+                    split: DatasetView(split=split)
+                    for split in first.split_names
+                    if all(split in item.split_names for item in rest)
+                }
+                if not dataset.views:
+                    raise ValueError(
+                        f"{name}: sources have no common named split; declare explicit views"
+                    )
+            self.view_parts[name] = {}
+            for view_name, view in dataset.views.items():
+                selected = view.parts or list(dataset.sources)
+                members = []
+                for key in selected:
+                    part_name = (
+                        view_name if len(selected) == 1 else f"{view_name}__{key}"
+                    )
+                    if part_name in self.view_parts[name]:
+                        raise ValueError(
+                            f"{name}: ambiguous expanded view name {part_name!r}"
+                        )
+                    ref = f"{name}.{part_name}"
+                    physical = f"{name}.{key}"
+                    if ref in self.physical and ref != physical:
+                        raise ValueError(
+                            f"{ref}: view name conflicts with another physical source"
+                        )
+                    record = self.physical[physical]
+                    self.parts[ref] = TrainingPart(
+                        record.spec,
+                        record.interface,
+                        record.metadata,
+                        record.metadata_path,
+                        record.indexed,
+                        view.split,
+                    )
+                    self.view_parts[name][part_name] = record.spec
+                    if dataset.partition:
+                        if view.split != "train" and view.split != "validation":
+                            raise ValueError(
+                                f"{ref}: generated partitions expose train and validation"
+                            )
+                        self.partitions[ref] = PartitionView(
+                            sources=[
+                                f"{name}.{part}" for part in sorted(dataset.sources)
+                            ],
+                            part=physical,
+                            split=view.split,
+                            validation_fraction=dataset.partition.validation_fraction,
+                        )
+                    members.append(part_name)
+                self.members[f"{name}.{view_name}"] = tuple(members)
 
-    def split_path(self, ref, role):
+    def split_path(self, ref, *, required=True):
         part = self.parts[ref]
         if part.indexed is not None:
             return str(part.indexed.path)
-        index = 0 if role == "training" else 1
-        if part.metadata is None or index >= len(part.metadata.split_paths):
+        if part.metadata is None:
+            return None
+        index = part.metadata.named_split_index(part.split)
+        if index >= len(part.metadata.split_paths):
             return None
         path = normalize_path(part.metadata.split_paths[index], self.project_root)
         if not Path(path).exists():
-            raise ValueError(f"{role.capitalize()} data path {path!r} does not exist")
+            if required:
+                raise ValueError(f"Dataset view {ref}: path {path!r} does not exist")
+            return None
         return path
 
     def indexed_view(self, path):
@@ -188,7 +280,7 @@ class TrainingSources:
                 continue
             name = part.interface
             spec = config.model.interfaces[name]
-            prepared = isinstance(part.spec, DatasetPartSpecModel)
+            prepared = isinstance(part.spec, (DatasetPartSpecModel, IndexedSource))
             try:
                 actual = signature(value, spec, prepared)
                 if name in declarations and name not in signatures:
@@ -203,7 +295,11 @@ class TrainingSources:
         return metadata
 
     def part_names(self, ref: SourceReference) -> tuple[str, ...]:
-        return (ref.part,) if ref.part else tuple(self.datasets[ref.dataset].parts)
+        if ref.source in self.members:
+            return self.members[ref.source]
+        if ref.source in self.parts:
+            return (ref.part,)
+        raise ValueError(f"Unknown dataset view {ref.source!r}")
 
     def expand(self, refs):
         for ref in refs:
@@ -220,14 +316,43 @@ class TrainingSources:
             batches_per_selection=ref.batches_per_selection or accumulation_batches,
         )
 
-    def policy_sources(self):
+    def policy_sources(self, phases, prepared_inputs):
         sequences, preferences = {}, {}
-        for ref, record in self.parts.items():
+        episode_names = set()
+        manifest_names = set()
+        for phase in phases:
+            refs = phase.data_sources
+            if phase.algorithm == "supervised" or refs.kind == "none":
+                continue
+            names = manifest_names if refs.kind == "preference" else episode_names
+            for ref in self.expand(refs):
+                names.add(ref.source)
+                if partition := self.partitions.get(ref.source):
+                    names.update(partition.sources)
+
+        records = self.physical | self.parts
+        for ref in sorted(manifest_names):
+            part = records[ref].spec
+            if not isinstance(part, PreferencePartSpecModel):
+                raise ValueError(f"{ref}: DPO requires a preferences source")
+            path = str((self.root / part.manifest_path).resolve())
+            preferences[ref] = path
+            for pair in prepared_inputs.preference_pairs(path):
+                for span in (pair.chosen, pair.rejected):
+                    if span.source not in records or (
+                        span.source in self.partitions
+                        and span.source not in self.physical
+                    ):
+                        raise ValueError(
+                            f"Preference span must select a physical episode source or recorded split: {span.source}"
+                        )
+                    episode_names.add(span.source)
+
+        for ref in sorted(episode_names):
+            record = records[ref]
             part = record.spec
             if isinstance(part, PreferencePartSpecModel):
-                path = self.root / part.manifest_path
-                preferences[ref] = str(path.resolve())
-                continue
+                raise ValueError(f"{ref}: expected an episode source")
             if isinstance(part, SequencePartSpecModel):
                 source = SequenceSourceConfig.model_validate(
                     part.model_dump(exclude={"type"})
@@ -239,10 +364,12 @@ class TrainingSources:
                     format="prepared",
                     encoding="model",
                 )
+            elif record.split is None:
+                continue
             else:
                 source = SequenceSourceConfig(
                     metadata_config_path=part.metadata_config_path,
-                    split_index=0,
+                    split=record.split,
                     format="prepared",
                     encoding="model",
                 )
@@ -263,31 +390,20 @@ def _resolve_phase_sources(parts, phase, sequences, preferences):
             raise ValueError(f"{phase.name}: select {refs.kind} parts")
         return expanded
 
-    expanded = expand(refs.training)
-    if refs.kind == "preference":
-        if len(expanded) != 1:
-            raise ValueError(f"{phase.name}: select one training preference part")
-        phase.preferences = expanded[0]
-    else:
-        phase.sources = expanded
+    phase.sources = expand(refs.training)
     if phase.evaluation.sources is not None:
         phase.evaluation.sources = expand(refs.evaluation)
 
 
 def phase_interface(config, phase):
-    names = {
-        config.dataset_training[ref.dataset].model_interface
-        for ref in phase.data_sources
-    }
+    names = {config.datasets[ref.dataset].model_interface for ref in phase.data_sources}
     explicit = phase.model_interface if phase.algorithm != "supervised" else None
     if explicit is not None:
         names.add(explicit)
     if not names:
         names = set(config.policy_bindings) or set(config.model.interfaces)
     if len(names) != 1 or None in names:
-        raise ValueError(
-            f"training_plan.phases.{phase.name}: select one model_interface"
-        )
+        raise ValueError(f"phases.{phase.name}: select one model_interface")
     name = next(iter(names))
     if name not in config.model.interfaces:
         raise ValueError(f"unknown model interface {name!r}")
@@ -395,7 +511,7 @@ def _fit_input_metadata(
     phase = next(
         (
             phase
-            for phase in config.training_plan.phases
+            for phase in config.ordered_phases
             if phase.algorithm != "supervised" and phase.model_interface == name
         ),
         None,
@@ -427,13 +543,11 @@ def _fit_input_metadata(
     )
     if not missing_codecs and (not missing_statistics or normalization is not None):
         return metadata
-    available = (
-        data_settings.preferences
-        if phase.source_kind == "preference"
-        else data_settings.sources
-    )
-    if any(ref.source not in available for ref in phase.data_sources):
-        return metadata  # Prepared dataset parts already own frozen preprocessing.
+    if phase.source_kind == "sequence" and any(
+        data_settings.sources[ref.source].format == "prepared"
+        for ref in phase.data_sources
+    ):
+        return metadata  # Recorded preprocessing is authoritative.
     inputs = prepared_inputs.resolve(data_settings)
     inputs.dependencies.revalidate()
     from sequifier.io.episode_features import EpisodeFeatures
@@ -468,10 +582,10 @@ def _validate_indexed_phase_coverage(sources, phases, sequences, prepared_inputs
                 yield IndexedSelection(ref.source, part.indexed)
                 continue
             if phase.algorithm == "supervised":
-                paths = [sources.split_path(ref.source, role)]
+                paths = [sources.split_path(ref.source)]
             else:
                 source = sequences[ref.source]
-                if source.format != "prepared" and source.split_index is None:
+                if source.format != "prepared" and source.split is None:
                     continue
                 paths = prepared_inputs.source(
                     source, sources.root, metadata=part.metadata
@@ -516,7 +630,9 @@ def resolve_execution_settings(
 
     model = config.model
     values = model.execution.model_dump(exclude_unset=True) if model else {}
-    run_execution = config.run.execution
+    if prediction_view := values.pop("prediction_view", None):
+        values["training_objective"] = prediction_view
+    run_execution = config.run.execution.supervised or SupervisedExecution()
     dtypes = run_execution.precision.layer_type_dtypes
     max_concat = run_execution.max_concat_tensors
     source = None
@@ -550,27 +666,29 @@ def resolve_execution_settings(
             values[field] = actual
         source_dtypes = source.options.layer_type_dtypes
         if (
-            "layer_type_dtypes" in config.run.execution.precision.model_fields_set
+            "layer_type_dtypes" in run_execution.precision.model_fields_set
             and dtypes != source_dtypes
         ):
             raise ValueError(
-                "run.execution.precision.layer_type_dtypes differs from initialize_from"
+                "run.execution.supervised.precision.layer_type_dtypes differs from initialize_from"
             )
         dtypes = source_dtypes
-        if "max_concat_tensors" not in config.run.execution.model_fields_set:
+        if "max_concat_tensors" not in run_execution.model_fields_set:
             max_concat = source.options.max_concat_tensors
     assert model is not None
     assert model.backbone is not None
     if values.get("context_length") is None:
         values["context_length"] = model.backbone.architecture.max_context_length
     if values.get("training_objective") is None:
-        if any(
-            phase.algorithm == "supervised" for phase in config.training_plan.phases
-        ):
-            raise ValueError(
-                "supervised phases require model.execution.training_objective"
-            )
-        values.update(training_objective="policy", target_offset=0)
+        supervised = [p for p in config.ordered_phases if p.algorithm == "supervised"]
+        values["training_objective"] = (
+            supervised[-1].learning.objective_name("causal") if supervised else "policy"
+        )
+    if (
+        values["training_objective"] in {"policy", "bert"}
+        and "target_offset" not in values
+    ):
+        values["target_offset"] = 0
     run_execution.precision.layer_type_dtypes = dtypes
     run_execution.max_concat_tensors = max_concat
     training = ModelExecutionOptions(
@@ -578,7 +696,7 @@ def resolve_execution_settings(
     )
     if run_execution.distribution.strategy == "fsdp" and dtypes is not None:
         raise ValueError("FSDP does not support manual layer pre-casting")
-    validate_training_contract(config.run, model, config.training_plan.phases, training)
+    validate_training_contract(config.run, model, config.ordered_phases, training)
     return model, training, source
 
 
@@ -595,10 +713,17 @@ def resolve_training_run(
 
     prepared_inputs = PreparedTrainingInputs()
     config = authored.model_copy(deep=True)
-    phases = config.training_plan.phases
+    phases = config.ordered_phases
     supervised = [phase for phase in phases if phase.algorithm == "supervised"]
     has_policy = len(supervised) != len(phases)
-    validate_runner_settings(config.run, supervised=bool(supervised), policy=has_policy)
+    resources = config.run.execution
+    if supervised and resources.supervised is None:
+        resources.supervised = SupervisedExecution()
+    offline = any(
+        p.algorithm != "supervised" and p.source_kind != "none" for p in phases
+    )
+    if offline and resources.offline is None:
+        resources.offline = OfflineExecution()
     seed = config.run.reproducibility.seed
     if seed == "random":
         from sequifier.artifacts.run_checkpoint import read_resume_seed
@@ -612,21 +737,20 @@ def resolve_training_run(
     supervised_names = {
         ref.dataset for phase in supervised for ref in phase.data_sources
     }
-    if not needs_policy_contracts:
-        supervised_names.update(config.dataset_training)
     if (
         len(supervised_names) > 1
-        and config.run.execution.distribution.strategy == "fsdp"
+        and config.run.execution.supervised_settings.distribution.strategy == "fsdp"
     ):
         raise ValueError("Multi-dataset training does not support FSDP")
     root = Path(config.run.project_root).resolve()
+    config.datasets = _active_datasets(config, phases, root, prepared_inputs)
     if needs_policy_contracts:
         config.run.project_root = str(root)
     if config.initialize_from:
         config.initialize_from = str((root / config.initialize_from).resolve())
     config.model, training, source = resolve_execution_settings(config)
     history_only = config.actor_initialization == "history_only"
-    for dataset_name, dataset in config.dataset_training.items():
+    for dataset_name, dataset in config.datasets.items():
         if dataset.model_interface is None:
             if len(config.model.interfaces) != 1:
                 raise ValueError("dataset model_interface is required when ambiguous")
@@ -650,42 +774,42 @@ def resolve_training_run(
         loaded_metadata.update(
             {
                 ref: part.metadata
-                for ref, part in sources.parts.items()
+                for ref, part in sources.physical.items()
                 if part.metadata is not None
             }
         )
 
-    source_fractions = sources.validation_fractions
     sequences, preferences = (
-        sources.policy_sources() if needs_policy_contracts else ({}, {})
+        sources.policy_sources(phases, prepared_inputs) if has_policy else ({}, {})
     )
     policy_data = PolicyDataSettings(
         project_root=str(root),
         sources=sequences,
         preferences=preferences,
-        source_validation_fractions=source_fractions,
+        partitions=sources.partitions,
         seed=seed,
-        episode_cache_size=config.run.execution.data_loading.episode_cache_size,
+        episode_cache_size=(
+            config.run.execution.offline or OfflineExecution()
+        ).episode_cache_size,
     )
-    fitting_sequences = {
-        ref: sequence
-        for ref, sequence in sequences.items()
-        if isinstance(sources.parts[ref].spec, SequencePartSpecModel)
-    }
-
-    fitting_data = policy_data.model_copy(update={"sources": fitting_sequences})
     for phase in phases:
         if phase.algorithm == "supervised":
             continue
         phase.optimization = phase.optimization_configs()
         phase.model_interface = phase_interface(config, phase)
         _resolve_phase_sources(sources, phase, sequences, preferences)
+        if isinstance(phase, OnlinePhaseConfig):
+            for settings in (phase.collection, phase.evaluation):
+                name = settings.environment
+                if isinstance(name, str):
+                    settings.environment = config.environments[name]
+            if phase.collection.archive_directory:
+                phase.collection.archive_directory = str(
+                    (root / phase.collection.archive_directory).resolve()
+                )
         reference = phase.reference_config
         if reference and reference.path:
             reference.path = str((root / reference.path).resolve())
-        archive = phase.rollout_archive_directory
-        if archive:
-            phase.archive_directory = str((root / archive).resolve())
 
     _validate_indexed_phase_coverage(sources, phases, sequences, prepared_inputs)
 
@@ -718,7 +842,12 @@ def resolve_training_run(
 
     interfaces = {}
     storage = {}
-    history_interface = phases[0].model_interface if history_only else None
+    first_phase = phases[0]
+    history_interface = (
+        first_phase.model_interface
+        if history_only and first_phase.algorithm != "supervised"
+        else None
+    )
     if history_only:
         assert source is not None
         if history_interface not in source.interfaces:
@@ -779,7 +908,7 @@ def resolve_training_run(
                     name,
                     binding,
                     value,
-                    fitting_data,
+                    policy_data,
                     prepared_inputs,
                     training,
                 )

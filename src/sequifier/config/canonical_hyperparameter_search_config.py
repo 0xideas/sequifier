@@ -40,7 +40,7 @@ def _validate_training_candidate(
     values: dict[str, Any], load_model_config=initialization_model_config
 ) -> SequifierConfig:
     candidate = SequifierConfig.model_validate(values)
-    resolve_execution_settings(candidate, load_model_config)
+    resolve_execution_settings(candidate.model_copy(deep=True), load_model_config)
     return candidate
 
 
@@ -806,7 +806,7 @@ def compile_canonical_hyperparameter_search_config(
         ) from error
 
     if not isinstance(base_config, SequifierConfig) or any(
-        phase.algorithm != "supervised" for phase in base_config.training_plan.phases
+        phase.algorithm != "supervised" for phase in base_config.ordered_phases
     ):
         raise ValueError(
             "hyperparameter search for trajectory training is not yet supported"
@@ -817,7 +817,7 @@ def compile_canonical_hyperparameter_search_config(
     if isinstance(search_values.get("run"), dict):
         search_values["run"].setdefault("project_root", base_config.run.project_root)
     try:
-        base_values = base_config.trial_config_values()
+        base_values = load_composed_yaml_config(base_config_path)
         search_config = CanonicalHyperparameterSearchConfig.model_validate(
             search_values
         )

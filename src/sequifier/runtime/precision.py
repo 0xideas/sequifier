@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import torch
 
-from sequifier.config.ownership import ExecutionSettings
+from sequifier.config.ownership import SupervisedExecution
 
 
 @dataclass(frozen=True)
@@ -16,7 +16,7 @@ class PrecisionPolicy:
 
     @classmethod
     def from_settings(
-        cls, settings: ExecutionSettings, device: torch.device
+        cls, settings: SupervisedExecution, device: torch.device
     ) -> "PrecisionPolicy":
         precision = settings.precision
         sharded = settings.distribution.strategy == "fsdp"

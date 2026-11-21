@@ -76,7 +76,7 @@ class ExportService:
         export_network.eval()
         paths: list[Path] = []
         export = self.config.run.export
-        if export.pt and export.generative_model:
+        if export.prediction and export.prediction.pt:
             path = model_artifact_path(
                 self.config.project_root,
                 self.config.model_name,
@@ -87,7 +87,7 @@ class ExportService:
                 export_network, self.config, path, options
             )
             paths.append(exported_path)
-        if export.pt and export.embedding_model:
+        if export.embedding and export.embedding.pt:
             embedding_options = ExportOptions(
                 f"{options.suffix}-embedding", options.epoch
             )
@@ -102,7 +102,9 @@ class ExportService:
                     export_network, self.config, path, embedding_options
                 )
             )
-        if export.onnx:
+        prediction_graph = export.prediction.onnx if export.prediction else None
+        embedding_graph = export.embedding.onnx if export.embedding else None
+        if prediction_graph or embedding_graph:
             contract = model_execution_config(execution)
             settings = execution.options
             datasets = self.config.dataset_training
@@ -118,7 +120,7 @@ class ExportService:
                         interface.target_decoder_ids
                     ),
                 }
-                if export.generative_model:
+                if prediction_graph:
                     path = model_artifact_path(
                         self.config.project_root,
                         self.config.model_name,
@@ -133,13 +135,13 @@ class ExportService:
                             interface,
                             path,
                             interface_name=name,
-                            batch_size=export.batch_size,
+                            batch_size=prediction_graph.batch_size,
                             context_length=settings.context_length,
-                            training=export.with_dropout,
+                            training=prediction_graph.with_dropout,
                             metadata=metadata,
                         )
                     )
-                if export.embedding_model:
+                if embedding_graph:
                     embedding = self.embedding.build(export_network, name, execution)
                     path = model_artifact_path(
                         self.config.project_root,
@@ -155,9 +157,9 @@ class ExportService:
                             interface,
                             path,
                             interface_name=None,
-                            batch_size=export.batch_size,
+                            batch_size=embedding_graph.batch_size,
                             context_length=settings.context_length,
-                            training=export.with_dropout,
+                            training=embedding_graph.with_dropout,
                             metadata={
                                 **metadata,
                                 ONNX_EMBEDDING_LAYER_NAMES_KEY: json.dumps(

@@ -1,34 +1,56 @@
 """Phase-owned supervised losses and sampling views."""
 
-import math
-from typing import Optional
+from typing import Annotated, Literal
 
 import torch
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator
 
 from sequifier.config.components import BERTSpecModel, NextOccurrenceConfigModel
 from sequifier.config.naming import ConfigModel
 
 
+class TargetLoss(ConfigModel):
+    criterion: str
+    weight: float = Field(default=1.0, ge=0, allow_inf_nan=False)
+    class_weights: list[Annotated[float, Field(ge=0, allow_inf_nan=False)]] | None = (
+        None
+    )
+
+    @field_validator("criterion")
+    @classmethod
+    def validate_criterion(cls, value):
+        if value != "AccurateCrossEntropyLoss" and value not in vars(torch.nn):
+            raise ValueError(f"Unknown loss criterion {value!r}")
+        return value
+
+
 class DatasetLearningConfig(ConfigModel):
-    criterion: dict[str, str] = Field(default_factory=dict)
-    class_weights: Optional[dict[str, list[float]]] = None
-    loss_weights: Optional[dict[str, float]] = None
+    losses: dict[str, TargetLoss] = Field(default_factory=dict)
     class_share_log_columns: list[str] = Field(default_factory=list)
+
+    @property
+    def criterion(self):
+        return {target: loss.criterion for target, loss in self.losses.items()}
+
+    @property
+    def loss_weights(self):
+        return {target: loss.weight for target, loss in self.losses.items()}
+
+    @property
+    def class_weights(self):
+        return {
+            target: loss.class_weights
+            for target, loss in self.losses.items()
+            if loss.class_weights is not None
+        } or None
 
     def validate_targets(self, targets, usage):
         targets = set(targets)
-        if set(self.criterion) != targets:
-            raise ValueError(f"{usage}: criterion keys must equal interface targets")
-        for label, weights in (
-            ("class_weights", self.class_weights),
-            ("loss_weights", self.loss_weights),
-        ):
-            if weights is not None and weights.keys() - targets:
-                raise ValueError(f"{usage}: {label} references unknown targets")
-        if self.loss_weights is not None and all(
-            self.loss_weights.get(target, 1.0) == 0 for target in targets
-        ):
+        if set(self.losses) != targets:
+            raise ValueError(
+                f"{usage}: losses must cover exactly the interface targets"
+            )
+        if not any(loss.weight > 0 for loss in self.losses.values()):
             raise ValueError(
                 f"{usage}: at least one target must have positive loss weight"
             )
@@ -44,13 +66,14 @@ class DatasetLearningConfig(ConfigModel):
                 raise ValueError(
                     f"{usage}: class-share column {column!r} requires a categorical target with a codec"
                 )
-        for target, criterion in self.criterion.items():
+        for target, loss in self.losses.items():
+            criterion = loss.criterion
             categorical = interface.target_column_types[target] == "categorical"
             if criterion == "AccurateCrossEntropyLoss" and not categorical:
                 raise ValueError(
                     f"{usage}: AccurateCrossEntropyLoss requires categorical target {target!r}"
                 )
-            weights = (self.class_weights or {}).get(target)
+            weights = loss.class_weights
             if target in interface.categorical_hashing:
                 if weights is not None or criterion not in {
                     "CrossEntropyLoss",
@@ -68,23 +91,43 @@ class DatasetLearningConfig(ConfigModel):
                     f"{usage}: class_weights[{target!r}] must match the global or decoder classes of a categorical target"
                 )
 
-    @model_validator(mode="after")
-    def losses(self):
-        for name in self.criterion.values():
-            if name != "AccurateCrossEntropyLoss" and name not in vars(torch.nn):
-                raise ValueError(f"unknown criterion {name!r}")
-        for weights in (self.loss_weights, self.class_weights):
-            for value in (weights or {}).values():
-                values = value if isinstance(value, list) else [value]
-                if any(not math.isfinite(x) or x < 0 for x in values):
-                    raise ValueError(
-                        "loss and class weights must be finite and nonnegative"
-                    )
-        return self
+
+class PredictionObjective(ConfigModel):
+    type: Literal["causal", "policy", "final_value"]
+
+
+class MaskedObjective(BERTSpecModel):
+    type: Literal["bert"]
+
+
+class EventObjective(NextOccurrenceConfigModel):
+    type: Literal["next_occurrence"]
 
 
 class SupervisedLearningConfig(ConfigModel):
     datasets: dict[str, DatasetLearningConfig] = Field(default_factory=dict)
-    bert_spec: BERTSpecModel | None = None
-    next_occurrence_config: NextOccurrenceConfigModel | None = None
+    objective: (
+        Annotated[
+            PredictionObjective | MaskedObjective | EventObjective,
+            Field(discriminator="type"),
+        ]
+        | None
+    ) = None
     window_stride: int | None = Field(default=None, gt=0)
+
+    def objective_name(self, prediction_view: str) -> str:
+        if self.objective is not None:
+            return self.objective.type
+        return (
+            "causal"
+            if prediction_view in {"causal", "final_value", "next_occurrence"}
+            else prediction_view
+        )
+
+    @property
+    def bert_spec(self):
+        return self.objective if isinstance(self.objective, MaskedObjective) else None
+
+    @property
+    def next_occurrence_config(self):
+        return self.objective if isinstance(self.objective, EventObjective) else None

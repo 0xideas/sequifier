@@ -1,55 +1,23 @@
 import os
 from pathlib import Path
 
-import yaml
-
 from sequifier.scaffolds import CONTROL_TEMPLATES, template_text
 from sequifier.typechecking import beartype
 
-preprocess_config_string = """preprocessing_data_path: PLEASE FILL
-read_format: csv
-write_format: parquet
-selected_columns:
-- EXAMPLE_INPUT_COLUMN_NAME
-column_data_types: null
-mask_column: null
-split_ratios:
-- 0.8
-- 0.1
-- 0.1
-split_method: within_sequence
-max_target_offset: 1
-window_stride: 49
-max_rows: null
-window_lengths:
-- 49
-- 49
-- 49
-run:
-  project_root: .
+preprocess_config_string = """preprocessing_data_path: data/events.csv
+selected_columns: [value]
+real_columns: [value]
+splits:
+  train: {fraction: 0.8, window_length: 49}
+  validation: {fraction: 0.1, window_length: 49}
+  test: {fraction: 0.1, window_length: 49}
 """
 
-infer_config_string = """input_columns:
-- EXAMPLE_INPUT_COLUMN_NAME
-target_columns:
-- EXAMPLE_TARGET_COLUMN_NAME
-target_column_types:
-  EXAMPLE_TARGET_COLUMN_NAME: real
-training_objective: causal
-output_probabilities: false
-decode_categories: true
-context_length: 48
-generation_steps: 5
-task: forecast
-model_paths:
-- PLEASE FILL
-metadata_config_path: configs/metadata_configs/PLEASE_FILL.json
-autoregressive_generation: true
-run:
-  project_root: .
-  execution:
-    device: cpu
-    batch_size: 10
+infer_config_string = """task: forecast
+artifact: {paths: [models/forecast.pt]}
+input:
+  metadata_config_path: configs/metadata_configs/events.json
+  split: test
 """
 
 gitignore_string = """models/
@@ -71,6 +39,7 @@ def make(args):
 
     os.makedirs(f"{project_name}/configs")
     os.makedirs(f"{project_name}/scripts")
+    os.makedirs(f"{project_name}/data")
 
     with open(f"{project_name}/.gitignore", "w") as f:
         f.write(gitignore_string)
@@ -78,11 +47,9 @@ def make(args):
     with open(f"{project_name}/configs/preprocess.yaml", "w") as f:
         f.write(preprocess_config_string)
 
-    training = yaml.safe_load(template_text("train-supervised"))
-    training["run"]["model_name"] = "PLEASE FILL"
-    training["run"]["execution"]["device"] = "cuda"
-    with open(f"{project_name}/configs/train.yaml", "w") as f:
-        yaml.safe_dump(training, f, sort_keys=False)
+    Path(project_name, "configs", "train.yaml").write_text(
+        template_text("train-supervised"), encoding="utf-8"
+    )
 
     with open(f"{project_name}/configs/infer.yaml", "w") as f:
         f.write(infer_config_string)

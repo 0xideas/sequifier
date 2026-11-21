@@ -87,7 +87,9 @@ def collect_parallel_groups(
         for group in range(start_group, start_group + count):
             token = collection.start(group)
             completed[group] = []
-            pending.extend((group, sample, token) for sample in range(phase.group_size))
+            pending.extend(
+                (group, sample, token) for sample in range(phase.collection.group_size)
+            )
         while pending or active:
             resetting = []
             for slot in range(len(workers)):
@@ -117,8 +119,12 @@ def collect_parallel_groups(
             slots = sorted(active)
             for slot in slots:
                 account(frame_storage_bytes(active[slot].cursor.history.current) + 1024)
-            for start in range(0, len(slots), phase.rollout_inference_batch_size):
-                chunk = slots[start : start + phase.rollout_inference_batch_size]
+            for start in range(
+                0, len(slots), phase.collection.parallel.inference_batch_size
+            ):
+                chunk = slots[
+                    start : start + phase.collection.parallel.inference_batch_size
+                ]
                 scored = _decide(actor, reference, [active[s].cursor for s in chunk])
                 decisions.update(zip(chunk, scored))
             for decision, _ in decisions.values():
@@ -140,7 +146,7 @@ def collect_parallel_groups(
                 if (
                     result.terminated
                     or result.truncated
-                    or len(state.actions) == phase.max_steps
+                    or len(state.actions) == phase.collection.max_steps
                 ):
                     completed[state.group].append(
                         collection.seal_trajectory(state, result)

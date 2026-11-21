@@ -30,7 +30,7 @@ from sequifier.trajectory.archives import collection_archive
 
 def validate_grpo_adapter(adapter, phase, exact):
     require_group_start(adapter, exact=exact)
-    if phase.simulator_workers > 1:
+    if phase.collection.parallel is not None:
         from sequifier.rl.simulator_workers import require_parallel_group_start
 
         require_parallel_group_start(adapter)
@@ -53,23 +53,24 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     groups, env_steps = state.get("groups", 0), state.get("env_steps", 0)
     restart_stream = state.get("restart_stream", 0)
     if (
-        not 0 <= groups <= phase.total_groups
+        not 0 <= groups <= phase.budget.groups
         or session.transaction
-        != (groups + phase.groups_per_iteration - 1) // phase.groups_per_iteration
+        != (groups + phase.collection.groups_per_iteration - 1)
+        // phase.collection.groups_per_iteration
     ):
         raise ValueError("GRPO checkpoint is not a complete update/group boundary")
     if groups != min(
-        session.transaction * phase.groups_per_iteration, phase.total_groups
+        session.transaction * phase.collection.groups_per_iteration, phase.budget.groups
     ):
         raise ValueError("GRPO checkpoint group counter is not a complete iteration")
     if (
-        not groups * phase.group_size
+        not groups * phase.collection.group_size
         <= env_steps
-        <= groups * phase.group_size * phase.max_steps
+        <= groups * phase.collection.group_size * phase.collection.max_steps
     ):
         raise ValueError("GRPO environment clock exceeds authored bounds")
     actor.grpo_policy_version = session.transaction
-    adapter = load_online_adapter(phase.environment)
+    adapter = load_online_adapter(phase.collection.environment)
     resources = ExitStack()
     workers = None
     try:
@@ -79,7 +80,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
         )
         if state:
             require_equal(state["adapter_identity"], identity, "grpo.adapter_identity")
-            if context.run.resume.mode != "exact" and groups < phase.total_groups:
+            if context.run.resume.mode != "exact" and groups < phase.budget.groups:
                 restart_stream += 1
                 session.record_continuation(
                     mode="new_groups",
@@ -92,20 +93,21 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
         # optimizations are disabled for configurations that omit their opt-ins.
         resources.enter_context(
             frozen_image_cache_scope(
-                actor, context.reference, phase.image_feature_cache_bytes
+                actor, context.reference, phase.collection.image_feature_cache_bytes
             )
         )
-        if phase.simulator_workers > 1 and groups < phase.total_groups:
+        parallel = phase.collection.parallel
+        if parallel is not None and groups < phase.budget.groups:
             from sequifier.rl.simulator_workers import SimulatorWorkers
 
             workers = SimulatorWorkers(
-                phase.environment,
+                phase.collection.environment,
                 min(
-                    phase.simulator_workers,
-                    phase.groups_per_iteration * phase.group_size,
+                    parallel.workers,
+                    phase.collection.groups_per_iteration * phase.collection.group_size,
                 ),
-                phase.worker_timeout_seconds,
-                phase.worker_threads,
+                parallel.timeout_seconds,
+                parallel.threads_per_worker,
                 identity,
             )
             resources.callback(workers.close)
@@ -113,8 +115,10 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
         session.evaluate_initial(
             session.evaluate_online, adapter, adjust=scale_evaluation_score
         )
-        while groups < phase.total_groups and not session.stopping.triggered:
-            count = min(phase.groups_per_iteration, phase.total_groups - groups)
+        while groups < phase.budget.groups and not session.stopping.triggered:
+            count = min(
+                phase.collection.groups_per_iteration, phase.budget.groups - groups
+            )
             with allocation("rollout_storage") as storage:
                 collection_start = perf_counter()
                 buffer, executed = collect_groups(
@@ -136,11 +140,11 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 update_seconds = perf_counter() - update_start
                 env_steps += executed
                 groups += count
-                if phase.archive_directory:
+                if phase.collection.archive_directory:
                     with allocation("rollout_archive") as archive:
                         archive.resize(buffer.estimated_bytes)
                         write_json_atomic(
-                            Path(phase.archive_directory)
+                            Path(phase.collection.archive_directory)
                             / f"groups-{actor.grpo_policy_version:08d}.json",
                             collection_archive(
                                 "grpo",
@@ -175,7 +179,9 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                         ],
                         "buffer_bytes": buffer.estimated_bytes,
                         "simulator_workers": len(workers) if workers is not None else 1,
-                        "rollout_inference_batch_size": phase.rollout_inference_batch_size,
+                        "rollout_inference_batch_size": parallel.inference_batch_size
+                        if parallel
+                        else 1,
                         "collection_seconds": collection_seconds,
                         "collection_env_steps_per_second": (
                             executed / collection_seconds
@@ -193,7 +199,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 return record
 
             session.complete_online_update(
-                final=groups == phase.total_groups,
+                final=groups == phase.budget.groups,
                 training=training_metrics,
                 evaluate=lambda: session.evaluate_online(
                     adapter, adjust=scale_evaluation_score

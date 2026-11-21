@@ -1,7 +1,7 @@
 """Policy alignment and standard model-component configuration."""
 
 import math
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -87,17 +87,33 @@ class ActionFieldConfig(PolicyConfigBase):
         return self
 
 
+class ActionFeedback(PolicyConfigBase):
+    action: NonemptyStr
+    initial: DomainValue | None = None
+
+
 class PolicyBinding(PolicyConfigBase):
     """A task attached to named targets of an ordinary model interface."""
 
     actions: dict[str, ActionFieldConfig] = Field(min_length=1)
     decision_position: int = Field(default=-1, le=-1)
-    previous_action_inputs: dict[str, str] = Field(default_factory=dict)
-    initial_inputs: dict[str, Any] = Field(default_factory=dict)
+    feedback: dict[str, ActionFeedback] = Field(default_factory=dict)
     return_conditioned: bool = False
     initial_desired_return: float | None = Field(default=None, allow_inf_nan=False)
     returns: ReturnDefinition = Field(default_factory=ReturnDefinition)
     units: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def previous_action_inputs(self):
+        return {column: feedback.action for column, feedback in self.feedback.items()}
+
+    @property
+    def initial_inputs(self):
+        return {
+            column: feedback.initial
+            for column, feedback in self.feedback.items()
+            if feedback.initial is not None
+        }
 
     @property
     def episode_horizon(self) -> int | None:
@@ -148,9 +164,7 @@ class PolicyBinding(PolicyConfigBase):
         if any(not name for name in self.actions):
             raise ValueError("actions require nonempty target names")
         if set(self.previous_action_inputs.values()) - set(self.actions):
-            raise ValueError("previous_action_inputs must reference declared actions")
-        if set(self.initial_inputs) - set(self.previous_action_inputs):
-            raise ValueError("initial_inputs must name previous_action_inputs")
+            raise ValueError("feedback entries must reference declared actions")
         return self
 
 

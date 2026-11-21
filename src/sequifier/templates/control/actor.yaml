@@ -36,10 +36,6 @@ model:
     context_length: 4
 policy_bindings:
   actor:
-    previous_action_inputs:
-      __policy_previous_action: action
-    initial_inputs:
-      __policy_previous_action: start
     return_conditioned: false
     actions:
       action:
@@ -47,3 +43,7 @@ policy_bindings:
         values:
         - left
         - right
+    feedback:
+      __policy_previous_action:
+        action: action
+        initial: start

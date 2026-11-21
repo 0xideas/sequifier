@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.config.policy_config import PolicyBinding
@@ -118,17 +119,29 @@ class PreparedTrainingInputs:
             config._prepared_inputs = cls()
         return config._prepared_inputs
 
+    def preference_pairs(self, path):
+        from sequifier.trajectory.preferences import PreferenceManifest
+
+        if path not in self._preference_manifests:
+            records = self._baseline.read_json(Path(path))
+            self._preference_manifests[path] = PreferenceManifest.model_validate(
+                records
+            ).pairs
+        return self._preference_manifests[path]
+
     def phase_dependencies(self, config, phase, inputs):
         refs = phase.data_sources
+        names = set()
+        for ref in refs:
+            if partition := config.partitions.get(ref.source):
+                names.update(partition.sources)
+            else:
+                names.add(ref.source)
         if refs.kind == "preference":
-            from sequifier.trajectory.preferences import load_preferences
-
-            preferences = {ref.source: config.preferences[ref.source] for ref in refs}
+            preferences = {name: config.preferences[name] for name in names}
             names = set()
             for path in preferences.values():
-                if path not in self._preference_manifests:
-                    self._preference_manifests[path] = load_preferences(path).pairs
-                for pair in self._preference_manifests[path]:
+                for pair in self.preference_pairs(path):
                     names.update((pair.chosen.source, pair.rejected.source))
             if names - inputs.sources.keys():
                 raise ValueError(
@@ -136,7 +149,6 @@ class PreparedTrainingInputs:
                 )
         else:
             preferences = {}
-            names = {ref.source for ref in refs}
         sources = {name: inputs.sources[name] for name in sorted(names)}
         dependencies = DependencyManifest()
         for source in sources.values():
@@ -207,7 +219,9 @@ class PreparedTrainingInputs:
                 "catalog": catalog_key,
                 "preferences": preferences,
                 "identity": dependencies.identity,
-                "source_validation_fractions": config.source_validation_fractions,
+                "partitions": {
+                    name: view.model_dump() for name, view in config.partitions.items()
+                },
                 "seed": config.seed,
             }
         )

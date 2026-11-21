@@ -4,9 +4,9 @@ The I12 source audit found these missing effects before this change:
 
 | Configuration | Missing behavior |
 | --- | --- |
-| `run.execution.data_loading.max_ram_gb` | No runtime consumer or data-loading budget. |
-| `run.execution.precision.layer_autocast` | Ignored by local and DDP forward/validation; only FSDP applied mixed precision. |
-| `run.execution.precision.float32_matmul_precision` | Set in the launcher, but lost in spawned training processes. |
+| `run.execution.supervised.data_loading.max_ram_gb` | No runtime consumer or data-loading budget. |
+| `run.execution.supervised.precision.layer_autocast` | Ignored by local and DDP forward/validation; only FSDP applied mixed precision. |
+| `run.execution.supervised.precision.float32_matmul_precision` | Set in the launcher, but lost in spawned training processes. |
 | `run.reproducibility.enforce_determinism` | Requested deterministic algorithms in warning-only mode; false did not undo a previous true setting in the same process. |
 
 Device, distribution, FSDP offload, compilation, layer parameter dtypes, worker

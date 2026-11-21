@@ -1,6 +1,5 @@
 """Runner and publication capabilities checked when compiling a training plan."""
 
-import os
 from typing import Literal
 
 from sequifier.config.ownership import RunSettings
@@ -12,48 +11,36 @@ def validate_runner_settings(
     run: RunSettings, *, supervised: bool, policy: bool
 ) -> None:
     execution = run.execution
-    if policy:
-        # These settings are consumed only by the supervised runner or finalizer.
-        supervised_only = (
-            (
-                "run.execution",
-                execution,
-                {"distribution", "compilation", "precision", "max_concat_tensors"},
-            ),
-            (
-                "run.execution.data_loading",
-                execution.data_loading,
-                {"num_workers", "load_full_data_to_ram", "max_ram_gb"},
-            ),
-            (
-                "run.export",
-                run.export,
-                {
-                    "onnx",
-                    "embedding_model",
-                    "with_dropout",
-                    "generative_model",
-                    "pt",
-                    "batch_size",
-                },
-            ),
-        )
-        for path, settings, fields in supervised_only:
-            if unsupported := fields.intersection(
-                settings.model_dump(exclude_defaults=True)
-            ):
-                raise ValueError(
-                    f"policy phases do not support {path} settings: {sorted(unsupported)}"
-                )
-        if not supervised and "log_interval_batches" in run.logging.model_dump(
-            exclude_defaults=True
-        ):
-            raise ValueError("policy phases do not support batch logging intervals")
-    elif (
-        not (run.export.generative_model or run.export.embedding_model)
-        and os.getenv("SEQUIFIER_PREVENT_EXPORT") is None
+    if not supervised and execution.supervised is not None:
+        raise ValueError("run.execution.supervised requires a supervised phase")
+    if (
+        policy
+        and execution.supervised
+        and execution.supervised.distribution.distributed
     ):
-        raise ValueError("At least one model export must be enabled")
+        raise ValueError("Mixed training plans require local execution")
+    if (
+        policy
+        and execution.supervised
+        and execution.supervised.precision.layer_type_dtypes
+    ):
+        raise ValueError(
+            "Mixed plans require a policy-compatible model without manual layer pre-casting"
+        )
+    if not supervised and run.logging.log_interval_batches is not None:
+        raise ValueError("Batch logging requires a supervised phase")
+    if not policy and run.logging.log_interval_iterations is not None:
+        raise ValueError("Iteration logging requires a policy phase")
+    export = run.export
+    if policy and (
+        export.embedding
+        or not export.prediction
+        or not export.prediction.pt
+        or export.prediction.onnx
+    ):
+        raise ValueError("Policy plans publish a portable prediction artifact")
+    if not (export.prediction or export.embedding):
+        raise ValueError("Select at least one export artifact")
 
 
 def training_run_mode(phases) -> RunMode:

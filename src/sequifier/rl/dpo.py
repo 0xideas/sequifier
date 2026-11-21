@@ -68,7 +68,7 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
         raise ValueError("DPO requires a frozen reference actor")
     session = PhaseSession(context)
     state = session.state
-    if not 0 <= session.transaction <= phase.iterations:
+    if not 0 <= session.transaction <= phase.budget.iterations:
         raise ValueError("DPO checkpoint exceeds authored update budget")
     batches = BatchOrder(
         len(data.training),
@@ -88,7 +88,7 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
         )
 
     session.evaluate_initial(evaluate)
-    for update in range(session.transaction + 1, phase.iterations + 1):
+    for update in range(session.transaction + 1, phase.budget.iterations + 1):
         if session.stopping.triggered:
             break
         group = batches.next()
@@ -116,7 +116,7 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
                     (sign * coefficient * chunk.sum()).backward()
         session.step()
         session.complete_update(
-            final=update == phase.iterations,
+            final=update == phase.budget.iterations,
             training={"training_dpo_loss": loss_total},
             evaluate=evaluate,
             checkpoint=lambda: {"batch_order": batches.state_dict()},

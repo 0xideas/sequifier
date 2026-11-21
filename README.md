@@ -170,7 +170,7 @@ The basic input data format is this:
 
 The two columns "sequenceId" and "itemPosition" have to be present, and there must be one or more feature columns.
 
-`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. Each stored subsequence contains the number of positions selected by its split in `window_lengths`; `max_target_offset` reserves positions within that window for future targets.
+`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. Each stored subsequence contains the number of positions selected by `splits.<name>.window_length`; `max_target_offset` reserves positions within that window for future targets.
 
 | sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [window_length - 1] | [window_length - 2] | ... | 0 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -208,7 +208,7 @@ Once you have your data in the input format described above, you can train a tra
    sequifier make YOUR_PROJECT_NAME
    ```
 
-3. **Add your data.** Change into the `YOUR_PROJECT_NAME` folder, create a `data` folder, add your data, and adapt `preprocessing_data_path` in `preprocess.yaml` to point to it.
+3. **Add your data.** Change into the `YOUR_PROJECT_NAME` folder and place a CSV with `sequenceId`, `itemPosition` and a numeric `value` column at `data/events.csv`. For another schema, adjust the preprocessing columns and the model interface.
 
 4. **Preprocess the data.** Run:
 
@@ -216,7 +216,7 @@ Once you have your data in the input format described above, you can train a tra
    sequifier preprocess
    ```
 
-5. **Reference the generated metadata.** Preprocessing outputs metadata at `configs/metadata_configs/[INPUT BASENAME].json`. Reference that file from `dataset_training.<dataset>.parts.<part>.metadata_config_path` in `train.yaml`. Inference uses `metadata_config_path` or the selected artifact metadata.
+5. **Reference the generated metadata.** Preprocessing outputs metadata at `configs/metadata_configs/[INPUT BASENAME].json`. Reference that file from `datasets.<dataset>.sources.<source>.metadata_config_path` in `train.yaml`. Inference uses `input.metadata_config_path` or the selected artifact metadata.
 
 6. **Configure and train the model.** Adapt `train.yaml` with your transformer hyperparameters, then run:
 
@@ -224,7 +224,7 @@ Once you have your data in the input format described above, you can train a tra
    sequifier train
    ```
 
-7. **Configure inference.** Point `model_paths` in `infer.yaml` at the default ONNX export. Keep the scaffold's explicit contract, or replace it with `training_config_path` and `dataset`; see the [ONNX/PT trade-offs](./documentation/configs/infer.md#onnx-or-pt).
+7. **Configure inference.** The scaffold selects the final model at `models/forecast.pt` and the prepared test data. To use different inputs or another export, select a different `input.split` or specify `input.path`, and set `artifact.paths` in `infer.yaml`. See [inference configuration](./documentation/configs/infer.md).
 
    **GPU ONNX inference:** `run.execution.device: cuda` requires `onnxruntime-gpu` built for
    your CUDA and cuDNN versions. The CPU-only `onnxruntime` package does not
@@ -244,7 +244,7 @@ Once you have your data in the input format described above, you can train a tra
 
 Causal transformers are the core architecture in sequifier. Their training objective is to 'predict the next token', or, in the multivariate case, the next value for each target variable.
 
-To train a causal transformer, set `training_objective: causal`. If the target value of interest is further in the future, set `target_offset` to a value higher than 1.
+To train a causal transformer, use the default causal objective. If the target value of interest is further in the future, set `target_offset` to a value higher than 1.
 
 `prediction_length` controls how many consecutive positions at the end of a
 window are returned during inference. For example, with `target_offset: 1` and
@@ -256,7 +256,7 @@ current loss calculation uses all valid decoded positions, regardless of
 
 ### Autoregressive Inference
 
-Autoregressive inference is allowed when the model is causal, all input variables are target variables, `target_offset` equals 1 and `prediction_length` equals 1. It is enabled by setting `autoregressive_generation: true`, and `generation_steps` to the desired integer value. The number of generation_steps will be generated starting from the *first* complete subsequence in a sequence.
+Autoregressive inference is allowed when the model is causal, all input variables are target variables, `target_offset` equals 1 and `prediction_length` equals 1. It is enabled by setting `generation_steps` to the desired positive count. The number of generation_steps will be generated starting from the *first* complete subsequence in a sequence.
 
 It iteratively predicts future values, by returning predictions at step t-1 as input for generating a prediction at t. Predictions for categorical target variables can be made using argmax or sampling.
 
@@ -281,7 +281,7 @@ Next-occurrence causal modelling is a generalisation of final-value causal model
 
 ### Causal Embedding Model
 
-sequifier also supports the export of causal embeddings, instead of predictions. It requires the following settings: `export_embedding_model: true` in the training config and `task: embedding` in the inference config. Selected activations are restricted to the configured final `prediction_length` positions and concatenated in configuration order along the feature dimension.
+sequifier also supports the export of causal embeddings, instead of predictions. It requires the following settings: `run.export.embedding: {pt: {}}` in the training config and `task: embedding` in the inference config. Selected activations are restricted to the configured final `prediction_length` positions and concatenated in configuration order along the feature dimension.
 
 If you are interested in activations *other* than the last backbone layer, you can configure the exact layers you want to contribute to the export using `embedding_layer_names`. You can pass an ordered list, such as `[backbone.layers.1, decoder.branches.default.hidden_blocks.0]`, and the activations of these layers will be concatenated and output.
 
@@ -296,10 +296,10 @@ Sequifier also supports training and inference of BERT-style masked reconstructi
 Configuration:
 
 - Preprocessing: Set `max_target_offset: 0` for equal-width input and target windows.
-- Training: Set `training_objective: bert`, configure `bert_spec`, and set decoder `prediction_length` equal to `context_length`. Enable generative and/or embedding export according to the desired inference.
+- Training: Select `learning.objective.type: bert` and configure masking in the same objective, and set decoder `prediction_length` equal to `context_length`. Enable generative and/or embedding export according to the desired inference.
 - Inference: Set `task: forecast` to reconstruct explicitly masked input, or `task: embedding` to output contextual representations.
 
-Technical Details: BERT-style models use bidirectional attention and learn by reconstructing positions sampled according to `bert_spec`. Inference does not apply random masking; inputs that should be reconstructed must be masked explicitly, for example using `mask_column` during preprocessing. Embedding inference returns one contextual representation for every valid position in the input window.
+Technical Details: BERT-style models use bidirectional attention and learn by reconstructing positions sampled according to the phase’s masking settings. Inference does not apply random masking; inputs that should be reconstructed must be masked explicitly, for example using `mask_column` during preprocessing. Embedding inference returns one contextual representation for every valid position in the input window.
 
 ### Structured Ingestion
 

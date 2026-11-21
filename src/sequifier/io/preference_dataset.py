@@ -205,51 +205,68 @@ class PreferenceDataset:
 
 
 def prepare_preferences(run, phase, catalog, cache, membership):
-    from sequifier.rl.offline_data import phase_validation_fraction
-
     key = (
         "preferences",
-        phase.preferences.source,
-        tuple(ref.source for ref in (phase.evaluation.sources or [])),
+        tuple(ref.source for ref in phase.sources),
+        tuple(ref.source for ref in phase.evaluation.sources),
     )
     if key in cache:
         return cache[key]
     config = catalog.config
-    pairs = catalog.preference_pairs(run.preferences[phase.preferences.source])
-    validation = (
-        [
+    corpora = {}
+
+    def read(names):
+        pairs = [
             pair
-            for ref in phase.evaluation.sources
-            for pair in catalog.preference_pairs(run.preferences[ref.source])
+            for name in names
+            for pair in catalog.preference_pairs(run.preferences[name])
         ]
-        if phase.evaluation.sources
-        else None
-    )
-    all_pairs = pairs + (validation or [])
-    ids = [pair.pair_id for pair in all_pairs]
-    if len(ids) != len(set(ids)):
-        raise ValueError("preference pair IDs overlap across manifests")
-    names = {span.source for pair in all_pairs for span in (pair.chosen, pair.rejected)}
-    if names - run.sources.keys():
-        raise ValueError(
-            f"preferences reference unknown sources: {sorted(names - run.sources.keys())}"
+        if len({pair.pair_id for pair in pairs}) != len(pairs):
+            raise ValueError("Preference pair IDs overlap across manifests")
+        for pair in pairs:
+            for span in (pair.chosen, pair.rejected):
+                if span.source not in corpora:
+                    corpora[span.source] = catalog.dataset([span.source])
+        return pairs
+
+    def select(ref):
+        partition = run.partitions.get(ref.source)
+        if partition is None:
+            return read([ref.source])
+        population = read(partition.sources)
+        identity = (
+            "pairs",
+            tuple(partition.sources),
+            partition.validation_fraction,
+            run.seed,
         )
-    corpora = {name: catalog.dataset([name]) for name in sorted(names)}
-    if key not in membership:
-        data = PreferenceDataset(all_pairs, corpora, config)
-        if validation is not None:
-            left = {key for pair in pairs for key in data.components(pair)}
-            right = {key for pair in validation for key in data.components(pair)}
-            if left & right:
-                raise ValueError(
-                    f"preference train/validation components overlap: {next(iter(left & right))}"
-                )
-        else:
-            pairs, validation = split_components(
-                pairs, data.components, phase_validation_fraction(run, phase), run.seed
+        if identity not in membership:
+            data = PreferenceDataset(population, corpora, config)
+            subsets = split_components(
+                population, data.components, partition.validation_fraction, run.seed
             )
-        membership[key] = tuple(pairs), tuple(validation)
-    pairs, validation = membership[key]
+            membership[identity] = tuple(
+                {pair.pair_id for pair in subset} for subset in subsets
+            )
+        allowed = membership[identity][int(partition.split == "validation")]
+        return [pair for pair in read([partition.part]) if pair.pair_id in allowed]
+
+    pairs = [pair for ref in phase.sources for pair in select(ref)]
+    validation = [pair for ref in phase.evaluation.sources for pair in select(ref)]
+    all_pairs = pairs + validation
+    if (
+        not pairs
+        or not validation
+        or len({pair.pair_id for pair in all_pairs}) != len(all_pairs)
+    ):
+        raise ValueError("Preference views must be nonempty and have distinct pair IDs")
+    data = PreferenceDataset(all_pairs, corpora, config)
+    left = {key for pair in pairs for key in data.components(pair)}
+    right = {key for pair in validation for key in data.components(pair)}
+    if left & right:
+        raise ValueError(
+            f"Preference train/validation components overlap: {next(iter(left & right))}"
+        )
     held_out = PreferenceDataset(validation, corpora, config)
     held_out.validate_holdout()
     result = PreferenceData(

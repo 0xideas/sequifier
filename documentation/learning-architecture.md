@@ -1,6 +1,6 @@
 # Learning architecture
 
-All learning uses `SequifierConfig` and `training_plan.phases`; there is no second
+All learning uses `SequifierConfig` and `phases`; there is no second
 policy architecture or run discriminator. See the [training reference](configs/train.md),
 [policy guide](policy-learning.md), [artifact transfer guide](supervised-policy-learning.md),
 and [inference reference](configs/infer.md) for the supported configuration surface.

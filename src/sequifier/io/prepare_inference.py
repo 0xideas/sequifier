@@ -148,8 +148,9 @@ def _prepare_inference(
                 "write_format": "pt" if depth else "parquet",
                 "merge_output": not depth,
                 "selected_columns": temporal_columns,
-                "split_ratios": [1.0],
-                "window_lengths": [metadata.window_length],
+                "splits": {
+                    "train": {"fraction": 1.0, "window_length": metadata.window_length}
+                },
                 "max_target_offset": metadata.max_target_offset,
                 "normalize_real_columns": metadata.normalize_real_columns,
                 "static_data_path": static_path,
@@ -296,6 +297,7 @@ def export_policy_metadata(config):
             "Original preprocessing metadata is required for this actor's categorical hashing"
         )
     values = metadata.model_dump(mode="json")
+    values["split_names"] = []
     values["split_paths"] = []
     values["prediction_aligned_splits"] = []
     values["split_index"] = None

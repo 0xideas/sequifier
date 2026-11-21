@@ -1,6 +1,3 @@
-data_path: documentation/example_inputs/ppo-observations.csv
-read_format: csv
-write_format: csv
 rollout:
   trajectory_path: outputs/ppo-rollout.json
   seed_row_index: 0
@@ -12,11 +9,15 @@ rollout:
       horizon: 8
 action_selection: deterministic
 task: policy
-model_paths:
-- models/online-ppo.pt
 run:
   project_root: .
   execution:
     device: cpu
   reproducibility:
     enforce_determinism: true
+artifact:
+  paths:
+  - models/online-ppo.pt
+input:
+  path: documentation/example_inputs/ppo-observations.csv
+  format: csv

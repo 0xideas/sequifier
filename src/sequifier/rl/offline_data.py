@@ -54,20 +54,53 @@ def prepare_offline(run, phase, catalog, cache, membership):
     )
     if key in cache:
         return cache[key]
-    corpus = catalog.dataset
-    training = corpus([ref.source for ref in phase.sources])
-    if phase.evaluation.sources:
-        validation = corpus([ref.source for ref in phase.evaluation.sources])
-    else:
-        validate_reward_coverage(training)
-        if key not in membership:
-            membership[key] = episode_partition_indices(
-                training,
-                phase_validation_fraction(run, phase),
-                run.seed,
-                group_identical=True,
-            )
-        training, validation = (training.subset(indices) for indices in membership[key])
+
+    def select(refs):
+        from sequifier.io.episode_corpus import EpisodeView
+
+        views = []
+        for ref in refs:
+            partition = run.partitions.get(ref.source)
+            if partition is None:
+                part = catalog.dataset([ref.source])
+            else:
+                population = catalog.dataset(partition.sources)
+                validate_reward_coverage(population)
+                identity = (
+                    "episodes",
+                    tuple(partition.sources),
+                    partition.validation_fraction,
+                    run.seed,
+                )
+                if identity not in membership:
+                    indices = episode_partition_indices(
+                        population,
+                        partition.validation_fraction,
+                        run.seed,
+                        group_identical=True,
+                    )
+                    membership[identity] = tuple(
+                        {population.episode_ids[i] for i in subset}
+                        for subset in indices
+                    )
+                allowed = membership[identity][int(partition.split == "validation")]
+                part = catalog.dataset([partition.part])
+                part = part.subset(
+                    i
+                    for i, episode in enumerate(part.episode_ids)
+                    if episode in allowed
+                )
+            validate_reward_coverage(part)
+            views.append(part.episodes)
+        return EpisodeDecisions(
+            EpisodeView.combine(views),
+            catalog.config,
+            episode_cache_size=catalog.cache_size,
+            cache_owner=catalog.cache_owner,
+        )
+
+    training = select(phase.sources)
+    validation = select(phase.evaluation.sources)
     for part in (training, validation):
         validate_reward_coverage(part)
     if not len(training) or not len(validation):
@@ -111,16 +144,3 @@ def prepare_iql(run, phase, catalog, cache, membership):
         data.prepare_transitions()
         cache[key] = data
     return cache[key]
-
-
-def phase_validation_fraction(run, phase):
-    """A combined leakage-safe split requires a single agreed fraction."""
-    fractions = {
-        run.source_validation_fractions[ref.source]
-        for ref in phase.data_sources.training
-    }
-    if len(fractions) != 1:
-        raise ValueError(
-            f"{phase.name}: automatic splitting of combined datasets requires equal dataset split fractions; declare evaluation.sources for explicit partitions"
-        )
-    return next(iter(fractions))

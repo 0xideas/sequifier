@@ -30,23 +30,42 @@ model:
         action: []
   execution:
     context_length: 16
-dataset_training:
+policy_bindings:
+  actor:
+    return_conditioned: false
+    actions:
+      action:
+        type: categorical
+        values:
+        - left
+        - right
+    feedback:
+      __policy_previous_action:
+        action: action
+        initial: start
+run:
+  project_root: .
+  model_name: toy-bc
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+datasets:
   demonstrations:
-    parts:
+    model_interface: actor
+    sources:
       recorded:
         type: sequence
         paths:
         - data/offline-transitions.csv
-    model_interface: actor
-    split:
+    partition:
       validation_fraction: 0.2
-training_plan:
-  phases:
-  - name: behavior_cloning
+phases:
+  behavior_cloning:
     algorithm: policy_imitation
     sources:
-    - source: demonstrations.recorded
-    epochs: 30
+    - source: demonstrations.train
     batch_size: 64
     model_selection:
       handoff: last
@@ -57,30 +76,9 @@ training_plan:
       cadence:
         iterations: 1
       batch_size: 64
-      before_phase: false
-      on_snapshot: false
-policy_bindings:
-  actor:
-    previous_action_inputs:
-      __policy_previous_action: action
-    initial_inputs:
-      __policy_previous_action: start
-    return_conditioned: false
-    actions:
-      action:
-        type: categorical
-        values:
-        - left
-        - right
-run:
-  project_root: .
-  model_name: toy-bc
-  reproducibility:
-    seed: 1010
-    enforce_determinism: false
-  execution:
-    device: cpu
-  recovery: {}
-  logging: {}
-  outputs: {}
-  export: {}
+      sources:
+      - source: demonstrations.validation
+    budget:
+      epochs: 30
+plan:
+- behavior_cloning

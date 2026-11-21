@@ -41,24 +41,24 @@ _MAX_CONSECUTIVE_DUPLICATE_PROPOSALS = 1000
 
 @beartype
 def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
-    if any(
-        phase.algorithm != "supervised" for phase in run_config.training_plan.phases
-    ):
+    if any(phase.algorithm != "supervised" for phase in run_config.ordered_phases):
         raise ValueError(
             "hyperparameter search for trajectory training is not yet supported"
         )
-    dataset_names = tuple(run_config.dataset_training)
+    dataset_names = {
+        ref.dataset for phase in run_config.ordered_phases for ref in phase.data_sources
+    }
     dataset_count = len(dataset_names)
     if dataset_count == 1:
         return None, dataset_count
-    evaluation = run_config.training_plan.phases[-1].evaluation
+    evaluation = run_config.ordered_phases[-1].evaluation
     monitor = evaluation.monitor if evaluation is not None else None
     if monitor is None:
         raise ValueError(
             "Multi-dataset hyperparameter search requires evaluation.monitor"
         )
     dataset_name = monitor.dataset
-    if dataset_name not in run_config.dataset_training:
+    if dataset_name not in run_config.datasets:
         raise ValueError(
             f"evaluation.monitor references unknown dataset {dataset_name!r}"
         )
@@ -110,7 +110,7 @@ def objective(
     )
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
 
-    final_phase = run_config.training_plan.phases[-1]
+    final_phase = run_config.ordered_phases[-1]
     monitor = final_phase.evaluation.monitor if final_phase.evaluation else None
     monitor_metric = monitor.metric if monitor is not None else "loss"
     monitor_direction = monitor.direction if monitor is not None else "min"

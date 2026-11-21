@@ -70,7 +70,7 @@ class PartLoaderFactory:
     def _build_dataset(
         self, loading: PhaseLoading, split: Literal["training", "validation"]
     ):
-        data_loading = self.config.run.execution.data_loading
+        data_loading = self.config.run.execution.supervised_settings.data_loading
         curriculum_column = (
             loading.curriculum_column
             if split == "training" and self.curriculum_eligible
@@ -96,7 +96,7 @@ class PartLoaderFactory:
 
             dataset = load_indexed_dataset(path, dataset_config, shuffle=shuffle)
         elif part.storage_form == "file":
-            if self.config.run.execution.distribution.distributed:
+            if self.config.run.execution.supervised_settings.distribution.distributed:
                 raise ValueError(
                     "Distributed training is not supported with single-file parts"
                 )
@@ -140,7 +140,7 @@ class PartLoaderFactory:
         if split in self.loaders:
             return self.loaders[split]
         dataset = self._build_dataset(phase.loading, split)
-        data_loading = self.config.run.execution.data_loading
+        data_loading = self.config.run.execution.supervised_settings.data_loading
         generator = self.generators.get(split)
         if generator is None:
             generator = torch.Generator().manual_seed(
@@ -535,8 +535,8 @@ class SourceScheduler:
                 index,
                 dataset_names.index(source.dataset),
                 -1
-                if source.part is None
-                else list(datasets[source.dataset].parts).index(source.part),
+                if len(source.parts) != 1
+                else list(datasets[source.dataset].parts).index(source.parts[0]),
                 source.batches_per_selection,
             )
             for index, source in enumerate(self.sources)

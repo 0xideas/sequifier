@@ -228,6 +228,7 @@ class ResolvedInterfaceStorage(RawInputMetadata):
 
     tensor_payload_kind: TensorPayloadKind
     tensor_payload_version: int = Field(strict=True)
+    split_names: list[str] = Field(default_factory=list)
     split_paths: list[str] = Field(default_factory=list)
     prediction_aligned_splits: list[int] = Field(default_factory=list)
     prediction_alignment_steps: int = 1

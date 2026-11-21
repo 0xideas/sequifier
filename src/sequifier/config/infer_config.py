@@ -2,6 +2,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Generic, Literal, Optional, TypeVar
 
 import numpy as np
@@ -19,8 +20,8 @@ from sequifier.config.inference_common import (
 from sequifier.config.metadata import (
     DatasetMetadata,
     FeatureSelection,
-    extract_inline_metadata,
     load_dataset_metadata,
+    validate_authored_metadata,
     validate_persisted_metadata_versions,
 )
 from sequifier.config.model_interface import (
@@ -362,7 +363,15 @@ def load_inferer_config(
     from sequifier.config.command_ownership import apply_run_overrides
 
     config_values, cli_values = apply_run_overrides(config_values, cli_values)
-    authored_values = merge_config_fragments((config_values, cli_values))
+    from sequifier.config.inference_request import REQUESTS, inference_overrides
+
+    composed = merge_config_fragments((config_values, inference_overrides(cli_values)))
+    authored_values = REQUESTS.validate_python(composed).resolver_values()
+    inline_metadata = authored_values.pop("inline_metadata", None)
+    if inline_metadata is not None:
+        if not skip_metadata:
+            raise ValueError("input.inline_metadata requires --skip-metadata")
+        validate_authored_metadata(inline_metadata)
     if authored_values.get("task") == "policy":
         if skip_metadata:
             raise ValueError("skip_metadata is not supported for policy inference")
@@ -370,13 +379,14 @@ def load_inferer_config(
             PolicyInferenceConfig.model_validate(authored_values)
         )
 
+    if route_path := authored_values.get("training_config_path"):
+        root = authored_values.get("run", {}).get("project_root", ".")
+        authored_values["training_config_path"] = str(
+            (Path(root) / route_path).resolve()
+        )
     models = []
-    authored_values, extracted_metadata_values = extract_inline_metadata(
-        authored_values
-    )
     request = InferenceConfig.model_validate(authored_values)
     authored_values["run"] = request.run.model_dump(mode="python", exclude_unset=True)
-    inline_metadata_values = extracted_metadata_values if skip_metadata else None
 
     project_root = request.project_root
     selected_metadata = None
@@ -385,15 +395,8 @@ def load_inferer_config(
 
     dataset_name = request.dataset
     training_config_path = request.training_config_path
-    route_selected = dataset_name is not None or request.model_interface is not None
     training_source = None
-    if training_config_path is not None and (
-        route_selected
-        or (
-            ("model_paths" not in cli_values or "training_config_path" in cli_values)
-            and any(path.lower().endswith(".pt") for path in request.model_paths)
-        )
-    ):
+    if training_config_path is not None:
         from sequifier.config.train_config import load_train_config
 
         training = load_train_config(training_config_path, {}, False)
@@ -412,10 +415,10 @@ def load_inferer_config(
             storage = training.execution.interface_storage.get(interface_name)
             source = f"training config interface {interface_name!r}"
         elif len(datasets) == 1:
-            name = next(iter(datasets))
-            interface = training.dataset_interface(name)
-            storage = training.dataset_storage(name)
-            source = f"training config dataset {name!r}"
+            dataset_name = next(iter(datasets))
+            interface = training.dataset_interface(dataset_name)
+            storage = training.dataset_storage(dataset_name)
+            source = f"training config dataset {dataset_name!r}"
         else:
             raise ValueError(
                 "A dataset or model_interface selection is required for the "
@@ -432,16 +435,27 @@ def load_inferer_config(
         if dataset_name is not None:
             dataset = datasets[dataset_name]
             part_name = authored_values.get("part")
+            if part_name is None and len(dataset.views) == 1:
+                part_name = next(iter(dataset.views))
             if part_name is None:
-                if len(dataset.parts) != 1:
+                if request.data_path is None:
                     raise ValueError(
-                        f"Dataset {dataset_name!r} has multiple parts; select part"
+                        f"Select an input.training_route.view from {list(dataset.views)}"
                     )
-                part_name = next(iter(dataset.parts))
-                authored_values["part"] = part_name
-            if part_name not in dataset.parts:
-                raise ValueError(f"Unknown inference part {dataset_name}.{part_name}")
-            part = dataset.parts[part_name]
+                # The input supplies its own rows. Route metadata supplies the codec.
+                part = next(iter(dataset.parts.values()))
+            else:
+                if part_name not in dataset.views:
+                    raise ValueError(f"Unknown input view {dataset_name}.{part_name}")
+                members = dataset.views[part_name]
+                if len(members) != 1 and request.data_path is None:
+                    raise ValueError(
+                        "A multi-part inference view requires an explicit input.path"
+                    )
+                part = dataset.parts[members[0]]
+                if request.data_path is None:
+                    authored_values["data_path"] = part.view_path
+                    authored_values.setdefault("read_format", part.read_format)
             selected_metadata = part.metadata
             selected_metadata_path = part.metadata_config_path
 
@@ -457,12 +471,6 @@ def load_inferer_config(
         if execution is None:
             continue
         assert interface_name is not None
-        if (
-            "model_paths" in cli_values
-            and "training_config_path" not in cli_values
-            and not route_selected
-        ):
-            authored_values["training_config_path"] = None
         interface = execution.interface(interface_name)
         decoder = interface.decoder
         branches = (
@@ -505,8 +513,8 @@ def load_inferer_config(
         config.metadata_config_path = str(original_metadata_path(config, indexed_view))
     metadata_path = _effective_metadata_config_path(config)
     artifact_only_metadata = False
-    if skip_metadata and inline_metadata_values is not None:
-        metadata = DatasetMetadata.model_validate(inline_metadata_values)
+    if skip_metadata and inline_metadata is not None:
+        metadata = DatasetMetadata.model_validate(inline_metadata)
     elif not skip_metadata and metadata_path is not None:
         metadata = load_dataset_metadata(
             normalize_path(metadata_path, config.project_root)
@@ -520,7 +528,7 @@ def load_inferer_config(
         artifact_only_metadata = fallback is not training_source
     elif skip_metadata:
         raise ValueError(
-            "skip_metadata requires inline storage_layout and column values, a "
+            "--skip-metadata requires input.inline_metadata, a "
             "selected training dataset, or a self-describing PT artifact."
         )
     else:
@@ -544,7 +552,7 @@ def load_inferer_config(
         and config.data_path is None
         and metadata.split_paths
     ):
-        config.data_path = metadata.split_paths[min(2, len(metadata.split_paths) - 1)]
+        config.data_path = _metadata_input_path(metadata, config.split)
         indexed_view = resolve_inference_view(config, skip_metadata=skip_metadata)
     if config.input_layout == "indexed" and indexed_view is None:
         raise ValueError("Indexed inference requires an indexed split manifest")
@@ -558,6 +566,18 @@ def load_inferer_config(
         allow_wider_artifact_folder=artifact_only_metadata,
         indexed_view=indexed_view,
     )
+
+
+def _metadata_input_path(metadata, split):
+    names = metadata.split_names
+    if split is None:
+        if len(names) == 1:
+            split = names[0]
+        elif "test" in names:
+            split = "test"
+        else:
+            raise ValueError(f"Select input.path or a named input.split from {names}")
+    return metadata.split_paths[metadata.named_split_index(split)]
 
 
 @beartype
@@ -652,9 +672,7 @@ def _resolve_inference_config(
             "Resolved inference config needs data_path when metadata does not "
             "provide split_paths."
         )
-    data_path = (
-        config.data_path or metadata.split_paths[min(2, len(metadata.split_paths) - 1)]
-    )
+    data_path = config.data_path or _metadata_input_path(metadata, config.split)
     normalized_data_path = normalize_path(data_path, config.project_root)
     if config.input_layout == "raw":
         normalized_data_path = os.path.abspath(normalized_data_path)
@@ -795,6 +813,7 @@ class _InferenceConfigBase(
     data_path: _DataPathT
     fresh_prediction_positions: Literal["right_edge", "observed"] | None = None
     training_config_path: Optional[str] = None
+    split: str | None = None
     dataset: Optional[str] = None
     part: Optional[str] = None
 
@@ -839,8 +858,6 @@ class _InferenceConfigBase(
         ):
             if value is not None and ("." in value or not value.isidentifier()):
                 raise ValueError(f"{usage} must be a valid identifier without '.'")
-        if self.part is not None and self.dataset is None:
-            raise ValueError("part selection requires dataset selection")
         return self
 
     @field_validator("training_objective")

@@ -125,7 +125,7 @@ def materialize_history(config, observations, previous_actions, static, *, codec
                         raw = config.initial_inputs[key]
                     else:
                         raise ValueError(
-                            f"{key}: lagged action requires initial_inputs at episode start"
+                            f"{key}: lagged action requires a feedback initial value at episode start"
                         )
                 elif key in row:
                     raw = row[key]

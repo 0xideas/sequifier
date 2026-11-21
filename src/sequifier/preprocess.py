@@ -2019,6 +2019,7 @@ class Preprocessor:
                 "data_columns": fitted.data_columns,
                 "categorical_columns": self.config.categorical_columns,
                 "real_columns": self.config.real_columns,
+                "split_names": list(self.config.splits),
                 "split_ratios": self.config.split_ratios,
                 "split_method": self.config.split_method,
                 "split_column": self.config.split_column,
@@ -2163,6 +2164,7 @@ class Preprocessor:
             **fitted.metadata(),
             "cardinality_config": self.cardinality_config,
             "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
+            "split_names": list(self.config.splits),
             "split_paths": [
                 os.path.splitext(split_path)[0]
                 if not self.config.merge_output

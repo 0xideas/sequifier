@@ -47,7 +47,7 @@ def collect_groups(
         for group_index in range(start_group, start_group + count):
             token = collection.start(group_index)
             trajectories = []
-            for sample in range(phase.group_size):
+            for sample in range(phase.collection.group_size):
                 state = collection.trajectory(group_index, sample, token)
                 cursor = state.cursor
                 cursor.reset(
@@ -59,7 +59,7 @@ def collect_groups(
                 )
                 collection.validate_initial(state)
                 result = None
-                for _ in range(phase.max_steps):
+                for _ in range(phase.collection.max_steps):
                     frame = cursor.history.current
                     collection.account(frame_storage_bytes(frame) + 1024)
                     decision = cursor.decide(compute_entropy=False)

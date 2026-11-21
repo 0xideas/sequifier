@@ -33,31 +33,40 @@ class SequenceSourceConfig(PolicyConfigBase):
     metadata_config_path: str | None = None
     encoding: Literal["raw", "model"] = "raw"
     static_data_path: str | None = None
-    split_index: int | None = Field(default=None, ge=0)
+    split: NonemptyStr | None = None
     action_semantics: Literal["policy", "executed_predictions"] = "policy"
 
     @model_validator(mode="after")
     def validate_location(self):
         metadata_split = (
-            self.metadata_config_path is not None and self.split_index is not None
+            self.metadata_config_path is not None and self.split is not None
         )
         if sum((bool(self.paths), self.manifest_path is not None, metadata_split)) != 1:
             raise ValueError("trajectory source requires either paths or one manifest")
         if (
-            self.split_index is not None
+            self.split is not None
             or self.encoding == "model"
             or self.format == "prepared"
         ) and self.metadata_config_path is None:
             raise ValueError(
-                "prepared/model-encoded sources and split_index require metadata_config_path"
+                "prepared/model-encoded sources and named splits require metadata_config_path"
             )
         return self
+
+
+class PartitionView(PolicyConfigBase):
+    """Physical sources partitioned together and the subset exposed by one view."""
+
+    sources: list[str]
+    part: str
+    split: Literal["train", "validation"]
+    validation_fraction: float
 
 
 class PolicyDataSettings(PolicyConfigBase):
     project_root: str
     sources: dict[str, SequenceSourceConfig]
     preferences: dict[str, str]
-    source_validation_fractions: dict[str, float]
+    partitions: dict[str, PartitionView] = Field(default_factory=dict)
     seed: int
     episode_cache_size: int

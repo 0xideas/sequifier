@@ -15,10 +15,21 @@ rollout:
   max_steps: 100
   seed_window_index: 0
   trajectory_path: outputs/trajectory.json
-  environment: {factory: "application.adapters:make_environment", config: {}}
+  environment:
+    factory: application.adapters:make_environment
+    config: {}
   bindings:
-    - {input: x, source: prediction, key: x}
-    - {input: disturbance, source: environment, key: disturbance}
+  - input: x
+    source: prediction
+    key: x
+  - input: disturbance
+    source: environment
+    key: disturbance
+artifact:
+  paths: [models/forecast.pt]
+input:
+  metadata_config_path: configs/metadata_configs/events.json
+  split: test
 ```
 
 Run `sequifier infer --config-path configs/infer.yaml`. `seed_window_index` selects
