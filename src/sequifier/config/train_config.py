@@ -41,7 +41,7 @@ from sequifier.config.model_interface import (
     ResolvedInterfaceStorage,
     ResolvedModelInterface,
 )
-from sequifier.config.naming import ConfigModel
+from sequifier.config.naming import ConfigModel, supervised_phase_seed
 from sequifier.config.normalization_config import FrozenNormalizationConfig
 from sequifier.config.ownership import (
     DataLoadingSettings,
@@ -448,7 +448,7 @@ def resolve_phases(authored_phases, sources, *, seed: int):
                 name: getattr(phase, name)
                 for name in SupervisedPhaseSettings.model_fields
             },
-            resolved_seed=seed + phase_index,
+            resolved_seed=supervised_phase_seed(seed, phase_index),
             evaluation_sources=[
                 sources.supervised_source(ref) for ref in phase.evaluation.sources
             ]

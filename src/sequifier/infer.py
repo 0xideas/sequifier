@@ -174,7 +174,9 @@ def _execute_inference(config):
 
     configure_determinism(config.seed, config.enforce_determinism)
     # Seed once for this CLI run, before creating any ORT sessions.
-    onnxruntime.set_seed(config.seed)
+    # ORT takes a signed int32. Preserve all 32 bits of the authored seed.
+    ort_seed = config.seed if config.seed < 2**31 else config.seed - 2**32
+    onnxruntime.set_seed(ort_seed)
 
     infer_worker(config)
 

@@ -2,10 +2,10 @@
 
 from typing import Annotated, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, StrictInt, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.components import ResumeConfig
-from sequifier.config.naming import ConfigModel, RunSeed
+from sequifier.config.naming import ConfigModel, RunSeed, SeedInteger
 from sequifier.config.normalization_config import FrozenNormalizationConfig
 from sequifier.model.execution_options import DEFAULT_MAX_CONCAT_TENSORS, ConcatLimit
 
@@ -91,12 +91,15 @@ class ExecutionSettings(Settings):
         return self.supervised
 
 
-class TrainingReproducibilitySettings(Settings):
-    seed: StrictInt | Literal["random"] = 1010
+class _DeterminismSettings(Settings):
     enforce_determinism: bool = False
 
 
-class ReproducibilitySettings(TrainingReproducibilitySettings):
+class TrainingReproducibilitySettings(_DeterminismSettings):
+    seed: SeedInteger | Literal["random"] = 1010
+
+
+class ReproducibilitySettings(_DeterminismSettings):
     seed: RunSeed = 1010
 
 

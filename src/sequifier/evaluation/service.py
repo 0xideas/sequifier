@@ -204,6 +204,10 @@ class EvaluationService:
                         self._baseline_definition(dataset),
                     )
                     calculate_baseline = baseline_key not in self._baselines
+                    bert = phase.learning.bert_spec
+                    mask_seed = bert.evaluation_mask_seed if bert is not None else 0
+                    if mask_seed == "run":
+                        mask_seed = phase.seed
                     for batch_index, runtime_batch in enumerate(
                         source.iter_batches("validation")
                     ):
@@ -212,7 +216,8 @@ class EvaluationService:
                             dataset,
                             context.device,
                             eval_seed=(
-                                context.phase_index * 1_000_003
+                                mask_seed
+                                + context.phase_index * 1_000_003
                                 + context.phase_epoch * 10_007
                                 + batch_index
                             ),

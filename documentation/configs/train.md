@@ -625,6 +625,13 @@ different evaluation-mask seeds and therefore start separate histories. Set
 Best handoff, stopping and plateau
 scheduling require an evaluation monitor. See [ownership](ownership.md#phase-settings).
 
+For BERT validation, set `phases.<name>.learning.objective.evaluation_mask_seed`
+to an integer from 0 through 4294967295 to choose an independent masking seed.
+The default of `0` preserves the existing validation masks. Use `run` to derive
+the masks from the phase seed, including when `run.reproducibility.seed` is
+`random`. Each validation batch adds offsets for its phase, epoch, and batch
+index. Training masks continue to use the training random stream.
+
 Frozen normalization is an interface input contract or inherited artifact fact.
 Repeating `sequifier train` resumes the latest compatible checkpoint by default.
 A completed run reuses its published outputs. Set `run.retrain: true` to start

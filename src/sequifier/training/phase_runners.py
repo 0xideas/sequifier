@@ -13,6 +13,7 @@ from sequifier.artifacts.dependencies import (
     supervised_dependencies,
 )
 from sequifier.artifacts.phase import PhaseArtifacts
+from sequifier.config.naming import supervised_phase_seed
 
 if TYPE_CHECKING:
     from sequifier.rl.preparation import PolicyGroupPreparation
@@ -152,7 +153,9 @@ def compile_phase_group(config, phases, index, inputs):
         if name in names
     }
     seed = (
-        phase.resolved_seed if phase.resolved_seed is not None else config.seed + index
+        phase.resolved_seed
+        if phase.resolved_seed is not None
+        else supervised_phase_seed(config.seed, index)
     )
     model_name = f"{config.model_name}-phase-{index:03d}"
     resolved = config.model_copy(

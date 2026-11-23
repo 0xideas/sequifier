@@ -17,7 +17,7 @@ from pydantic import (
 
 from sequifier.config.identifiers import validate_module_dict_key
 from sequifier.config.initialization_config import ModelInitializationConfig
-from sequifier.config.naming import ConfigModel
+from sequifier.config.naming import ConfigModel, SeedInteger
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.typechecking import beartype
 
@@ -1000,9 +1000,18 @@ class ReplacementDistribution(ConfigModel):
 
 
 class BERTSpecModel(ConfigModel):
+    evaluation_mask_seed: SeedInteger | Literal["run"] = 0
     masking_probability: float = Field(..., gt=0.0, le=1.0)
     replacement_distribution: ReplacementDistribution
     span_masking: ProbabilityDistribution
+
+    @model_serializer(mode="wrap")
+    def serialize_mask_settings(self, serializer):
+        values = serializer(self)
+        # Preserve existing checkpoint and scoring fingerprints at the default.
+        if self.evaluation_mask_seed == 0:
+            values.pop("evaluation_mask_seed", None)
+        return values
 
 
 class NextOccurrenceConfigModel(ConfigModel):

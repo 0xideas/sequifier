@@ -104,7 +104,7 @@ one artifact. `input` describes rows or an indexed view. `output` configures
 the table. Forecast and policy requests can select `rollout` for a trajectory.
 Use `assertions` for checks against the artifact contract.
 
-Run `run.reproducibility.seed` accepts an integer or `random`. Random seeds resolve once to an integer
+Run `run.reproducibility.seed` accepts an integer from 0 through 4294967295 or `random`. Random seeds resolve once to an integer
 recorded in the effective configuration. `sampler_seed` controls an independent
 search stream. Initialization and hash seeds stay scoped integer declarations.
 `enforce_determinism`, `action_selection`, and `seed` remain independent controls.

@@ -1,13 +1,20 @@
 """Shared configuration defaults and run-seed resolution."""
 
 import secrets
-from typing import Annotated, Any
+from typing import Annotated, Any, TypeAlias
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 
 class ConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+SeedInteger: TypeAlias = Annotated[int, Field(strict=True, ge=0, lt=2**32)]
+
+
+def supervised_phase_seed(run_seed: int, index: int) -> int:
+    return (run_seed + index) % 2**32
 
 
 def resolve_run_seed(value: Any) -> int:
@@ -18,4 +25,4 @@ def resolve_run_seed(value: Any) -> int:
     return value
 
 
-RunSeed = Annotated[int, BeforeValidator(resolve_run_seed)]
+RunSeed: TypeAlias = Annotated[SeedInteger, BeforeValidator(resolve_run_seed)]
