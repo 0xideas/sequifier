@@ -69,9 +69,9 @@ class DatasetLearningConfig(ConfigModel):
         for target, loss in self.losses.items():
             criterion = loss.criterion
             categorical = interface.target_column_types[target] == "categorical"
-            if criterion == "AccurateCrossEntropyLoss" and not categorical:
+            if criterion in {"NLLLoss", "AccurateCrossEntropyLoss"} and not categorical:
                 raise ValueError(
-                    f"{usage}: AccurateCrossEntropyLoss requires categorical target {target!r}"
+                    f"{usage}: {criterion} requires categorical target {target!r}"
                 )
             weights = loss.class_weights
             if target in interface.categorical_hashing:

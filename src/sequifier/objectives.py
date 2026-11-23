@@ -327,12 +327,18 @@ class BERTObjective(Objective):
         targets: dict[str, Tensor],
         target_column_type: str,
     ) -> Tensor:
-        shifted_targets = torch.roll(targets[target_column], shifts=1, dims=1)
-        if target_column_type == "categorical":
-            shifted_targets[:, 0] = SPECIAL_TOKEN_IDS.unknown
-        else:
-            shifted_targets[:, 0] = 0.0
-        return shifted_targets.transpose(0, 1)
+        # Persistence can only copy the predecessor the model actually observed.
+        previous = (
+            super()
+            .baseline_prediction_values(
+                target_column, data, targets, target_column_type
+            )
+            .roll(1, dims=0)
+        )
+        previous[0] = (
+            SPECIAL_TOKEN_IDS.unknown if target_column_type == "categorical" else 0.0
+        )
+        return previous
 
     @classmethod
     @beartype
@@ -410,7 +416,7 @@ def _build_bert_span_mask(
     valid_lengths = valid_mask.sum(dim=1, dtype=torch.long)
     budgets = (valid_lengths.to(torch.float32) * masking_probability).to(torch.long)
 
-    max_spans = max(1, math.floor(seq_len * masking_probability) + 10)
+    max_spans = max(1, math.ceil(seq_len * masking_probability))
     sampled_lengths = span_distribution.sample(
         (batch_size, max_spans),
         device=device,
@@ -425,53 +431,18 @@ def _build_bert_span_mask(
     n_spans = (span_lengths > 0).sum(dim=1)
     total_gap_length = valid_lengths - budgets
 
-    gap_slot = torch.arange(max_spans + 1, device=device)
-    active_gap_slot = gap_slot[None, :] <= n_spans[:, None]
-
-    uniform = torch.rand(
-        (batch_size, max_spans + 1),
-        device=device,
-        dtype=torch.float32,
-        generator=generator,
-    )
-    uniform = uniform.clamp_min(torch.finfo(uniform.dtype).tiny)
-
-    gap_weights = torch.where(
-        active_gap_slot,
-        -torch.log(uniform),
-        torch.zeros_like(uniform),
-    )
-    cumulative_weights = gap_weights.cumsum(dim=1)
-    weight_totals = cumulative_weights[:, -1:].clamp_min(
-        torch.finfo(gap_weights.dtype).tiny
-    )
-
-    gap_edges = torch.floor(
-        cumulative_weights
-        / weight_totals
-        * total_gap_length[:, None].to(gap_weights.dtype)
-    ).to(torch.long)
-    gap_edges = torch.where(
-        gap_slot[None, :] >= n_spans[:, None],
-        total_gap_length[:, None],
-        gap_edges,
-    )
-
-    gaps = torch.diff(
-        torch.cat(
-            [
-                torch.zeros((batch_size, 1), dtype=torch.long, device=device),
-                gap_edges,
-            ],
-            dim=1,
-        ),
-        dim=1,
-    )
-
-    lengths_before = span_lengths.cumsum(dim=1) - span_lengths
-    gaps_through_current = gaps[:, :max_spans].cumsum(dim=1)
-
-    span_starts = lengths_before + gaps_through_current
+    # Uniformly permute the span markers among the unmasked tokens. Expanding
+    # each marker to its sampled length gives every legal gap allocation the
+    # same probability, including zero gaps at either end of the sequence.
+    slots = torch.arange(seq_len, device=device)
+    priorities = torch.rand((batch_size, seq_len), device=device, generator=generator)
+    priorities.masked_fill_(slots >= (total_gap_length + n_spans)[:, None], torch.inf)
+    order = priorities.argsort(dim=1)[:, :max_spans]
+    span_slot = torch.arange(order.shape[1], device=device)
+    marker_positions = order.masked_fill(span_slot >= n_spans[:, None], seq_len)
+    marker_positions = marker_positions.sort(dim=1).values
+    span_starts = marker_positions - span_slot + used_before
+    span_starts = span_starts.masked_fill(span_slot >= n_spans[:, None], seq_len)
     span_ends = span_starts + span_lengths
 
     compact_position = valid_mask.to(torch.long).cumsum(dim=1) - 1
@@ -576,73 +547,38 @@ def apply_bert_masking(
             masked_data[col] = output
             continue
 
+        masked = mask_token_mask
+        random = random_token_mask
         if col in depth_column_layout:
             layout_name = depth_column_layout[col]
             slot_valid = metadata_batch[depth_mask_metadata_key(layout_name)].bool()
-            masked_slots = mask_token_mask[:, :, None] & slot_valid
-            random_slots = random_token_mask[:, :, None] & slot_valid
-            output = tensor.clone()
-            if col in config.categorical_columns:
-                if p_masked > 0.0:
-                    output[masked_slots] = SPECIAL_TOKEN_IDS.mask
-                if p_random > 0.0:
-                    random_tokens = torch.randint(
-                        low=SPECIAL_TOKEN_IDS.user_start,
-                        high=config.n_classes[col],
-                        size=tensor.shape,
-                        device=device,
-                        dtype=tensor.dtype,
-                        generator=generator,
-                    )
-                    output[random_slots] = random_tokens[random_slots]
-            elif col in config.real_columns:
-                if p_masked > 0.0:
-                    output[masked_slots] = 0.0
-                if p_random > 0.0:
-                    random_noise = torch.randn(
-                        tensor.shape,
-                        device=device,
-                        dtype=tensor.dtype,
-                        generator=generator,
-                    )
-                    output[random_slots] = random_noise[random_slots]
-            masked_data[col] = output
-            continue
+            masked = masked[:, :, None] & slot_valid
+            random = random[:, :, None] & slot_valid
 
         if col in config.categorical_columns:
-            output = tensor.clone()
-
+            # Torch does not implement masked writes for all unsigned storage dtypes.
+            output = tensor.to(torch.int64, copy=True)
             if p_masked > 0.0:
-                output.masked_fill_(mask_token_mask, SPECIAL_TOKEN_IDS.mask)
-
+                output.masked_fill_(masked, SPECIAL_TOKEN_IDS.mask)
             if p_random > 0.0:
                 random_tokens = torch.randint(
-                    low=SPECIAL_TOKEN_IDS.user_start,
-                    high=config.n_classes[col],
-                    size=tensor.shape,
-                    device=device,
-                    dtype=tensor.dtype,
-                    generator=generator,
-                )
-                output[random_token_mask] = random_tokens[random_token_mask]
-
-            masked_data[col] = output
-
-        elif col in config.real_columns:
-            output = tensor.clone()
-
-            if p_masked > 0.0:
-                output.masked_fill_(mask_token_mask, 0.0)
-
-            if p_random > 0.0:
-                random_noise = torch.randn(
+                    SPECIAL_TOKEN_IDS.user_start,
+                    config.n_classes[col],
                     tensor.shape,
                     device=device,
-                    dtype=tensor.dtype,
                     generator=generator,
                 )
-                output[random_token_mask] = random_noise[random_token_mask]
-
+                output = torch.where(random, random_tokens, output)
+            masked_data[col] = output.to(tensor.dtype)
+        elif col in config.real_columns:
+            output = tensor.clone()
+            if p_masked > 0.0:
+                output.masked_fill_(masked, 0.0)
+            if p_random > 0.0:
+                random_noise = torch.randn(
+                    tensor.shape, device=device, dtype=tensor.dtype, generator=generator
+                )
+                output = torch.where(random, random_noise, output)
             masked_data[col] = output
 
     detached_targets = {col: tensor.detach() for col, tensor in targets_batch.items()}

@@ -145,6 +145,13 @@ class FeedForward(nn.Module):
             return self.linear2(cast_floating_to_module_dtype(hidden, self.linear2))
 
 
+def _attention_weights(scores):
+    # A left-padded causal query may have no legal keys. Make both its
+    # probability mass and its softmax gradient zero, as in eager SDPA.
+    empty = torch.isneginf(scores).all(dim=-1, keepdim=True)
+    return torch.softmax(scores.masked_fill(empty, 0.0), dim=-1).masked_fill(empty, 0.0)
+
+
 class SelfAttention(nn.Module):
     @beartype
     def __init__(
@@ -252,7 +259,7 @@ class SelfAttention(nn.Module):
                     if mask.dtype == torch.bool
                     else scores + mask
                 )
-            weights = self.dropout(torch.softmax(scores, dim=-1))
+            weights = self.dropout(_attention_weights(scores))
             output = torch.matmul(weights, xv)
         elif not analysis_requested:
             output = F.scaled_dot_product_attention(
@@ -271,7 +278,7 @@ class SelfAttention(nn.Module):
             scores = torch.matmul(xq, xk.transpose(-2, -1)) / math.sqrt(self.head_dim)
             if mask is not None:
                 if mask.dtype == torch.bool:
-                    scores = scores.masked_fill(~mask, torch.finfo(scores.dtype).min)
+                    scores = scores.masked_fill(~mask, float("-inf"))
                 else:
                     scores = scores + mask
             scores = trace.emit(
@@ -279,7 +286,7 @@ class SelfAttention(nn.Module):
                 scores,
                 axes=("batch", "head", "time", "key_time"),
             )
-            weights = torch.softmax(scores, dim=-1)
+            weights = _attention_weights(scores)
             weights = trace.emit(
                 f"{site_prefix}.weights",
                 weights,

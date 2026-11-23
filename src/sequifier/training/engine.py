@@ -46,7 +46,11 @@ from sequifier.runtime.random_state import RandomState
 from sequifier.runtime.stopping import StoppingState
 from sequifier.training.checkpoint_service import CheckpointRequest
 from sequifier.training.metrics_service import TrainingMetrics
-from sequifier.training.optimization import OptimizationBoundaryState, UpdatePolicy
+from sequifier.training.optimization import (
+    OptimizationBoundaryState,
+    TokenAccumulation,
+    UpdatePolicy,
+)
 from sequifier.training.plan import BatchUpdate, CompiledSupervisedPhase
 from sequifier.training.runtime import (
     DatasetRuntimeRegistry,
@@ -309,6 +313,7 @@ class TrainingEngine:
             and len(run.datasets) == 1
         )
         pending: BatchUpdate | None = None
+        weights = TokenAccumulation()
         last_identity: StepIdentity | None = None
         stop_requested = False
         completion_reason = "normal_completion"
@@ -325,7 +330,7 @@ class TrainingEngine:
         update_failed = False
 
         def flush() -> None:
-            nonlocal pending, stop_requested
+            nonlocal pending, weights, stop_requested
             nonlocal boundary, boundary_identity, update_failed
             if pending is None:
                 return
@@ -340,12 +345,13 @@ class TrainingEngine:
                         frozen_parameter_ids=run.datasets.resolve(
                             pending.dataset
                         ).frozen_parameter_ids,
-                        gradient_divisor=pending.accumulated,
+                        gradient_divisor=weights.divisor,
                     ),
                 )
                 state.optimizer_step = run.optimization.optimizer_step
                 state.accumulation_index = 0
                 pending = None
+                weights = TokenAccumulation()
                 stop_requested = stop_requested or result.stop_requested
                 boundary = capture_runtime_boundary(run)
                 boundary_identity = last_identity
@@ -577,8 +583,18 @@ class TrainingEngine:
                                         backward_loss=loss.backward_loss,
                                     )
                                 )
+                        backward_loss = loss.backward_loss
+                        if phase.accumulation_batches > 1:
+                            count = (
+                                loss.global_count
+                                if loss.global_count is not None
+                                else loss.accounting_count
+                            )
+                            backward_loss = backward_loss * weights.weight(
+                                int(count.item()), run.optimization.optimizer
+                            )
                         run.optimization.accumulate(
-                            loss.backward_loss,
+                            backward_loss,
                             identity,
                             run.integrations,
                             run.network,

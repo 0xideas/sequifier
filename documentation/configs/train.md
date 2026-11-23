@@ -320,7 +320,7 @@ its next token. A decoder `prediction_length` greater than 1 selects several
 consecutive positions for inference; it does not make one position predict
 several future tokens as in LLM multi-token prediction. Training currently
 computes loss over all valid decoded positions, regardless of
-`prediction_length`.
+`prediction_length`. Forward prediction phases require causal attention to keep future inputs out of these predictions.
 
 To train a next-occurrence objective, declare the trigger
 in each supervised phase's `learning` settings:
@@ -350,7 +350,7 @@ and evaluation targets; they are not needed to execute an exported model.
 For categorical hard-label targets, set a target's criterion to
 `AccurateCrossEntropyLoss` to preserve small loss values and target-logit
 gradients at high confidence. `CrossEntropyLoss` retains the existing PyTorch
-behavior. For example:
+behavior. Categorical `NLLLoss` applies log-softmax to the decoder logits before scoring the label. For example:
 
 ```yaml
 phases:
@@ -627,10 +627,10 @@ scheduling require an evaluation monitor. See [ownership](ownership.md#phase-set
 
 For BERT validation, set `phases.<name>.learning.objective.evaluation_mask_seed`
 to an integer from 0 through 4294967295 to choose an independent masking seed.
-The default of `0` preserves the existing validation masks. Use `run` to derive
+The default mask seed is `0`. Use `run` to derive
 the masks from the phase seed, including when `run.reproducibility.seed` is
 `random`. Each validation batch adds offsets for its phase, epoch, and batch
-index. Training masks continue to use the training random stream.
+index. BERT evaluation recomputes its previous-input baseline from the corrupted inputs on the same selected positions. Training masks use the training random stream.
 
 Frozen normalization is an interface input contract or inherited artifact fact.
 Repeating `sequifier train` resumes the latest compatible checkpoint by default.
@@ -787,7 +787,7 @@ uses `round_robin` or `weighted_random`. Each selection consumes at most
 `batches_per_selection`; every source is still exhausted once per phase epoch.
 Source `selection_weight` values affect order and burst frequency, not the amount of data consumed.
 
-Gradient accumulation may cross part or source boundaries only while the
+Supervised gradient accumulation weights each microbatch by its global valid-token count so the update matches the pooled masked loss. Gradient accumulation may cross part or source boundaries only while the
 dataset stays the same. A dataset transition flushes a partial window using its
 actual microbatch count. Dataset-specific frozen gradients are removed before
 the optimizer step, preventing momentum and weight decay from changing frozen

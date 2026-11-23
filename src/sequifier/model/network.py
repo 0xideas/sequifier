@@ -407,7 +407,7 @@ class ComposableTransformerNetwork(nn.Module):
             dtype=dtype,
         )
         return base_mask + padding_mask.masked_fill(
-            (~valid_mask.bool())[:, None, None, :], torch.finfo(dtype).min
+            (~valid_mask.bool())[:, None, None, :], float("-inf")
         )
 
     @conditional_beartype

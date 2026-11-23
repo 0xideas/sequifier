@@ -50,16 +50,18 @@ def encode_action(value, config):
     return result
 
 
-def action_batch(values, config, *, device=None, encoded=True):
-    values = list(values)
-    if not encoded:
-        values = [encode_action(value, config) for value in values]
-    real_dtype = (
+def real_action_dtype(device):
+    return (
         torch.float32
         if device is not None and torch.device(device).type == "mps"
         else torch.float64
     )
 
+
+def action_batch(values, config, *, device=None, encoded=True):
+    values = list(values)
+    if not encoded:
+        values = [encode_action(value, config) for value in values]
     result = {}
     for field in action_record_layout(config).fields:
         missing = field.missing
@@ -68,7 +70,11 @@ def action_batch(values, config, *, device=None, encoded=True):
             if missing is None
             else [value.get(field.key, missing) for value in values]
         )
-        dtype = torch.long if field.kind in {"categorical", "component"} else real_dtype
+        dtype = (
+            torch.long
+            if field.kind in {"categorical", "component"}
+            else real_action_dtype(device)
+        )
         result[field.key] = torch.tensor(entries, dtype=dtype, device=device)
     return result
 

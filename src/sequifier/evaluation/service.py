@@ -97,6 +97,7 @@ class EvaluationService:
                 "next_occurrence_config": model_value(learning.next_occurrence_config),
             },
             "window_view": model_value(interface.window_view),
+            "window_stride": learning.window_stride,
             "prediction_length": interface.decoder.prediction_length,
             "target_columns": interface.target_columns,
             "target_column_types": interface.target_column_types,
@@ -203,8 +204,12 @@ class EvaluationService:
                         source_config.source,
                         self._baseline_definition(dataset),
                     )
-                    calculate_baseline = baseline_key not in self._baselines
                     bert = phase.learning.bert_spec
+                    # BERT samples the positions and the inputs used by the
+                    # persistence baseline on each validation pass.
+                    baseline_accounting = (
+                        self._baselines.get(baseline_key) if bert is None else None
+                    )
                     mask_seed = bert.evaluation_mask_seed if bert is not None else 0
                     if mask_seed == "run":
                         mask_seed = phase.seed
@@ -249,7 +254,7 @@ class EvaluationService:
                             )
                             sums[target] += value.to(dtype)
                         count += loss.accounting_count.to(dtype)
-                        if calculate_baseline:
+                        if baseline_accounting is None:
                             baseline_targets = {
                                 target: dataset.objective.baseline_target_values(
                                     target, prepared.targets
@@ -345,20 +350,21 @@ class EvaluationService:
                         / max(1, int(accuracy_count.item()))
                         for target, correct in correct_counts.items()
                     }
-                    if calculate_baseline:
+                    if baseline_accounting is None:
                         reduced_sums, reduced_count = (
                             self.loss_service.reduce_accounting(
                                 baseline_sums, baseline_count, targets
                             )
                         )
-                        self._baselines[baseline_key] = BaselineAccounting(
+                        baseline_accounting = BaselineAccounting(
                             sums={
                                 target: value.detach().clone()
                                 for target, value in reduced_sums.items()
                             },
                             count=reduced_count.detach().clone(),
                         )
-                    baseline_accounting = self._baselines[baseline_key]
+                        if bert is None:
+                            self._baselines[baseline_key] = baseline_accounting
                     baseline_total, baseline_values = (
                         self.loss_service.finalize_reduced_accounting(
                             baseline_accounting.sums,
