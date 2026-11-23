@@ -337,8 +337,13 @@ class EvaluationService:
                                 predicted[mask].to(torch.int64),
                                 minlength=counts.numel(),
                             )
-                    total, target_values = self.loss_service.finalize_accounting(
-                        sums, count, dataset
+                    reduced_sums, global_count = self.loss_service.reduce_accounting(
+                        sums, count, targets
+                    )
+                    total, target_values = (
+                        self.loss_service.finalize_reduced_accounting(
+                            reduced_sums, global_count, dataset
+                        )
                     )
                     if (
                         correct_counts
@@ -426,7 +431,7 @@ class EvaluationService:
                         baseline_loss=baseline_total_value,
                         baseline_target_losses=baseline_target_values,
                         class_distributions=distributions,
-                        count=int(count.item()),
+                        count=int(global_count.item()),
                         elapsed_seconds=time.perf_counter() - started,
                     )
         finally:

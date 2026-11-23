@@ -2,11 +2,31 @@
 
 from typing import Annotated, Literal
 
-import torch
 from pydantic import Field, field_validator
 
 from sequifier.config.components import BERTSpecModel, NextOccurrenceConfigModel
 from sequifier.config.naming import ConfigModel
+
+# The loss service passes either a vector of class logits and an integer label,
+# or one scalar prediction and label, and requires one loss per valid token.
+_CRITERION_TARGET_TYPES = {
+    "AccurateCrossEntropyLoss": "categorical",
+    "CrossEntropyLoss": "categorical",
+    "MultiMarginLoss": "categorical",
+    "NLLLoss": "categorical",
+    "NLLLoss2d": "categorical",
+    "BCELoss": "real",
+    "BCEWithLogitsLoss": "real",
+    "GaussianNLLLoss": "real",
+    "HingeEmbeddingLoss": "real",
+    "HuberLoss": "real",
+    "KLDivLoss": "real",
+    "L1Loss": "real",
+    "MSELoss": "real",
+    "PoissonNLLLoss": "real",
+    "SmoothL1Loss": "real",
+    "SoftMarginLoss": "real",
+}
 
 
 class TargetLoss(ConfigModel):
@@ -19,8 +39,8 @@ class TargetLoss(ConfigModel):
     @field_validator("criterion")
     @classmethod
     def validate_criterion(cls, value):
-        if value != "AccurateCrossEntropyLoss" and value not in vars(torch.nn):
-            raise ValueError(f"Unknown loss criterion {value!r}")
+        if value not in _CRITERION_TARGET_TYPES:
+            raise ValueError(f"Unsupported supervised loss criterion {value!r}")
         return value
 
 
@@ -69,10 +89,6 @@ class DatasetLearningConfig(ConfigModel):
         for target, loss in self.losses.items():
             criterion = loss.criterion
             categorical = interface.target_column_types[target] == "categorical"
-            if criterion in {"NLLLoss", "AccurateCrossEntropyLoss"} and not categorical:
-                raise ValueError(
-                    f"{usage}: {criterion} requires categorical target {target!r}"
-                )
             weights = loss.class_weights
             if target in interface.categorical_hashing:
                 if weights is not None or criterion not in {
@@ -82,6 +98,11 @@ class DatasetLearningConfig(ConfigModel):
                     raise ValueError(
                         f"{usage}: hashed target {target!r} requires unweighted cross-entropy"
                     )
+            required = _CRITERION_TARGET_TYPES[criterion]
+            if required != interface.target_column_types[target]:
+                raise ValueError(
+                    f"{usage}: {criterion} requires a {required} target for {target!r}"
+                )
             if weights is not None and (
                 not categorical
                 or len(weights)
