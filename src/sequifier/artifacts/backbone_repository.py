@@ -237,6 +237,16 @@ def _publication_lock(repository_path: Path) -> Iterator[None]:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
+def _publication_result(directory, parent_revision_id):
+    return {
+        "success": True,
+        "revision_id": directory.name,
+        "parent_revision_id": parent_revision_id,
+        "manifest_path": str(directory / "manifest.json"),
+        "weights_path": str(directory / "weights.pt"),
+    }
+
+
 @beartype
 def publish_revision(
     backbone: nn.Module,
@@ -258,6 +268,15 @@ def publish_revision(
     with _publication_lock(repository_path):
         pointer = latest_pointer(repository_path)
         current_revision_id = pointer["revision_id"] if pointer else None
+        if pointer and pointer.get("parent_revision_id") == parent_revision_id:
+            directory = revisions_path / pointer["revision_id"]
+            previous = _read_json(directory / "manifest.json")
+            if (
+                previous.get("source_run_id") == source_run_id
+                and previous.get("source_epoch") == source_epoch
+                and previous.get("backbone_id") == repository.backbone_id
+            ):
+                return _publication_result(directory, parent_revision_id)
         if current_revision_id != parent_revision_id:
             return {
                 "success": False,
@@ -297,10 +316,4 @@ def publish_revision(
                 "parent_revision_id": parent_revision_id,
             },
         )
-        return {
-            "success": True,
-            "revision_id": revision_id,
-            "parent_revision_id": parent_revision_id,
-            "manifest_path": str(revision_path / "manifest.json"),
-            "weights_path": str(weights_path),
-        }
+        return _publication_result(revision_path, parent_revision_id)

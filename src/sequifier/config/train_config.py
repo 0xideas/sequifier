@@ -490,6 +490,7 @@ def resolve_phases(authored_phases, sources, *, seed: int):
 class ResolvedSequifierConfig(ConfigModel):
     """Compiled run, model, source, phase, and publication records."""
 
+    _random_seed_inputs: tuple | None = PrivateAttr(default=None)
     _prepared_inputs: Any = PrivateAttr(default=None)
     _policy_bindings: dict[str, ResolvedPolicyBinding] = PrivateAttr()
 

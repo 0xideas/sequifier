@@ -17,6 +17,7 @@ from sequifier.artifacts.dependencies import (
     supervised_dependencies,
 )
 from sequifier.artifacts.phase import CommittedPhases, PhasePublication
+from sequifier.artifacts.reports import completed_run_report
 from sequifier.artifacts.run_checkpoint import (
     RunCheckpointStore,
     checkpoint_path,
@@ -35,7 +36,11 @@ from sequifier.runtime.context import ExecutionEnvironment, RunContext
 from sequifier.runtime.plan import RunIdentity
 from sequifier.runtime.precision import PrecisionPolicy
 from sequifier.runtime.random_state import RandomStateManager
-from sequifier.training.checkpoint_service import CheckpointRestorer, CheckpointService
+from sequifier.training.checkpoint_service import (
+    CheckpointRequest,
+    CheckpointRestorer,
+    CheckpointService,
+)
 from sequifier.training.distributed_strategy import (
     DistributedDataParallelStrategy,
     DistributedStrategy,
@@ -178,14 +183,29 @@ class RunBuilder:
         config: Any,
         execution: ExecutionEnvironment,
         integrations: IntegrationManager,
+        **options,
+    ) -> TrainingRun:
+        """Construct a runtime even when its plan has already completed."""
+        run = self.build_if_needed(
+            config, execution, integrations, skip_completed=False, **options
+        )
+        assert run is not None
+        return run
+
+    def build_if_needed(
+        self,
+        config: Any,
+        execution: ExecutionEnvironment,
+        integrations: IntegrationManager,
         *,
+        skip_completed: bool = True,
         initial_artifact=None,
         phase_offset: int = 0,
         identity: RunIdentity | None = None,
         publication: PhasePublication = PhasePublication(),
         backbone_revision=None,
         dependencies: DependencyManifest | None = None,
-    ) -> TrainingRun:
+    ) -> TrainingRun | None:
         from sequifier.io.output_paths import validate_training_destinations
 
         group_data = (
@@ -246,6 +266,32 @@ class RunBuilder:
             }
             config.execution = replace(config.execution, interfaces=interfaces)
             state = RunState.from_state_dict(loaded.checkpoint.run_state, plan.phases)
+            if skip_completed and publication.standalone and state.phase_commits:
+                terminal = (
+                    len(state.phase_commits) == len(plan.phases)
+                    or state.phase_commits[-1].result["stop_scope"] == "end_plan"
+                    or state.phase_commits[-1].result["completion_reason"]
+                    == "integration_requested_stop"
+                )
+                same_outputs = (
+                    config.run.export == loaded.checkpoint.training_config.run.export
+                    and config.run.outputs
+                    == loaded.checkpoint.training_config.run.outputs
+                )
+                if terminal and same_outputs:
+                    done = (
+                        strategy.rank == 0
+                        and completed_run_report(
+                            config.outputs,
+                            destination,
+                            state.run_id,
+                            state.phase_commits,
+                        )
+                        is not None
+                    )
+                    if strategy.gather_objects(done)[0]:
+                        strategy.finalize()
+                        return None
         else:
             state = RunState(
                 CommittedPhases(plan.phases, phase_offset), phase_offset=phase_offset
@@ -439,7 +485,13 @@ class RunBuilder:
         self._construct_loaders(run)
         if loaded is not None:
             restorer.restore_runtime(loaded, run)
+            for name, writer in run.metrics.writers.items():
+                writer.restore_positions(
+                    state.run_id, state.metric_positions.get(name, {})
+                )
         self._warm_up(run)
         if loaded is not None:
             restorer.restore_randomness(loaded, run)
+        elif skip_completed:
+            run.checkpoints.save(CheckpointRequest("latest", None), run)
         return run

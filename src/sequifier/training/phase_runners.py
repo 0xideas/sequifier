@@ -36,7 +36,7 @@ class SupervisedPhaseGroup:
     def config(self):
         return self.compiled.config
 
-    def preflight(self, saved, committed_reference_count):
+    def preflight(self, saved, committed_reference_count, *, finished=False):
         return self.dependencies, -1
 
     def release(self):
@@ -83,13 +83,14 @@ class PolicyPhaseGroup:
     def index(self):
         return self.config.phase_offset
 
-    def preflight(self, saved, committed_reference_count):
+    def preflight(self, saved, committed_reference_count, *, finished=False):
         from sequifier.rl.preparation import PolicyGroupPreparation
 
         self.preparation = PolicyGroupPreparation.build(
             self.config,
             self.inputs,
             group=True,
+            known_adapters={} if finished else None,
             saved=saved,
             committed_reference_count=committed_reference_count,
         )

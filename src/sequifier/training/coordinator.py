@@ -34,10 +34,15 @@ from sequifier.artifacts.phase import (
     publish_phase_commits,
     verify_artifact,
 )
-from sequifier.artifacts.reports import publish_run_report, run_report
+from sequifier.artifacts.reports import (
+    completed_run_report,
+    publish_run_report,
+    run_report,
+)
 from sequifier.artifacts.run_checkpoint import (
     checkpoint_path,
     select_run_checkpoint,
+    training_lock,
     training_plan_identity,
 )
 from sequifier.config.components import ResumeConfig
@@ -98,16 +103,21 @@ def run_training(
 
 def run_policy_plan(config) -> LearningRunResult | PolicyRunResult:
     """Use native policy recovery when the plan shares an actor representation."""
-    from sequifier.config.training_resolution import policy_run_config
+    from sequifier.config.training_resolution import (
+        policy_run_config,
+        prepare_locked_run,
+    )
     from sequifier.rl.learner import execute_policy
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
-    prepared = PreparedTrainingInputs.for_run(config)
-    with prepared.run_scope():
-        if config.run_mode == "policy":
-            native = policy_run_config(config, config.training_plan)
-            return execute_policy(native, prepared)
-        return _run_learning_plan(config, prepared)
+    with training_lock(checkpoint_path(config)):
+        config = prepare_locked_run(config)
+        prepared = PreparedTrainingInputs.for_run(config)
+        with prepared.run_scope():
+            if config.run_mode == "policy":
+                native = policy_run_config(config, config.training_plan)
+                return execute_policy(native, prepared)
+            return _run_learning_plan(config, prepared)
 
 
 def _snapshot_recovery(source, destination):
@@ -119,12 +129,14 @@ def _snapshot_recovery(source, destination):
             copyfile(source, temporary)
 
 
-def _prepare_plan(config, groups, revision, state, committed):
+def _prepare_plan(config, groups, revision, state, completed):
     manifest = DependencyManifest()
     add_initialization(manifest, config)
     add_backbone_revision(
         manifest, config, revision["revision_id"] if revision else None
     )
+    committed = len(completed)
+    stopped = bool(completed and completed[-1].result["stop_scope"] == "end_plan")
     last_data_phase = -1
     active = state["active"]
     for group in groups:
@@ -137,6 +149,7 @@ def _prepare_plan(config, groups, revision, state, committed):
         dependencies, last = group.preflight(
             state.get("dependencies"),
             max(0, committed - group.index + int(recovering)),
+            finished=stopped or group.index + len(group.phases) <= committed,
         )
         manifest.merge(dependencies)
         last_data_phase = max(last_data_phase, last)
@@ -223,7 +236,7 @@ def _run_learning_plan(config, prepared):
                 "learning run checkpoint has an invalid active phase group"
             )
     manifest, last_data_phase = _prepare_plan(
-        config, groups, revision, state, len(completed)
+        config, groups, revision, state, completed
     )
     if resuming:
         manifest.validate(state["dependencies"])
@@ -350,6 +363,12 @@ def _run_learning_plan(config, prepared):
     stopped = bool(completed and completed[-1].result["stop_scope"] == "end_plan")
     if start == len(groups) and next_index != len(phases) and not stopped:
         raise ValueError("learning run checkpoint is between inconsistent phase groups")
+    if resuming and state["active"] is None and (start == len(groups) or stopped):
+        report = completed_run_report(
+            config.outputs, checkpoint, identity.run_id, completed
+        )
+        if report is not None:
+            return _learning_result(config, checkpoint, report)
     completion_reason = run_phases(
         groups,
         run_group,
@@ -379,6 +398,10 @@ def _run_learning_plan(config, prepared):
         resource_accounting=prepared.accounting.snapshot(),
     )
     publish_run_report(manifest_report, config.outputs.report_path)
+    return _learning_result(config, checkpoint, manifest_report)
+
+
+def _learning_result(config, checkpoint, manifest_report):
     return LearningRunResult(
         config.outputs.model_path,
         str(checkpoint),

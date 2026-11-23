@@ -1013,9 +1013,9 @@ class NextOccurrenceConfigModel(ConfigModel):
 class ResumeConfig(ConfigModel):
     """Policy for resuming the same run from its complete checkpoint."""
 
-    policy: Literal["never", "if_exists", "required"] = "never"
+    policy: Literal["never", "if_exists", "required"] = "if_exists"
     checkpoint_path: Optional[str] = None
-    mode: Literal["exact", "reset_environments"] = "reset_environments"
+    mode: Literal["exact", "reset_environments"] = "exact"
 
     @model_validator(mode="after")
     @beartype

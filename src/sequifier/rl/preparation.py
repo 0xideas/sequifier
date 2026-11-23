@@ -62,7 +62,16 @@ class PolicyGroupPreparation:
     data: list[PreparedPolicyData | None]
 
     @classmethod
-    def build(cls, config, prepared, *, saved, committed_reference_count, group=False):
+    def build(
+        cls,
+        config,
+        prepared,
+        *,
+        saved,
+        committed_reference_count,
+        group=False,
+        known_adapters=None,
+    ):
         inputs = prepared.resolve(config.parent.policy_data)
         inputs.dependencies.revalidate()
         dependencies = policy_dependencies(
@@ -79,7 +88,9 @@ class PolicyGroupPreparation:
             phase_offset=config.phase_offset,
             group=group,
         )
-        adapters = preflight_environments(config)
+        adapters = (
+            preflight_environments(config) if known_adapters is None else known_adapters
+        )
         data = prepared.prepare(
             config.parent.policy_data, config.phases, config.policy, inputs
         )

@@ -156,6 +156,7 @@ def portable_export():
 
 
 class RunSettings(Settings):
+    retrain: bool = False
     project_root: str = "."
     model_name: str
     execution: ExecutionSettings = Field(default_factory=ExecutionSettings)
@@ -166,6 +167,11 @@ class RunSettings(Settings):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     outputs: OutputSettings = Field(default_factory=OutputSettings)
     export: ExportSettings = Field(default_factory=portable_export)
+
+    def effective_resume_policy(self):
+        if self.retrain:
+            return "never"
+        return "required" if self.recovery.resume.policy == "required" else "if_exists"
 
     @field_validator("model_name")
     @classmethod

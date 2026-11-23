@@ -10,7 +10,12 @@ import torch
 
 from sequifier.artifacts.dependencies import add_initialization
 from sequifier.artifacts.phase import CommittedPhases, PhaseArtifacts, PhasePublication
-from sequifier.artifacts.reports import PhaseResult, publish_run_report, run_report
+from sequifier.artifacts.reports import (
+    PhaseResult,
+    completed_run_report,
+    publish_run_report,
+    run_report,
+)
 from sequifier.artifacts.state_dict import weight_fingerprint
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
@@ -171,11 +176,15 @@ def execute_policy(
         run_id=identity.run_id if identity is not None else None,
     )
     resuming = recovery is not None
+    terminal = recovery is not None and (
+        recovery.phase_index == len(config.phases) or recovery.stopped
+    )
     if preparation is None:
         preparation = PolicyGroupPreparation.build(
             config,
             prepared,
             saved=recovery.data_identity if recovery is not None else None,
+            known_adapters=recovery.adapter_contract if recovery and terminal else None,
             committed_reference_count=(
                 recovery.phase_index + int(recovery.phase_state is not None)
                 if recovery is not None
@@ -196,9 +205,7 @@ def execute_policy(
     data_identity = dependencies.identity
     adapter_contract = preparation.adapters
     data = preparation.data
-    logger = configure_logger(config.project_root, config.model_name, 0)
     identity = identity or RunIdentity.start(recovery.run_id if recovery else None)
-    logger.info(f"Starting training for {config.model_name}, run {identity.run_id}")
     if recovery is not None:
         recovery.validate_dependencies(config, data_identity)
         require_equal(
@@ -207,6 +214,15 @@ def execute_policy(
         representation = recovery.representation
         actor = build_actor(config)
         recovery.validate_actor(actor)
+        actor.transfer_report = recovery.initialization["transfer"]
+        for phase, commit in zip(config.phases, recovery.completed):
+            clocks = commit.result["clocks"]
+            if phase.algorithm == "ppo":
+                width = phase.collection.env_steps_per_iteration
+                actor.ppo_policy_version = (clocks["env_steps"] + width - 1) // width
+            elif phase.algorithm == "grpo":
+                width = phase.collection.groups_per_iteration
+                actor.grpo_policy_version = (clocks["groups"] + width - 1) // width
     else:
         actor = _initialize_actor(config)
         representation = ActorRepresentation.from_actor(actor)
@@ -223,6 +239,23 @@ def execute_policy(
     data_contract = [item.contract if item is not None else None for item in data]
     if recovery is not None:
         require_equal(data_contract, recovery.data_contract, "resume.partitions")
+        if publication.standalone and terminal:
+            report = completed_run_report(
+                config.outputs, checkpoint, recovery.run_id, recovery.completed
+            )
+            if report is not None:
+                return PolicyRunResult(
+                    actor.eval(),
+                    tuple(
+                        PhaseResult.model_validate(phase) for phase in report["phases"]
+                    ),
+                    representation,
+                    config.outputs.model_path,
+                    config.outputs.report_path,
+                    config.checkpoint_path,
+                )
+    logger = configure_logger(config.project_root, config.model_name, 0)
+    logger.info(f"Starting training for {config.model_name}, run {identity.run_id}")
     if recovery is None:
         recovery = RunCheckpoint(
             plan,
@@ -243,12 +276,15 @@ def execute_policy(
     from sequifier.rl.metrics import PolicyMetrics
 
     metrics = PolicyMetrics(config, identity)
+    if resuming:
+        metrics.writer.restore_positions(identity.run_id, recovery.metric_positions)
     references = PolicyReferences(config, recovery, resuming=resuming)
     saved_random = capture_rng_state(actor.device)
     optimizations = preflight_optimization(config, actor, data)
     restore_rng_state(actor.device, recovery.random if resuming else saved_random)
 
     def save_checkpoint(state=None, *, commit=None):
+        recovery.metric_positions = metrics.writer.checkpoint_positions()
         recovery.save(checkpoint, actor.device, state)
         publication.after_checkpoint(checkpoint, commit)
 

@@ -1,5 +1,6 @@
 """Common, versioned discovery records for every training runner."""
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ from torch import Tensor
 
 from sequifier.artifacts.state_dict import weight_fingerprint
 from sequifier.contract_versions import ContractVersions
+from sequifier.fingerprints import file_checksum
 from sequifier.io.atomic import write_json_atomic
 
 
@@ -128,10 +130,61 @@ def run_report(
     }
 
 
+def completed_run_report(outputs, checkpoint, run_id, commits):
+    """Reuse a completed publication only for its validated recovery boundary."""
+    path = Path(outputs.report_path)
+    manifest = Path(checkpoint).resolve().parent / "manifest.json"
+    try:
+        source = path if path.is_file() else manifest
+        content = source.read_bytes()
+        report = json.loads(content)
+    except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(report, dict) or (
+        report.get("artifact_type") != "sequifier_run_manifest"
+        or report.get("format_version") != ContractVersions.RUN_MANIFEST
+        or report.get("status") != "complete"
+        or report.get("run_id") != run_id
+        or report.get("model_path") != str(outputs.model_path)
+        or report.get("checkpoint_path") != str(checkpoint)
+        or report.get("phases") != [commit.report_result() for commit in commits]
+    ):
+        return None
+    checksums = report.get("export_checksums", {})
+    exports = report.get("exports")
+    if (
+        not isinstance(exports, list)
+        or not all(isinstance(item, str) for item in exports)
+        or str(outputs.model_path) not in exports
+        or not isinstance(checksums, dict)
+        or (checksums and set(checksums) != set(exports))
+    ):
+        return None
+    for export in exports:
+        if not Path(export).is_file() or (
+            export in checksums and file_checksum(export) != checksums[export]
+        ):
+            return None
+    # A crash can separate the two atomic manifest publications. Repair the
+    # discovery copy without issuing a new session or publishing the model.
+    other = manifest if source == path else path
+    if other.resolve() != source.resolve() and (
+        not other.is_file() or other.read_bytes() != content
+    ):
+        write_json_atomic(other, report)
+    for commit in commits:
+        commit.publish()
+    return report
+
+
 def publish_run_report(report, path):
     """Keep the supervised manifest discovery location on every route."""
     destination = Path(path).resolve()
     manifest = Path(report["checkpoint_path"]).resolve().parent / "manifest.json"
+    report = {
+        **report,
+        "export_checksums": {path: file_checksum(path) for path in report["exports"]},
+    }
     write_json_atomic(destination, report)
     if manifest != destination:
         write_json_atomic(manifest, report)

@@ -1,5 +1,6 @@
 """Selected models and sidecar identities at committed phase boundaries."""
 
+import json
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -143,6 +144,11 @@ class PhaseCommit:
         if not path.is_file() or file_checksum(path) != self.model_sha256:
             with atomic_path(path, durable=True) as temporary:
                 copyfile(self.model_path, temporary)
+        try:
+            if json.loads(artifacts.report.read_text(encoding="utf-8")) == report:
+                return
+        except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
+            pass
         write_json_atomic(artifacts.report, report)
 
 

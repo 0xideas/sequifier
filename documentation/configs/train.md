@@ -626,7 +626,19 @@ Best handoff, stopping and plateau
 scheduling require an evaluation monitor. See [ownership](ownership.md#phase-settings).
 
 Frozen normalization is an interface input contract or inherited artifact fact.
-Recovery policy is `run.recovery`; phase snapshots belong to `checkpoints`.
+Repeating `sequifier train` resumes the latest compatible checkpoint by default.
+A completed run reuses its published outputs. Set `run.retrain: true` to start
+a fresh run at the configured destinations. This switch overrides the resume
+policy. The legacy `resume.policy: never` setting alone now uses the default
+resume behavior. Use `run.recovery.resume.policy: required` with an explicit
+checkpoint path to fail if the checkpoint is missing.
+
+Online recovery defaults to `exact`, which requires a snapshot-capable PPO
+adapter or reproducible GRPO group starts. Explicitly choosing
+`run.recovery.resume.mode: reset_environments` allows a different trajectory
+after an interruption. Recovery starts at a durable training boundary. An
+interrupted, uncommitted interaction can be issued again.
+Phase snapshots belong to `checkpoints`.
 
 ## Model prediction parameters and policy actions
 

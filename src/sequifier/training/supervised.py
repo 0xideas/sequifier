@@ -1,6 +1,7 @@
 """Launch supervised workers and execute a native supervised run."""
 
 import os
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -8,8 +9,9 @@ import torch.distributed as dist
 from torch.multiprocessing.spawn import spawn
 
 from sequifier.artifacts.dependencies import supervised_dependencies
-from sequifier.artifacts.run_checkpoint import checkpoint_path
+from sequifier.artifacts.run_checkpoint import checkpoint_path, training_lock
 from sequifier.config.train_config import ResolvedSequifierConfig as TrainModel
+from sequifier.config.training_resolution import prepare_locked_run
 from sequifier.distributed.env import setup_distributed_env
 from sequifier.helpers import configure_determinism, configure_logger
 from sequifier.integration import IntegrationManager, IntegrationSpec
@@ -56,9 +58,11 @@ def execute_supervised(
         torch_compile=settings.compilation.torch_compile,
         data_parallelism=settings.distribution.strategy,
     )
-    run = RunBuilder(semantic_optimizer_grouping=semantic_optimizer_grouping).build(
-        group, execution, integrations, **build_options
-    )
+    run = RunBuilder(
+        semantic_optimizer_grouping=semantic_optimizer_grouping
+    ).build_if_needed(group, execution, integrations, **build_options)
+    if run is None:
+        return
     try:
         logger.info(
             f"Starting training for {run.context.model_name}, run {run.state.run_id}"
@@ -91,10 +95,6 @@ def train_worker(
 
     global_rank = local_rank if global_rank is None else global_rank
     distribution = config.run.execution.supervised_settings.distribution
-    dependencies = supervised_dependencies(config)
-    validate_training_destinations(
-        config, checkpoint_path(config), dependencies.protected_paths
-    )
     execution = ExecutionEnvironment(
         rank=global_rank,
         local_rank=local_rank,
@@ -107,15 +107,32 @@ def train_worker(
             torch.cuda.set_device(local_rank)
         setup_distributed_env(global_rank, local_rank, world_size, distribution.backend)
     try:
-        execute_supervised(
-            config,
-            execution,
-            integration_specs=integration_specs,
-            integration_instances=integration_instances,
-            semantic_optimizer_grouping=semantic_optimizer_grouping,
-            initial_artifact=config.initialize_from,
-            dependencies=dependencies,
+        lock = (
+            training_lock(checkpoint_path(config))
+            if global_rank == 0
+            else nullcontext()
         )
+        with lock:
+            if global_rank == 0:
+                config = prepare_locked_run(config)
+            if execution.distributed:
+                seed = [config.seed]
+                dist.broadcast_object_list(seed, src=0)
+                if global_rank != 0:
+                    config = prepare_locked_run(config, seed[0])
+            dependencies = supervised_dependencies(config)
+            validate_training_destinations(
+                config, checkpoint_path(config), dependencies.protected_paths
+            )
+            execute_supervised(
+                config,
+                execution,
+                integration_specs=integration_specs,
+                integration_instances=integration_instances,
+                semantic_optimizer_grouping=semantic_optimizer_grouping,
+                initial_artifact=config.initialize_from,
+                dependencies=dependencies,
+            )
     finally:
         if execution.distributed and dist.is_available() and dist.is_initialized():
             dist.destroy_process_group()

@@ -15,6 +15,7 @@ from loguru import logger
 from torch import Tensor
 
 from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.io.atomic import atomic_path
 from sequifier.logging_paths import dataset_artifact_prefix
 from sequifier.typechecking import beartype
 
@@ -257,6 +258,54 @@ class StructuredMetricWriters:
         )
         self.validation_enabled = validation_enabled
         self._class_shares: _CsvAppender | None = None
+
+    def _tables(self):
+        return (
+            (self.training_path, TRAINING_CONDENSED_FIELDS),
+            (self.training_full_path, TRAINING_FIELDS),
+            (self.validation_path, VALIDATION_CONDENSED_FIELDS),
+            (self.validation_full_path, VALIDATION_FIELDS),
+            (self.class_share_path, CLASS_SHARE_FIELDS),
+        )
+
+    def checkpoint_positions(self):
+        return {
+            path.name: path.stat().st_size if path.is_file() else 0
+            for path, _ in self._tables()
+        }
+
+    def restore_positions(self, run_id, positions):
+        """Remove this run's uncommitted suffix, preserving other runs' rows."""
+        for path, fields in self._tables():
+            offset = positions.get(path.name)
+            if offset is not None and (
+                not isinstance(offset, int) or isinstance(offset, bool) or offset < 0
+            ):
+                raise ValueError(f"Invalid metric checkpoint position for {path}")
+            if offset is None or not path.is_file() or path.stat().st_size <= offset:
+                continue
+            with atomic_path(path, durable=True) as temporary:
+                with path.open("rb") as source, temporary.open("wb") as target:
+                    # Copy only the prefix committed with the checkpoint.
+                    left = offset
+                    while left:
+                        chunk = source.read(min(left, 1024 * 1024))
+                        if not chunk:
+                            raise ValueError(
+                                f"Metric table shortened during recovery: {path}"
+                            )
+                        target.write(chunk)
+                        left -= len(chunk)
+                with temporary.open("a", encoding="utf-8", newline="") as target:
+                    writer = csv.DictWriter(target, fieldnames=fields)
+                    if offset == 0:
+                        writer.writeheader()
+                    with path.open(encoding="utf-8", newline="") as source:
+                        source.seek(offset)
+                        rows = csv.DictReader(
+                            source, fieldnames=fields if offset else None
+                        )
+                        writer.writerows(row for row in rows if row["run_id"] != run_id)
 
     @beartype
     def _common(

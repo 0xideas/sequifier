@@ -897,6 +897,9 @@ def configure_logger(
         path.parent.mkdir(parents=True, exist_ok=True)
         logger.add(
             str(path),
+            # Preflight also runs for completed checkpoints. Keep its diagnostics
+            # on the console without appending to a finished training log.
+            filter=lambda record: not record["extra"].get("training_preflight", False),
             level="DEBUG",
             format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
             enqueue=True,

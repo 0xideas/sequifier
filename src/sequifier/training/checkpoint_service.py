@@ -207,6 +207,10 @@ class CheckpointService:
         self.distributed.barrier()
         if self.distributed.rank != 0:
             return None
+        run.state.metric_positions = {
+            name: writer.checkpoint_positions()
+            for name, writer in run.metrics.writers.items()
+        }
         checkpoint = RunCheckpoint(
             format_version=ContractVersions.SUPERVISED_RECOVERY,
             model=build_model_artifact(

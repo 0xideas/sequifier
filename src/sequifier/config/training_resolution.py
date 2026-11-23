@@ -713,6 +713,7 @@ def resolve_training_run(
 
     prepared_inputs = PreparedTrainingInputs()
     config = authored.model_copy(deep=True)
+    config.run.recovery.resume.policy = config.run.effective_resume_policy()
     phases = config.ordered_phases
     supervised = [phase for phase in phases if phase.algorithm == "supervised"]
     has_policy = len(supervised) != len(phases)
@@ -956,6 +957,8 @@ def resolve_training_run(
         curriculum_column=curriculum.column if curriculum else None,
         run_mode=training_run_mode(resolved_phases),
     )
+    if authored.run.reproducibility.seed == "random":
+        resolved._random_seed_inputs = (authored, metadata_by_part)
     if has_policy:
         resolved._prepared_inputs = prepared_inputs
     from sequifier.config.input_contract_resolution import validate_input_contracts
@@ -964,6 +967,27 @@ def resolve_training_run(
     validate_input_contracts(config, resolved)
     resolve_training_output_paths(resolved.run)
     return resolved
+
+
+def prepare_locked_run(config, seed=None):
+    """Resolve random-seeded inputs against the checkpoint selected under the run lock."""
+    policy = config.run.effective_resume_policy()
+    if config.run.recovery.resume.policy != policy:
+        config = config.model_copy(update={"run": config.run.model_copy(deep=True)})
+        config.run.recovery.resume.policy = policy
+    if config._random_seed_inputs is None:
+        return config
+    if seed is None:
+        from sequifier.artifacts.run_checkpoint import read_resume_seed
+
+        seed = read_resume_seed(config.run)
+    if seed is None or seed == config.seed:
+        return config
+    authored, metadata = config._random_seed_inputs
+    authored = authored.model_copy(deep=True)
+    authored.run.reproducibility.seed = seed
+    authored.run.retrain = config.run.retrain
+    return resolve_training_run(authored, metadata_by_part=metadata)
 
 
 def policy_run_config(

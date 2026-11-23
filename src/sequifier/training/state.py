@@ -28,6 +28,7 @@ class RunState:
     plan_stopped: bool = False
     initial_evaluated_phases: list[int] = field(default_factory=list)
     phase_index: int = 0  # Position within the native plan.
+    metric_positions: dict = field(default_factory=dict)
     phase_offset: int = 0  # Original index of the first phase in the plan.
     phase_epoch: int = 0
     phase_epoch_complete: bool = False

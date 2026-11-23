@@ -5,10 +5,12 @@ from __future__ import annotations
 import random
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Literal, TypeVar
 
 import torch
 import torch.distributed as dist
+from loguru import logger
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -459,11 +461,13 @@ class PreparedSupervisedGroup:
         from sequifier.training.scheduler_budgets import resolve_scheduler_budgets
 
         config = config.model_copy()
-        plan = SupervisedRunPlan.from_config(config)
-        parts = build_dataset_parts(config, plan, plan_data_loading(config))
-        if validate_sources:
-            _validate_sources(plan, parts)
-        plan = resolve_scheduler_budgets(plan, config, parts)
+        checking_publication = Path(config.outputs.report_path).is_file()
+        with logger.contextualize(training_preflight=checking_publication):
+            plan = SupervisedRunPlan.from_config(config)
+            parts = build_dataset_parts(config, plan, plan_data_loading(config))
+            if validate_sources:
+                _validate_sources(plan, parts)
+            plan = resolve_scheduler_budgets(plan, config, parts)
         config.training_plan = list(plan.phases)
         return cls(config, plan, parts)
 
