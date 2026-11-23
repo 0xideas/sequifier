@@ -177,6 +177,32 @@ def validate_trajectory(value: Trajectory | dict) -> Trajectory:
     )
 
 
+def validate_policy_seed(spec, actions, budgets, count, desired_return):
+    from sequifier.io.actions import decode_action, encode_action
+
+    if not isinstance(actions, list) or len(actions) != count:
+        raise ValueError("Seed actions must align with valid observations")
+    for index, action in enumerate(actions):
+        if action is None:
+            if index and spec.previous_action_inputs:
+                raise ValueError("Policy seed is missing a lagged action")
+            continue
+        if not isinstance(action, dict) or set(action) != set(spec.actions):
+            raise ValueError("Seed feedback must name the policy actions")
+        for name, field in spec.actions.items():
+            value = action[name]
+            if field.type == "categorical" and (
+                (isinstance(value, int) is False) or not 0 <= value < len(field.values)
+            ):
+                raise ValueError("Invalid categorical ID in seed feedback")
+        encode_action(decode_action(action, spec), spec)
+    budgets = TypeAdapter(list[FiniteFloat]).validate_python(budgets, strict=True)
+    if len(budgets) != (count if spec.return_conditioned else 0) or (
+        budgets and budgets[-1] != desired_return
+    ):
+        raise ValueError("Seed budgets must align with the seed history")
+
+
 def _validate_joint_execution(trajectory):
     from sequifier.config.policy_config import ResolvedPolicyBinding
     from sequifier.io.actions import encode_action
@@ -201,7 +227,14 @@ def _validate_joint_execution(trajectory):
         or len(previous) != len(scores)
     ):
         raise ValueError("trajectory scores/history must match decision count")
-    expected = None
+    count = sum(trajectory.seed.attention_valid_mask)
+    seed_actions = execution.get("seed_previous_action_ids", [None])
+    initial_budget = execution.get("initial_desired_return")
+    seed_returns = execution.get(
+        "seed_returns", [initial_budget] if spec.return_conditioned else []
+    )
+    validate_policy_seed(spec, seed_actions, seed_returns, count, initial_budget)
+    expected = seed_actions[-1]
     for index, step in enumerate(trajectory.transitions):
         real_fields = {
             name for name, field in spec.actions.items() if field.type == "real"

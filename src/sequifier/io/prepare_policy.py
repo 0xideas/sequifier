@@ -15,9 +15,16 @@ from sequifier.io.atomic import atomic_path
 from sequifier.io.episode_corpus import EpisodeCorpus
 from sequifier.io.feature_fitting import FeatureStatistics, FittedColumns, FittingRules
 from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
-from sequifier.io.policy_dataset import EpisodeDecisions, episode_partition_indices
+from sequifier.io.partitioning import partition_components
+from sequifier.io.policy_dataset import EpisodeDecisions
 from sequifier.io.preprocessing_workspace import preprocessing_workspace
-from sequifier.io.window_placement import WindowPlacement
+from sequifier.io.sequence import CONTEXT_COLUMN, CONTEXT_RECORDS
+from sequifier.io.window_placement import (
+    PredictionAlignment,
+    SplitWindowPlan,
+    cutoff_intervals,
+    split_intervals,
+)
 from sequifier.trajectory.export import EpisodeTableEncoder, cast_episode_table
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
@@ -37,7 +44,12 @@ def prepare_policy(config):
 
 
 def _prepare_policy(config, writer):
-    from sequifier.preprocess import _validate_declared_column_roles
+    from sequifier.preprocess import (
+        SPLIT_VALUE_COLUMN,
+        _add_normalized_split_column,
+        _normalized_split_cutoffs,
+        _validate_declared_column_roles,
+    )
 
     original = (
         Path(config.project_root) / config.metadata_config_path
@@ -52,18 +64,40 @@ def _prepare_policy(config, writer):
         else config.normalize_real_columns
     )
     policy = config.resolved_policy()
+    if config.initialize_from is None:
+        policy = policy.model_copy(
+            update={"context_length": max(config.window_lengths)}
+        )
     resolved = config.resolved_source()
     source_episodes = EpisodeCorpus([resolved], policy).view()
     decisions = EpisodeDecisions(source_episodes, policy)
-    train, validation = episode_partition_indices(
-        decisions,
-        config.validation_fraction,
-        config.run.reproducibility.seed,
-        group_identical=True,
+    fractions = tuple(config.split_ratios or ())
+    split_count = len(config.splits)
+    plan = SplitWindowPlan(
+        config.window_lengths,
+        config.resolved_window_stride,
+        fractions,
+        PredictionAlignment.from_settings(config),
     )
-    split_by_index = {
-        i: split for split, indices in enumerate((train, validation)) for i in indices
-    }
+    assigned = {}
+    if config.split_method == "between_sequence":
+
+        def leakage_keys(index):
+            yield ("content", decisions.demonstration_keys[index])
+            if decisions.group_ids[index] is not None:
+                yield ("group", decisions.group_ids[index])
+
+        partitions = partition_components(
+            range(len(decisions.episodes)),
+            leakage_keys,
+            fractions,
+            config.run.reproducibility.seed,
+        )
+        assigned = {
+            index: split
+            for split, indices in enumerate(partitions)
+            for index in indices
+        }
     sequence_ids = {name: index for index, name in enumerate(decisions.all_episode_ids)}
     observations, static = policy.observation_columns, policy.static_columns
     static = [name for name in static if name != PREFIX_IMAGE]
@@ -136,6 +170,25 @@ def _prepare_policy(config, writer):
             f"Action columns collide with recorded fields: {sorted(collisions)}"
         )
 
+    cutoffs = _normalized_split_cutoffs(config.split_values)
+
+    def episode_bounds(index):
+        if cutoffs is None:
+            return None
+        episode = episodes[index]
+        column = config.split_column
+        if column not in episode.observations:
+            raise ValueError(
+                "Policy split_column must name a recorded temporal observation"
+            )
+        frame = pl.DataFrame({column: episode.observations[column]})
+        values = _add_normalized_split_column(
+            frame, column, config.split_values, episode.episode_id
+        )[SPLIT_VALUE_COLUMN]
+        if values.null_count():
+            raise ValueError("split_column must contain a value for every observation")
+        return cutoff_intervals(values.to_numpy(), cutoffs)
+
     def episode_rows(index):
         episode = episodes[index]
         table = encoder.table(sequence_ids[episode.episode_id], episode)
@@ -159,8 +212,17 @@ def _prepare_policy(config, writer):
             real=real,
         )
         features_fit = FeatureStatistics()
-        for index in sorted(train):
-            rows = episode_rows(index).head(decisions.lengths[index])
+        for index in range(len(episodes)):
+            if not config.normalize_on_all_data and assigned.get(index, 0) != 0:
+                continue
+            rows = episode_rows(index)
+            length = decisions.lengths[index]
+            if not config.normalize_on_all_data and index not in assigned:
+                bounds = episode_bounds(index) or split_intervals(len(rows), fractions)
+                length = min(length, bounds[0][1])
+            rows = rows.head(length)
+            if rows.is_empty():
+                continue
             for frame, selected in ((rows, temporal), (rows.head(1), static)):
                 if nested := [
                     name for name in selected if frame[name].dtype.is_nested()
@@ -201,7 +263,6 @@ def _prepare_policy(config, writer):
         record = episodes.metadata(index)
         episode_id = record.episode_id
         sequence_id = sequence_ids[episode_id]
-        split = split_by_index[index]
         checkpoint = writer.item_checkpoint(sequence_id)
         static_path = writer.workspace / f"static-{sequence_id}.parquet"
         if checkpoint.is_file():
@@ -217,6 +278,26 @@ def _prepare_policy(config, writer):
                     ("", SUCCESSOR_PREFIX) if name in features else ("",)
                 )
             )
+            if CONTEXT_COLUMN in rows.columns and (payload := rows[CONTEXT_COLUMN][0]):
+                context = CONTEXT_RECORDS.validate_json(payload)
+                history = pl.DataFrame([step.observation for step in context])
+                history = history.with_columns(
+                    _encoded_observation(history, name, "", layouts, transforms[name])
+                    for name in features
+                )
+                encoded = tuple(
+                    step.model_copy(update={"observation": row})
+                    for step, row in zip(context, history.to_dicts(), strict=True)
+                )
+                rows = rows.with_columns(
+                    pl.Series(
+                        CONTEXT_COLUMN,
+                        [
+                            CONTEXT_RECORDS.dump_json(encoded).decode(),
+                            *([None] * (len(rows) - 1)),
+                        ],
+                    )
+                )
             if static_payload:
                 static_row = rows.select("sequenceId", *static_payload).head(1)
                 static_rows.append(static_row)
@@ -224,16 +305,12 @@ def _prepare_policy(config, writer):
                     static_row.write_parquet(temporary)
                 rows = rows.drop(static_payload)
         first = rows["itemPosition"][0]
-        placement = WindowPlacement.for_split(
-            first,
-            first,
-            first + len(rows),
-            config.window_lengths[split],
-            config.resolved_window_stride,
+        placements = plan.placements(
+            first, len(rows), assigned=assigned.get(index), bounds=episode_bounds(index)
         )
         writer.add(
             rows,
-            {split: (placement, None)},
+            {split: (placement, None) for split, placement in placements},
             episode_id=episode_id,
             group_id=record.group_id,
             content_key=record.content_key,
@@ -244,14 +321,22 @@ def _prepare_policy(config, writer):
         fitted.col_types.setdefault(name, "Float32")
         fitted.statistics.setdefault(name, {"mean": 0.0, "std": 1.0})
     metadata = dict(
-        split_paths=["0.split.json", "1.split.json"],
-        indexed_views=["0", "1"],
-        split_names=["train", "validation"],
-        fit_split_indices=[0] if frozen is None else [],
+        split_paths=[f"{i}.split.json" for i in range(split_count)],
+        indexed_views=list(map(str, range(split_count))),
+        split_names=list(config.splits),
+        fit_split_indices=(
+            list(range(split_count)) if config.normalize_on_all_data else [0]
+        )
+        if frozen is None
+        else [],
         depth_layouts=layouts,
         window_length=config.window_lengths[0],
         window_lengths=list(config.window_lengths),
         max_target_offset=config.max_target_offset,
+        prediction_length=config.prediction_length,
+        target_offset=config.target_offset,
+        prediction_aligned_splits=config.prediction_aligned_splits,
+        prediction_alignment_steps=config.prediction_alignment_steps,
         window_stride=config.resolved_window_stride,
         image_sources={
             name: image.compatibility_signature() for name, image in images.items()
@@ -271,7 +356,9 @@ def _prepare_policy(config, writer):
         time_alignment_column=frozen.time_alignment_column if frozen else None,
         **fitted.metadata(),
         normalize_real_columns=normalize,
-        normalize_on_all_data=frozen.normalize_on_all_data if frozen else False,
+        normalize_on_all_data=frozen.normalize_on_all_data
+        if frozen
+        else config.normalize_on_all_data,
         cardinality_config=cardinality,
         raw_mask_column=frozen.raw_mask_column if frozen else None,
         static_columns=static,

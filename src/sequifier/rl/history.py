@@ -189,17 +189,32 @@ class PolicyHistory:
         history_inputs(self.spec, [frame])
         return frame
 
-    def reset(self, observation, static_inputs, episode_id, desired_return=None):
-        frame = self._frame(
-            observation,
-            None,
-            static_inputs,
-            episode_id,
-            0,
-            desired_return,
+    def reset(
+        self,
+        observation,
+        static_inputs,
+        episode_id,
+        desired_return=None,
+        *,
+        earlier=(),
+        previous_action=None,
+    ):
+        frames = [
+            self._frame(values, action, static_inputs, episode_id, i, budget)
+            for i, (values, action, budget) in enumerate(earlier)
+        ]
+        frames.append(
+            self._frame(
+                observation,
+                previous_action,
+                static_inputs,
+                episode_id,
+                len(frames),
+                desired_return,
+            )
         )
         self.frames.clear()
-        self.frames.append(frame)
+        self.frames.extend(frames)
         self.reset_count += 1
 
     def advance(self, action, successor, desired_return=None):

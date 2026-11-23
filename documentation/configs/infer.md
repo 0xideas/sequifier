@@ -317,15 +317,17 @@ selection, read/write formats, device, seed, `enforce_determinism` and batch siz
 Sequence identifiers must be non-null integers, including a custom
 `input.sequence_id_column`. Fresh raw tables use the preprocessing coordinates
 `sequenceId` and `itemPosition` and may supply additional integer coordinates
-for policy history. A rollout starts a new history at the selected observation
-and initializes action feedback from the policy binding.
+for policy history. Policy predictions and rollouts read available preceding context at split boundaries.
+Only split-owned decisions get output rows or seed indices. Use
+`rollout.seed_history: current` for a fresh one-observation reset.
 
 Optional assertions `assertions.input_columns`, `assertions.static_columns`,
 `assertions.target_columns`, `assertions.column_data_types`, `assertions.target_column_types`, `assertions.training_objective`,
 `assertions.context_length`, `assertions.target_offset`, `assertions.prediction_length` and `assertions.decoder_support_length` must
 match the selected artifact. Unknown/cross-route options fail even at default values.
 Policy rejects external per-column sampling, dropout, category decoding,
-training-route selection, autoregression and `generation_steps`.
+autoregression and `generation_steps`. Policy accepts `input.training_route` to select a
+prepared dataset view. For an in-memory training partition, supply the inference table via `input.path`.
 Forecast rejects policy-only output/return/action/history options; embeddings also
 reject generative sampling, decoding, probabilities, autoregression and rollout.
 

@@ -409,6 +409,67 @@ def load_inferer_config(
     return _resolve_inference_request(public_request, skip_metadata, config_path)
 
 
+def _policy_training_route(values):
+    """Select the same physical prepared part that the training dataset view owns."""
+    from sequifier.config.train_config import load_train_config_with_source
+    from sequifier.config.training_resolution import TrainingSources
+
+    root = Path(values.get("run", {}).get("project_root", "."))
+    path = (root / values["training_config_path"]).resolve()
+    values["training_config_path"] = str(path)
+    loaded = load_train_config_with_source(str(path), {}, False)
+    config = loaded.config
+    name = values.pop("dataset", None)
+    if name is None and len(config.datasets) == 1:
+        name = next(iter(config.datasets))
+    if name not in config.datasets:
+        raise ValueError(
+            "Select an input.training_route.dataset from the training config"
+        )
+    sources = TrainingSources(
+        config, Path(config.run.project_root).resolve(), loaded.metadata
+    )
+    dataset = config.datasets[name]
+    interface = dataset.model_interface
+    if interface is None and len(loaded.resolved.interfaces) == 1:
+        interface = next(iter(loaded.resolved.interfaces))
+    if interface:
+        _merge_loaded_execution_values(
+            values,
+            _execution_values(
+                loaded.resolved.execution.options, loaded.resolved.interface(interface)
+            ),
+            f"training dataset {name!r}",
+        )
+    view = values.pop("part", None)
+    if view is None and len(dataset.views) == 1:
+        view = next(iter(dataset.views))
+    if view is None and values.get("data_path"):
+        view = next(iter(dataset.views))
+    if view not in dataset.views:
+        raise ValueError(
+            f"Select an input.training_route.view from {list(dataset.views)}"
+        )
+    refs = sources.members[f"{name}.{view}"]
+    if len(refs) != 1 and not values.get("data_path"):
+        raise ValueError("A multi-part inference view requires an explicit input.path")
+    ref = f"{name}.{refs[0]}"
+    part = sources.parts[ref]
+    if part.metadata_path is not None:
+        values.setdefault("metadata_config_path", str(part.metadata_path.resolve()))
+    if not values.get("data_path"):
+        if part.spec.type not in {"indexed_sequence", "prepared"}:
+            raise ValueError(
+                "A policy training route requires a prepared view or explicit input.path"
+            )
+        path = sources.split_path(ref)
+        if path is None:
+            raise ValueError(f"{ref}: training view has no prepared data path")
+        values["data_path"] = str(Path(path).resolve())
+        if hasattr(part.spec, "read_format"):
+            values.setdefault("read_format", part.spec.read_format)
+
+
 def _resolve_inference_request(public_request, skip_metadata, config_path):
     authored_values = public_request.resolver_values()
     inline_metadata = authored_values.pop("inline_metadata", None)
@@ -419,6 +480,8 @@ def _resolve_inference_request(public_request, skip_metadata, config_path):
     if authored_values.get("task") == "policy":
         if skip_metadata:
             raise ValueError("skip_metadata is not supported for policy inference")
+        if authored_values.get("training_config_path"):
+            _policy_training_route(authored_values)
         return _resolve_policy_inference(
             PolicyInferenceConfig.model_validate(authored_values)
         )

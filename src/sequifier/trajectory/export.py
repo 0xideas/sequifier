@@ -12,7 +12,7 @@ from sequifier.fingerprints import file_checksum
 from sequifier.io.action_record import action_record_layout
 from sequifier.io.atomic import atomic_path
 from sequifier.io.preprocessing_workspace import preprocessing_workspace
-from sequifier.io.sequence import TransitionColumns
+from sequifier.io.sequence import CONTEXT_COLUMN, CONTEXT_RECORDS, TransitionColumns
 from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
@@ -65,6 +65,9 @@ def cast_episode_table(table, schema):
         return table
     arrays = []
     for field in schema:
+        if field.name == CONTEXT_COLUMN and field.name not in table.column_names:
+            arrays.append(pa.nulls(len(table), type=field.type))
+            continue
         column = table[field.name]
         arrays.append(
             column
@@ -108,6 +111,7 @@ class EpisodeTableEncoder:
             PREVIOUS_ACTION_RECORD,
             GROUP_COLUMN,
             REWARD_COLUMN,
+            CONTEXT_COLUMN,
             *TRANSITION_FLAGS,
             *successor_columns,
         }
@@ -157,6 +161,11 @@ class EpisodeTableEncoder:
             "truncated": transitions.truncated or [None] * length,
             "bootstrap_allowed": transitions.bootstrap_allowed or [None] * length,
         }
+        if context := getattr(episode, "context", None):
+            values[CONTEXT_COLUMN] = [
+                CONTEXT_RECORDS.dump_json(context).decode(),
+                *([None] * (length - 1)),
+            ]
         episode_types = dict(self.types)
         for name, column in zip(self.observations, self.successors, strict=True):
             values[column] = [
@@ -188,6 +197,15 @@ def _write_import(config, destination, work):
 
     policy = config.resolved_policy()
     resolved_source = config.resolved_source()
+    metadata = resolved_source.metadata
+    if config.initialize_from is None and metadata is not None:
+        policy = policy.model_copy(
+            update={
+                "context_length": max(
+                    metadata.window_lengths or [metadata.window_length]
+                )
+            }
+        )
     references = source_episodes(resolved_source, policy)
     if not references:
         raise ValueError("sequence import requires at least one episode")

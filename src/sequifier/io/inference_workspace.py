@@ -161,6 +161,13 @@ def inference_workspace(request, *, random_seed, skip_metadata):
         identity["output"] = default[request.task]().model_dump(exclude_none=True)
     if random_seed:
         identity["run"]["reproducibility"]["seed"] = "random"
+    if (
+        request.task == "policy"
+        and request.rollout
+        and request.rollout.seed_history == "current"
+    ):
+        # A legacy single-observation rollout can resume its original adapter journal.
+        identity["rollout"].pop("seed_history", None)
     if request.task == "policy" and not request.rollout:
         # Invalidate cached tables when policy prediction semantics change.
         identity["prediction_table_version"] = ContractVersions.POLICY_PREDICTION_TABLE

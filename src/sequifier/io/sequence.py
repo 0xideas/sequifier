@@ -12,6 +12,7 @@ from pydantic import (
     JsonValue,
     StrictBool,
     StrictInt,
+    TypeAdapter,
     model_validator,
 )
 
@@ -148,3 +149,32 @@ class SequenceEpisode(BaseModel):
         if self.transitions.terminated is not None and self.transitions.terminated[-1]:
             return length
         return None
+
+
+class ContextObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    observation: dict[str, JsonValue]
+    previous_action: dict[str, DomainValue] | None = None
+    reward: float | None = None
+    desired_return: float | None = None
+
+    def return_before(self, following, gamma):
+        if self.reward is not None:
+            return self.reward + gamma * following
+        if self.desired_return is not None:
+            return self.desired_return
+        raise ValueError(
+            "Return-conditioned history requires rewards or recorded budgets"
+        )
+
+
+class PreparedEpisode(SequenceEpisode):
+    """Split-owned decisions plus preceding observations used only as model inputs."""
+
+    context: tuple[ContextObservation, ...]
+
+
+# An optional first-row column carries pre-decision history across table exports.
+CONTEXT_COLUMN = "__policy_seed_context"
+CONTEXT_RECORDS = TypeAdapter(tuple[ContextObservation, ...])

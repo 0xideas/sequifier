@@ -32,7 +32,8 @@ class ContractVersions:
 
     # Rollout records, algorithm archives, and offline source manifests.
     FORECAST_TRAJECTORY = 100
-    JOINT_POLICY_TRAJECTORY = 101
+    SINGLE_SEED_JOINT_POLICY_TRAJECTORY = 101
+    JOINT_POLICY_TRAJECTORY = 102
     COLLECTION_ARCHIVE = 100
     PPO_COLLECTION = 101
     GRPO_ARCHIVE = 100
@@ -44,7 +45,7 @@ class ContractVersions:
     MODEL_EXECUTION_SCHEMA = 100
     EXPORT_PREFLIGHT = 101
     INFERENCE_WORKSPACE = 100
-    POLICY_PREDICTION_TABLE = 101
+    POLICY_PREDICTION_TABLE = 102
 
     # Algorithm and implementation identities used in fingerprints and seeds.
     HASH_CODEC = 100

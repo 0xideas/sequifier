@@ -75,6 +75,7 @@ from sequifier.io.window_placement import (
     PredictionAlignment,
     SplitWindowPlan,
     WindowPlacement,
+    cutoff_intervals,
     get_subsequence_starts,
     split_intervals,
 )
@@ -3276,12 +3277,7 @@ def _place_sequence_windows_for_splits(
         if cutoffs is None or batch_arrays.split_values is None:
             raise ValueError("value_cutoff splitting requires split_values")
         values = batch_arrays.split_values[run_start:run_stop]
-        if np.any(values[1:] < values[:-1]):
-            raise ValueError(
-                "split_column values must be non-decreasing within each sequence"
-            )
-        cuts = [0, *np.searchsorted(values, cutoffs, side="left").tolist(), length]
-        bounds = zip(cuts, cuts[1:])
+        bounds = cutoff_intervals(values, cutoffs)
     first = int(batch_arrays.item_positions[run_start])
     curriculum = {
         name: values[run_start:run_stop]

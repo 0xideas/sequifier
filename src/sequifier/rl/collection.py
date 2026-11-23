@@ -85,7 +85,15 @@ class PolicyCursor:
         self.history.frames.clear()
         self._window_storage.close()
 
-    def reset(self, result, episode_id, desired_return=None):
+    def reset(
+        self,
+        result,
+        episode_id,
+        desired_return=None,
+        *,
+        earlier=(),
+        previous_action=None,
+    ):
         result = validate_reset(result, self.units, compact_images=True)
         if self.actor.config.return_conditioned and desired_return is None:
             desired_return = self.actor.config.initial_desired_return
@@ -94,7 +102,12 @@ class PolicyCursor:
                     "return-conditioned collection needs an initial desired return"
                 )
         self.history.reset(
-            result.observation, result.static_inputs, episode_id, desired_return
+            result.observation,
+            result.static_inputs,
+            episode_id,
+            desired_return,
+            earlier=earlier,
+            previous_action=previous_action,
         )
         self.desired_return = desired_return
         self.episode_return, self.episode_length, self.ended = 0.0, 0, False

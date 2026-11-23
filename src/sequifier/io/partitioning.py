@@ -6,6 +6,12 @@ import random
 def split_components(records, leakage_keys, validation_fraction, seed):
     if not 0 < validation_fraction < 1:
         raise ValueError("validation_fraction must be in (0,1)")
+    return partition_components(
+        records, leakage_keys, [1 - validation_fraction, validation_fraction], seed
+    )
+
+
+def partition_components(records, leakage_keys, fractions, seed):
     records = list(records)
     parents = list(range(len(records)))
 
@@ -25,11 +31,20 @@ def split_components(records, leakage_keys, validation_fraction, seed):
     for index, record in enumerate(records):
         groups.setdefault(root(index), []).append(record)
     components = list(groups.values())
-    if len(components) < 2:
-        raise ValueError("splitting requires at least two independent components")
+    if len(components) < len(fractions):
+        raise ValueError(
+            "splitting requires at least two independent components"
+            if len(fractions) == 2
+            else "splitting requires an independent component per split"
+        )
     random.Random(seed).shuffle(components)
-    count = min(len(components) - 1, max(1, int(len(components) * validation_fraction)))
+    total = len(components)
+    partitions = []
+    for index in reversed(range(1, len(fractions))):
+        count = min(len(components) - index, max(1, int(total * fractions[index])))
+        partitions.append(components[:count])
+        components = components[count:]
+    partitions.append(components)
     return tuple(
-        [record for group in groups for record in group]
-        for groups in (components[count:], components[:count])
+        [item for group in groups for item in group] for groups in reversed(partitions)
     )

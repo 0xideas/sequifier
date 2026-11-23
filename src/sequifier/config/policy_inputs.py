@@ -47,6 +47,10 @@ class PolicyFittingSpec:
         )
 
     @property
+    def previous_action_inputs(self):
+        return self.binding.previous_action_inputs
+
+    @property
     def actions(self):
         return self.binding.actions
 

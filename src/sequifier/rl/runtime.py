@@ -21,7 +21,7 @@ from sequifier.rl.environment import (
 )
 from sequifier.rl.policy import Policy
 from sequifier.trajectory.recording import TrajectoryRecorder, close_adapter
-from sequifier.trajectory.schema import SeedHistory, Trajectory
+from sequifier.trajectory.schema import SeedHistory, Trajectory, validate_policy_seed
 
 
 def collect_policy_rollout(
@@ -32,6 +32,8 @@ def collect_policy_rollout(
     max_steps: int,
     *,
     desired_return: float | None = None,
+    seed_previous_actions: list | None = None,
+    seed_returns: list | None = None,
     action_selection: Literal["deterministic", "stochastic"] = "deterministic",
     random_seed: int = 1010,
     journal=None,
@@ -49,13 +51,15 @@ def collect_policy_rollout(
         if units != policy.units:
             raise ValueError("rollout environment units differ from the policy")
         seed = SeedHistory.model_validate(seed.model_dump())
-        if (
-            sum(seed.attention_valid_mask) != 1
-            or len(seed.attention_valid_mask) != spec.context_length
-        ):
-            raise ValueError(
-                "policy seed requires one current observation in its context window"
-            )
+        count = sum(seed.attention_valid_mask)
+        if len(seed.attention_valid_mask) != spec.context_length:
+            raise ValueError("policy seed width must match context_length")
+        if seed_previous_actions is None:
+            if count > 1 and spec.previous_action_inputs:
+                raise ValueError(
+                    "Multi-observation policy seeds require lagged action history"
+                )
+            seed_previous_actions = [None] * count
         if not spec.return_conditioned and desired_return is not None:
             raise ValueError("behavior cloning has no desired-return input")
         if spec.return_conditioned and desired_return is None:
@@ -80,7 +84,26 @@ def collect_policy_rollout(
         cursor = PolicyCursor(
             policy, adapter, units, random_seed, strict_vocabulary=False
         )
-        cursor.reset(initial, episode_id, returns[0] if returns else None)
+        if seed_returns is None:
+            seed_returns = [desired_return] if spec.return_conditioned else []
+        validate_policy_seed(
+            spec, seed_previous_actions, seed_returns, count, desired_return
+        )
+        earlier = [
+            (
+                {name: values[i - count] for name, values in seed.observations.items()},
+                seed_previous_actions[i],
+                seed_returns[i] if spec.return_conditioned else None,
+            )
+            for i in range(count - 1)
+        ]
+        cursor.reset(
+            initial,
+            episode_id,
+            desired_return,
+            earlier=earlier,
+            previous_action=seed_previous_actions[-1],
+        )
 
         def reset_adapter():
             return adapter.reset_from_observation(deepcopy(initial), random_seed)
@@ -177,6 +200,8 @@ def collect_policy_rollout(
                 "policy_execution": {
                     "config": spec.model_dump(mode="json"),
                     "initial_desired_return": desired_return,
+                    "seed_previous_action_ids": seed_previous_actions,
+                    "seed_returns": seed_returns if spec.return_conditioned else [],
                     "remaining_returns": returns,
                     "previous_action_ids": previous_actions,
                     "action_log_probabilities": log_probabilities,

@@ -70,6 +70,15 @@ def split_intervals(length: int, ratios: Sequence[float]) -> list[tuple[int, int
     return list(pairwise((0, *cuts, length)))
 
 
+def cutoff_intervals(values, cutoffs):
+    if np.any(values[1:] < values[:-1]):
+        raise ValueError(
+            "split_column values must be non-decreasing within each sequence"
+        )
+    cuts = [0, *np.searchsorted(values, cutoffs, side="left").tolist(), len(values)]
+    return list(pairwise(cuts))
+
+
 @dataclass(frozen=True)
 class SplitWindowPlan:
     widths: tuple[int, ...]

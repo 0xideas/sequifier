@@ -23,6 +23,7 @@ class TrainingRoute(ConfigModel):
 
 
 class InferenceInput(ConfigModel):
+    training_route: TrainingRoute | None = None
     format: Literal["csv", "parquet", "pt"] | None = None
     path: str | None = None
     split: str | None = None
@@ -44,11 +45,10 @@ class InferenceInput(ConfigModel):
         return self
 
     def has_split_metadata(self):
-        return bool(self.metadata_config_path)
+        return self.training_route is None and bool(self.metadata_config_path)
 
 
 class PredictionInput(InferenceInput):
-    training_route: TrainingRoute | None = None
     inline_metadata: dict | None = None
     static_features_path: str | None = None
     window_stride: int | None = Field(default=None, gt=0)

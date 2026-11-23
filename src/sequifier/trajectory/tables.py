@@ -16,6 +16,10 @@ from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.io.images import ImageStore
 from sequifier.io.preprocessing import denormalize_values
 from sequifier.io.sequence import (
+    CONTEXT_COLUMN,
+    CONTEXT_RECORDS,
+    ContextObservation,
+    PreparedEpisode,
     SequenceEpisode,
     TransitionColumns,
     ordered_sequence_rows,
@@ -53,6 +57,15 @@ def scan_tables(paths: tuple[Path, ...]):
                 raise ValueError("sequenceId must contain non-null integers")
             scan = scan.with_columns(pl.col("sequenceId").cast(pl.Int64))
         scans.append(scan)
+    if any(CONTEXT_COLUMN in scan.collect_schema() for scan in scans):
+        scans = [
+            scan
+            if CONTEXT_COLUMN in scan.collect_schema()
+            else scan.with_columns(pl.lit(None, dtype=pl.String).alias(CONTEXT_COLUMN))
+            for scan in scans
+        ]
+        columns = scans[0].collect_schema().names()
+        scans = [scan.select(columns) for scan in scans]
     return pl.concat(scans, how="vertical_relaxed")
 
 
@@ -102,7 +115,8 @@ class IndexedTable:
 class IndexedEpisodeTable:
     """Read split-owned episodes directly from the committed sequence store."""
 
-    def __init__(self, view):
+    def __init__(self, view, context_length):
+        self.context_length = context_length
         self.view = view
         self.ranges = view.split_bounds()
         if not self.ranges:
@@ -112,7 +126,7 @@ class IndexedEpisodeTable:
 
     def load(self, identity):
         start, end = self.ranges[identity]
-        return self.view.read(identity, start - 1, end).with_columns(
+        return self.view.read(identity, start - self.context_length, end).with_columns(
             (pl.col("itemPosition") >= start).alias("__decision")
         )
 
@@ -216,16 +230,15 @@ class TableEpisodeReference:
             self.policy.actions,
         )
 
-        preceding_row = None
+        owned_start = None
         if self.prepared:
             decisions = data.filter(pl.col("__decision"))
             if decisions.is_empty():
                 raise ValueError("prepared episode contains no split-owned decisions")
-            first = decisions["itemPosition"][0]
-            previous = data.filter(pl.col("itemPosition") == first - 1)
-            if len(previous):
-                preceding_row = previous.row(0, named=True)
-            data = decisions
+            owned_start = decisions["itemPosition"][0]
+            data = data.filter(
+                pl.col("itemPosition") >= owned_start - self.policy.context_length
+            )
         static_data = None
         if self.static_table is not None:
             static_data = self.static_table.load(self.sequence_id)
@@ -253,14 +266,14 @@ class TableEpisodeReference:
             data,
             self.policy,
             sequence_id=self.sequence_id,
-            preceding_row=preceding_row,
             static_data=static_data,
+            owned_start=owned_start,
             episode_end=self.source.episode_end,
             episode_namespace=self.source.episode_namespace,
             decode=decode,
-            raw_columns=(
-                self.metadata.indexed_passthrough if self.metadata is not None else ()
-            ),
+            raw_columns=self.metadata.indexed_passthrough
+            if self.metadata is not None
+            else (),
         )
 
 
@@ -270,6 +283,7 @@ def table_episode(
     *,
     sequence_id,
     preceding_row=None,
+    owned_start=None,
     static_data=None,
     episode_end="unknown",
     episode_namespace="",
@@ -348,7 +362,10 @@ def table_episode(
 
     def action_at(row):
         if structured_actions:
-            return canonical_action(row[ACTION_RECORD])
+            record = canonical_action(row[ACTION_RECORD])
+            if record is None:
+                raise ValueError("A decision requires a recorded action")
+            return record
         return {name: decode(row[name], name) for name in action_names}
 
     def values(column, decoder=decode):
@@ -407,6 +424,66 @@ def table_episode(
         )
         for name in static_inputs
     }
+    groups = optional_values(GROUP_COLUMN, domain_scalar)
+    identity = (
+        constant(values(EPISODE_ID_COLUMN, domain_scalar), "episode ID")
+        if EPISODE_ID_COLUMN in data.columns
+        else sequence_id
+    )
+
+    def reward_value(value, column):
+        return numeric_scalar(
+            value if column in raw_columns else decode(value, column), "reward"
+        )
+
+    context = ()
+    if CONTEXT_COLUMN in data.columns and (stored := data[CONTEXT_COLUMN][0]):
+        context = CONTEXT_RECORDS.validate_json(stored)
+        context = tuple(
+            step.model_copy(
+                update={
+                    "observation": {
+                        name: feature_value(value, name)
+                        for name, value in step.observation.items()
+                    }
+                }
+            )
+            for step in context
+        )
+    if owned_start is not None and owned_start > positions[0]:
+        offset = owned_start - positions[0]
+        prefix = data.head(offset)
+        if any(
+            name in prefix.columns and prefix[name].any()
+            for name in ("terminated", "truncated")
+        ):
+            raise ValueError("Prepared history crosses an episode boundary")
+        first = max(0, offset - policy.context_length + 1)
+        if positions[0] and preceding is None and policy.previous_action_inputs:
+            first = max(1, first)
+        frames = []
+        for i, row in enumerate(prefix.slice(first).iter_rows(named=True), first):
+            frames.append(
+                ContextObservation(
+                    observation={
+                        name: feature_value(row[name], name) for name in observations
+                    },
+                    previous_action=actions[i - 1] if i else preceding,
+                    reward=reward_value(row[REWARD_COLUMN], REWARD_COLUMN)
+                    if row.get(REWARD_COLUMN) is not None
+                    else None,
+                )
+            )
+        context = (
+            (*context, *frames)[-(policy.context_length - 1) :]
+            if policy.context_length > 1
+            else ()
+        )
+        preceding = actions[offset - 1]
+        actions = actions[offset:]
+        positions = positions[offset:]
+        data = data.slice(offset)
+
     # Strict boolean and length checks belong to TransitionColumns/SequenceEpisode.
     transitions = {
         field: optional_values(field, lambda value, _: value)
@@ -438,13 +515,7 @@ def table_episode(
                 if all(present)
                 else None
             )
-    groups = optional_values(GROUP_COLUMN, domain_scalar)
-    identity = (
-        constant(values(EPISODE_ID_COLUMN, domain_scalar), "episode ID")
-        if EPISODE_ID_COLUMN in data.columns
-        else sequence_id
-    )
-    return SequenceEpisode(
+    episode = SequenceEpisode(
         episode_id=episode_namespace + str(identity),
         item_positions=positions,
         observations={name: values(name, feature_value) for name in observations},
@@ -457,14 +528,13 @@ def table_episode(
         else None,
         transitions=TransitionColumns(
             **transitions,
-            rewards=optional_values(
-                REWARD_COLUMN,
-                lambda value, column: numeric_scalar(
-                    value if column in raw_columns else decode(value, column), "reward"
-                ),
-            ),
+            rewards=optional_values(REWARD_COLUMN, reward_value),
             successors=tuple(successors) if successors is not None else None,
         ),
+    )
+
+    return (
+        PreparedEpisode(**episode.model_dump(), context=context) if context else episode
     )
 
 
@@ -485,7 +555,10 @@ def table_episodes(resolved: ResolvedSequenceSource, policy: PolicyEpisodeSpec):
         raise ValueError("table columns must name declared policy features")
     static_path, image_store = resolved.static_path, None
     if view is not None:
-        table, metadata = IndexedEpisodeTable(view), view.metadata()
+        table, metadata = (
+            IndexedEpisodeTable(view, policy.context_length),
+            view.metadata(),
+        )
         for label, configured, stored in (
             ("metadata", resolved.metadata_path, view.metadata_path),
             ("static data", static_path, view.static_path),

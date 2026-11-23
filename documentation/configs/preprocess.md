@@ -587,10 +587,18 @@ splits:
 
 Use `operation: prepare_policy` for policy demonstrations. It takes the same
 `source` and `policy_binding` declarations as `import_sequences`, and adds
-named `splits.train` and `splits.validation` with fractions and window lengths, `window_stride`, and optional overrides
-for categorical and real feature roles. Omitting `window_stride` or setting it to
-`null` uses the training split’s window length for both splits. It writes the same indexed format and
-chooses disjoint episode/group/content components for training and validation.
+named splits, per-split window lengths, `window_stride`, prediction alignment, and optional overrides
+for categorical and real feature roles. Use `indexed_output_path` or `output_path` for the indexed store.
+The `train` split owns fitting by default. Set `normalize_on_all_data: true` to fit on all splits.
+Omitting `window_stride` or setting it to `null` uses the training split’s window length
+for every split. Policy preparation writes the same indexed format and
+uses `split_method: between_sequence` by default, keeping each episode, collection group,
+and identical demonstration in one partition. Use `within_sequence` for fractional temporal
+ranges or `value_cutoff` with a monotonic recorded observation as `split_column`.
+Offline policy training requires independent training and evaluation episodes. Temporal
+ranges are also available for inference or for training with independently sourced evaluation data.
+When a split starts mid-episode, earlier observations and lagged actions can fill
+the model context. Only owned decisions contribute targets.
 Rewards, action records, and transition flags retain their domain values.
 When a target and its own action feedback share a name, the feature column holds
 the executed action at each item. Policy windows use the previous-action record

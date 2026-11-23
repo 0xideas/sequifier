@@ -20,6 +20,7 @@ class PolicyRolloutConfig(PolicyConfigBase):
     environment: OnlineEnvironmentConfig
     max_steps: int = Field(gt=0)
     trajectory_path: str = Field(min_length=1)
+    seed_history: Literal["available", "current"] = "available"
     seed_row_index: int = Field(ge=0)
     max_episode_steps: int | None = Field(default=None, gt=0)
 
@@ -28,6 +29,7 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     model_paths: list[str] = Field(min_length=1, max_length=1)
     task: Literal["policy"]
 
+    training_config_path: str | None = None
     data_path: str | None = None
     image_paths: MediaPath = None
     preconditioning_image_paths: MediaPath = None
@@ -69,6 +71,8 @@ class ResolvedPolicyInferenceConfig(PolicyInferenceConfig):
 
     def input_paths(self):
         paths = super().input_paths()
+        if self.training_config_path:
+            paths.append(self.training_config_path)
         if self._prepared_source is not None:
             paths.extend(self._prepared_source.dependencies.identity)
         return paths

@@ -3,19 +3,20 @@
 from pathlib import Path
 from typing import Generic, Literal, TypeVar
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 
 from sequifier.config.command_ownership import (
     CommandRunSettings,
     SeededPreprocessingRun,
 )
+from sequifier.config.identifiers import identifier
 from sequifier.config.policy_config import (
     PolicyBinding,
     PolicyConfigBase,
     ResolvedPolicyBinding,
 )
 from sequifier.config.policy_train_config import SequenceSourceConfig
-from sequifier.config.splits import WindowSplit, WindowStrideSettings
+from sequifier.config.splits import WindowStrideSettings
 
 CommandRun = TypeVar("CommandRun", bound=CommandRunSettings)
 
@@ -82,43 +83,34 @@ class PreparePolicyConfig(
     EpisodeSourceConfig[SeededPreprocessingRun], WindowStrideSettings
 ):
     run: SeededPreprocessingRun = Field(default_factory=SeededPreprocessingRun)
+    output_path: str = Field(
+        validation_alias=AliasChoices("output_path", "indexed_output_path")
+    )
     operation: Literal["prepare_policy"]
-    splits: dict[Literal["train", "validation"], WindowSplit]
+    split_method: Literal["between_sequence", "within_sequence", "value_cutoff"] = (
+        "between_sequence"
+    )
+    normalize_on_all_data: bool = False
 
-    @property
-    def validation_fraction(self):
-        return self.splits["validation"].fraction
-
-    @property
-    def window_lengths(self):
-        return self.splits["train"].window_length, self.splits[
-            "validation"
-        ].window_length
-
-    max_target_offset: int = Field(default=1, ge=0)
     categorical_columns: list[str] | None = None
     real_columns: list[str] | None = None
     normalize_real_columns: bool = True
     metadata_config_path: str | None = None
 
+    @field_validator("splits")
+    @classmethod
+    def ordered_splits(cls, splits):
+        if "train" not in splits:
+            raise ValueError(
+                "Policy preparation requires a train split for feature fitting"
+            )
+        for name in splits:
+            identifier(name, "Split")
+        # Earlier policy configs accepted train and validation in either YAML order.
+        return {"train": splits["train"], **splits}
+
     @model_validator(mode="after")
     def validate_resources(self):
-        import math
-
-        if (
-            set(self.splits) != {"train", "validation"}
-            or any(
-                s.fraction is None or s.prediction_aligned or s.cutoff is not None
-                for s in self.splits.values()
-            )
-            or not math.isclose(
-                sum(s.fraction for s in self.splits.values() if s.fraction is not None),
-                1,
-            )
-        ):
-            raise ValueError(
-                "Policy preparation requires train and validation fractions summing to one"
-            )
-        if any(width <= self.max_target_offset for width in self.window_lengths):
-            raise ValueError("Each window width must exceed max_target_offset")
+        self.validate_split_method()
+        self.validate_window_placement()
         return self

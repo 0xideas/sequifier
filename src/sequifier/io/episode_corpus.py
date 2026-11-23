@@ -17,7 +17,7 @@ from sequifier.trajectory.tables import TableEpisodeReference
 
 def _load(source) -> SequenceEpisode:
     if isinstance(source, SequenceEpisode):
-        return SequenceEpisode.model_validate(source.model_dump())
+        return type(source).model_validate(source.model_dump())
     return source.load()
 
 

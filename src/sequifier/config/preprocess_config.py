@@ -2,7 +2,6 @@ import os
 import warnings
 from typing import Any, Literal, Optional, Union
 
-import numpy as np
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.command_ownership import (
@@ -21,7 +20,8 @@ from sequifier.config.sequence_import_config import (
     PreparePolicyConfig,
     SequenceImportConfig,
 )
-from sequifier.config.splits import WindowSplit, WindowStrideSettings
+from sequifier.config.splits import WindowSplit as WindowSplit
+from sequifier.config.splits import WindowStrideSettings
 from sequifier.helpers import (
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
@@ -153,15 +153,6 @@ class PreprocessorModel(WindowStrideSettings):
     normalize_real_columns: bool = True
     normalize_on_all_data: bool = False
 
-    splits: dict[str, WindowSplit] = Field(min_length=1)
-    split_method: Literal["within_sequence", "between_sequence", "value_cutoff"] = (
-        "within_sequence"
-    )
-    split_column: str | None = None
-    max_target_offset: int = Field(default=1, ge=0)
-    prediction_length: Optional[int] = Field(default=None, gt=0)
-    prediction_alignment_steps: int = Field(default=1, gt=0)
-    target_offset: Optional[int] = Field(default=None, ge=0)
     max_rows: Optional[int] = None
     batches_per_file: int = 1024
     process_by_file: bool = True
@@ -336,34 +327,6 @@ class PreprocessorModel(WindowStrideSettings):
             )
         return self
 
-    @property
-    def window_lengths(self):
-        return [split.window_length for split in self.splits.values()]
-
-    @property
-    def prediction_aligned_splits(self):
-        return [
-            index
-            for index, split in enumerate(self.splits.values())
-            if split.prediction_aligned
-        ]
-
-    @property
-    def split_ratios(self):
-        if self.split_method == "value_cutoff":
-            return None
-        return [
-            split.fraction
-            for split in self.splits.values()
-            if split.fraction is not None
-        ]
-
-    @property
-    def split_values(self):
-        if self.split_method != "value_cutoff":
-            return None
-        return [split.cutoff for split in list(self.splits.values())[:-1]]
-
     @field_validator("batches_per_file")
     @classmethod
     @beartype
@@ -491,37 +454,8 @@ class PreprocessorModel(WindowStrideSettings):
             identifier(name, "Split")
         if next(iter(self.splits)) != "train":
             raise ValueError("The first split must be train (used for feature fitting)")
-        entries = list(self.splits.values())
+        self.validate_split_method()
         if self.split_method == "value_cutoff":
-            if (
-                any(s.fraction is not None for s in entries)
-                or any(s.cutoff is None for s in entries[:-1])
-                or entries[-1].cutoff is not None
-            ):
-                raise ValueError(
-                    "Cutoff partitions require a cutoff on every split except the last, and no fractions"
-                )
-        elif any(
-            s.cutoff is not None or s.fraction is None for s in entries
-        ) or not np.isclose(
-            sum(s.fraction for s in entries if s.fraction is not None), 1.0
-        ):
-            raise ValueError(
-                "Ratio partitions require fractions summing to one and no cutoffs"
-            )
-        if self.split_method == "value_cutoff":
-            if not self.split_column:
-                raise ValueError(
-                    "split_column must be set when split_method is 'value_cutoff'"
-                )
-            if len(entries) < 2:
-                raise ValueError("A cutoff partition requires at least two splits")
-            if self.split_column in {"sequenceId", "itemPosition"}:
-                raise ValueError("split_column cannot be sequenceId or itemPosition")
-            if self.split_column == "__sequifier_split_value":
-                raise ValueError(
-                    "split_column cannot use reserved name '__sequifier_split_value'"
-                )
             if self.split_column == self.mask_column:
                 raise ValueError("split_column cannot also be mask_column")
             curriculum_columns = (
@@ -540,10 +474,6 @@ class PreprocessorModel(WindowStrideSettings):
                 raise ValueError(
                     "Only split_column or time_alignment_column may have a timestamp column_data_type"
                 )
-        elif self.split_column is not None:
-            raise ValueError(
-                "split_column is only valid when split_method is 'value_cutoff'"
-            )
         elif any(
             column != self.time_alignment_column
             and dtype.startswith(("Date", "Datetime"))
@@ -601,42 +531,9 @@ class PreprocessorModel(WindowStrideSettings):
                 "curriculum_column cannot also be a mask or depth feature/position "
                 "column"
             )
-        widths = self.window_lengths
-        if any(width <= self.max_target_offset for width in widths):
-            raise ValueError("Each split window_length must exceed max_target_offset")
-        if any(
-            width != widths[0] + self.prediction_alignment_steps - 1
-            for width in widths[2:]
-        ):
+        self.validate_window_placement()
+        if self.prediction_aligned_splits and self.allow_sequence_splitting:
             raise ValueError(
-                "All splits after the first two must have window_length equal to "
-                "the training width + (prediction_alignment_steps - 1)"
-            )
-        aligned = self.prediction_aligned_splits
-        if aligned:
-            if self.prediction_length is None or self.target_offset is None:
-                raise ValueError(
-                    "An aligned split requires prediction_length and target_offset"
-                )
-            if self.target_offset != self.max_target_offset:
-                raise ValueError(
-                    "Aligned placement requires target_offset == max_target_offset"
-                )
-            if any(
-                self.prediction_alignment_steps * self.prediction_length
-                > widths[i] - self.max_target_offset
-                for i in aligned
-            ):
-                raise ValueError(
-                    "Aligned window width cannot hold all prediction steps "
-                    "after max_target_offset"
-                )
-            if self.allow_sequence_splitting:
-                raise ValueError(
-                    "Aligned placement requires allow_sequence_splitting: false"
-                )
-        elif self.prediction_length is not None or self.target_offset is not None:
-            raise ValueError(
-                "prediction_length and target_offset require at least one aligned split"
+                "Aligned placement requires allow_sequence_splitting: false"
             )
         return self

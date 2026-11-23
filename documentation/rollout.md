@@ -57,8 +57,11 @@ Policy rollout uses the [online policy adapter](policy-learning.md#online-adapte
 matching `units` and seeded `reset_from_observation`. It selects
 a row with `seed_row_index` from the same input as policy prediction, including
 a named preprocessing split. Row zero of a split is its first owned decision. It executes
-named policy actions. A seed supplies exactly one current observation; model history,
-codecs and normalization come from its artifact. See
+named policy actions. By default `seed_history: available` uses preceding observations from the selected sequence
+up to the artifact’s context length, with recorded action feedback and return budgets.
+The adapter resets at the selected observation and executes from there. A feedback policy
+starts a fresh history when preceding actions are unavailable. Set `seed_history: current`
+to start with one observation and the binding’s initial feedback. See
 [inference options](configs/infer.md#policy-model-interfaces) and the
 [Python example](example_inputs/ppo_toy_control.py) using the shipped PPO scaffold.
 
