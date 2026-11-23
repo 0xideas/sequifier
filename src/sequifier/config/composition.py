@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Hashable, Iterable, Mapping
 from typing import Any
 
 import yaml
@@ -153,11 +153,34 @@ def merge_complementary_config_fragments(
     return merged
 
 
+class _ConfigLoader(yaml.SafeLoader):
+    def compose_mapping_node(self, anchor):
+        node = super().compose_mapping_node(anchor)
+        # Check authored keys before YAML merge keys expand inherited fields.
+        first_marks = {}
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                key = ("<<",)  # Distinct from a quoted "<<" string.
+            elif key_node.tag == "tag:yaml.org,2002:value":
+                key = key_node.value
+            else:
+                key = self.construct_object(key_node)
+            if not isinstance(key, Hashable):
+                continue  # SafeLoader reports invalid keys during construction.
+            if key in first_marks:
+                raise yaml.YAMLError(
+                    f"Duplicate key {key_node.value!r} at {key_node.start_mark}"
+                    f"\nFirst defined at {first_marks[key]}"
+                )
+            first_marks[key] = key_node.start_mark
+        return node
+
+
 @beartype
 def _load_yaml_mapping(path: str) -> dict[str, Any]:
     try:
         with open(path, "r") as file:
-            values = yaml.safe_load(file)
+            values = yaml.load(file, Loader=_ConfigLoader)
     except OSError as error:
         raise ValueError(f"Unable to read config '{path}': {error}") from error
     except yaml.YAMLError as error:
