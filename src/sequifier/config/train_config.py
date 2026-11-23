@@ -339,10 +339,13 @@ def validate_training_contract(run, model, phases, settings: ModelExecutionOptio
         stage_objective = get_objective_class(
             learning.objective_name(settings.training_objective)
         )
-        if stage_objective.forward_looking and settings.attention != "causal":
-            raise ValueError(
-                f"{phase.name}: forward prediction requires causal attention"
+        if stage_objective.uses_causal_attention and settings.attention != "causal":
+            task = (
+                "forward prediction"
+                if stage_objective.forward_looking
+                else stage_objective.name
             )
+            raise ValueError(f"{phase.name}: {task} requires causal attention")
         if (stage_objective.forward_looking, stage_objective.uses_causal_attention) != (
             objective.forward_looking,
             objective.uses_causal_attention,

@@ -109,9 +109,10 @@ class EvaluationService:
         return json.dumps(definition, sort_keys=True, separators=(",", ":"))
 
     def _baseline_output(
-        self, prepared: PreparedBatch, dataset: Any, decoded_length: int, network: Any
+        self, prepared: PreparedBatch, dataset: Any, output: ModelOutput, network: Any
     ) -> ModelOutput:
         interface = dataset.interface
+        decoded_length = next(iter(output.logits.values())).shape[1]
         logits = {}
         auxiliary_logits = {}
         for target in interface.target_columns:
@@ -148,6 +149,7 @@ class EvaluationService:
             logits=logits,
             prediction_positions=slice(None),
             auxiliary_logits=auxiliary_logits,
+            prediction_scales=output.prediction_scales,
         )
 
     def evaluate(
@@ -205,10 +207,18 @@ class EvaluationService:
                         self._baseline_definition(dataset),
                     )
                     bert = phase.learning.bert_spec
-                    # BERT samples the positions and the inputs used by the
-                    # persistence baseline on each validation pass.
+                    # Corruption and learned Gaussian scales can change the
+                    # baseline even when the validation rows stay the same.
+                    cache_baseline = bert is None and not any(
+                        isinstance(criterion, torch.nn.GaussianNLLLoss)
+                        and target in dataset.interface.prediction_distributions
+                        and dataset.interface.prediction_distributions[
+                            target
+                        ].scale.trainable
+                        for target, criterion in dataset.criteria.items()
+                    )
                     baseline_accounting = (
-                        self._baselines.get(baseline_key) if bert is None else None
+                        self._baselines.get(baseline_key) if cache_baseline else None
                     )
                     mask_seed = bert.evaluation_mask_seed if bert is not None else 0
                     if mask_seed == "run":
@@ -283,10 +293,7 @@ class EvaluationService:
                             )
                             baseline = self.loss_service.calculate(
                                 self._baseline_output(
-                                    prepared,
-                                    dataset,
-                                    next(iter(output.logits.values())).shape[1],
-                                    network,
+                                    prepared, dataset, output, network
                                 ),
                                 baseline_prepared,
                                 dataset,
@@ -363,7 +370,7 @@ class EvaluationService:
                             },
                             count=reduced_count.detach().clone(),
                         )
-                        if bert is None:
+                        if cache_baseline:
                             self._baselines[baseline_key] = baseline_accounting
                     baseline_total, baseline_values = (
                         self.loss_service.finalize_reduced_accounting(

@@ -33,6 +33,11 @@ class ModelOutput:
     logits: dict[str, Tensor]
     prediction_positions: slice | Tensor
     auxiliary_logits: dict[str, tuple[Tensor, ...]] = field(default_factory=dict)
+    prediction_scales: dict[str, Tensor] = field(default_factory=dict)
+
+
+# Let DDP handle returned tensors that the current objective does not use.
+torch.export.register_dataclass(ModelOutput)
 
 
 @dataclass(frozen=True)
@@ -524,6 +529,12 @@ class ComposableTransformerNetwork(nn.Module):
             logits=logits,
             prediction_positions=slice(-route.prediction_length, None),
             auxiliary_logits=auxiliary_logits,
+            prediction_scales={
+                target: route.prediction_scale(target)
+                for target in route.prediction_scales.log_scales
+            }
+            if route.prediction_scales is not None
+            else {},
         )
 
     @conditional_beartype

@@ -262,7 +262,6 @@ class LossService:
                     raise ValueError(
                         f"{target}: GaussianNLLLoss requires a real prediction_distributions entry"
                     )
-                route = network.resolve_interface(dataset.interface_name)
                 dtype = (
                     torch.float32 if predictions.device.type == "mps" else torch.float64
                 )
@@ -272,8 +271,13 @@ class LossService:
                     # Translation cancels in a Gaussian density. Scale the residual
                     # directly to preserve small differences at large physical offsets.
                     residual = residual * (statistics["std"] + NORMALIZATION_EPSILON)
+                scale = output.prediction_scales.get(target)
+                if scale is None:
+                    # Fixed scales and callers supplying their own ModelOutput.
+                    route = network.resolve_interface(dataset.interface_name)
+                    scale = route.prediction_scale(target)
                 distribution = RealPredictionDistribution(
-                    torch.zeros_like(residual), route.prediction_scale(target)
+                    torch.zeros_like(residual), scale
                 )
                 sums[target] = -distribution.log_prob(residual).sum()
             else:
