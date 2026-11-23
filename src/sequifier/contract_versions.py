@@ -44,7 +44,7 @@ class ContractVersions:
     MODEL_EXECUTION_SCHEMA = 100
     EXPORT_PREFLIGHT = 101
     INFERENCE_WORKSPACE = 100
-    POLICY_PREDICTION_TABLE = 100
+    POLICY_PREDICTION_TABLE = 101
 
     # Algorithm and implementation identities used in fingerprints and seeds.
     HASH_CODEC = 100

@@ -47,6 +47,8 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
         if first is None:
             raise ValueError("policy inference input must be nonempty")
         first_rows, _ = first
+        if spec.previous_action_inputs and not config.rollout:
+            required.update(config.previous_action_columns.values())
         if missing := required - set(first_rows.columns):
             raise ValueError(f"policy inference is missing columns: {sorted(missing)}")
         frames = chain((first,), frames)
@@ -141,6 +143,8 @@ def _indexed_policy_frames(view, spec, config):
             if name in metadata.column_data_types
             and (spec.actions[name].type == "real" or spec.raw_mask_column is not None)
         }
+        if config.previous_action_columns:
+            required_raw = set(config.previous_action_columns.values())
         if missing := required_raw - raw_columns:
             raise ValueError(
                 f"Prepare lagged action columns with passthrough_columns: {sorted(missing)}"
@@ -427,32 +431,35 @@ def policy_windows(frames, spec, config, row_key, *, prepared):
                 position = row[config.item_position_column]
                 previous_action = None
                 if spec.previous_action_inputs:
-                    if prior is not None:
+                    lagged = (
+                        {
+                            name: row[column]
+                            for name, column in config.previous_action_columns.items()
+                        }
+                        if position != 0
+                        else {}
+                    )
+                    if any(value is not None for value in lagged.values()):
+                        previous_action = encode_action(lagged, spec)
+                    elif prior is not None:
                         recorded = (
                             prior.get(ACTION_RECORD, prior) if prepared else prior
                         )
+                        if missing := spec.actions.keys() - recorded.keys():
+                            raise ValueError(
+                                f"Missing preceding actions {sorted(missing)} at position {position}; "
+                                "supply previous_action_columns for this decision"
+                            )
                         previous_action = encode_action(
                             {name: recorded[name] for name in spec.actions}, spec
                         )
-                    elif (
-                        prepared
-                        and not config.previous_action_columns
-                        and row.get(PREVIOUS_ACTION_RECORD)
-                    ):
+                    elif prepared and position != 0 and row.get(PREVIOUS_ACTION_RECORD):
                         previous_action = encode_action(
                             row[PREVIOUS_ACTION_RECORD], spec
                         )
                     elif position != 0:
-                        if not config.previous_action_columns:
-                            raise ValueError(
-                                "fragment inference requires previous_action_columns"
-                            )
-                        previous_action = encode_action(
-                            {
-                                name: row[column]
-                                for name, column in config.previous_action_columns.items()
-                            },
-                            spec,
+                        raise ValueError(
+                            "fragment inference requires previous_action_columns"
                         )
                 observation = {name: row[name] for name in spec.observation_columns}
                 if not prepared and spec.raw_mask_column in row:

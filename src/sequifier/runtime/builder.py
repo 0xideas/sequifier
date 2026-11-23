@@ -201,6 +201,7 @@ class RunBuilder:
         skip_completed: bool = True,
         initial_artifact=None,
         phase_offset: int = 0,
+        log_model_name: str | None = None,
         identity: RunIdentity | None = None,
         publication: PhasePublication = PhasePublication(),
         backbone_revision=None,
@@ -451,6 +452,13 @@ class RunBuilder:
             world_size=execution.world_size,
             logger=logger,
         )
+        # Older mixed-run checkpoints address the native group's metric filenames.
+        if log_model_name and any(
+            filename.startswith(config.model_name + "-")
+            for positions in state.metric_positions.values()
+            for filename in positions
+        ):
+            log_model_name = config.model_name
         loss_service = LossService()
         run = TrainingRun(
             config=config,
@@ -475,7 +483,7 @@ class RunBuilder:
                 loader_state,
                 publication=publication,
             ),
-            metrics=MetricsService(context, config),
+            metrics=MetricsService(context, config, log_model_name=log_model_name),
             loss=loss_service,
             loader_state=loader_state,
             context=context,

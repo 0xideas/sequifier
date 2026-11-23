@@ -25,7 +25,9 @@ class TrainingMetrics:
 
 
 class MetricsService:
-    def __init__(self, context: Any, config: Any) -> None:
+    def __init__(
+        self, context: Any, config: Any, *, log_model_name: str | None = None
+    ) -> None:
         self.context = context
         dataset_count = len(config.dataset_training)
         evaluated = {source.dataset for source in config.evaluation_sources}
@@ -33,7 +35,7 @@ class MetricsService:
             {
                 name: StructuredMetricWriters(
                     config.project_root,
-                    config.model_name,
+                    log_model_name or config.model_name,
                     context.rank,
                     class_share_columns=list(
                         dict.fromkeys(

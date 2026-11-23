@@ -21,7 +21,7 @@ from sequifier.config.sequence_import_config import (
     PreparePolicyConfig,
     SequenceImportConfig,
 )
-from sequifier.config.splits import WindowSplit
+from sequifier.config.splits import WindowSplit, WindowStrideSettings
 from sequifier.helpers import (
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
@@ -123,7 +123,7 @@ class CardinalityLimitModel(ConfigModel):
         return self
 
 
-class PreprocessorModel(ConfigModel):
+class PreprocessorModel(WindowStrideSettings):
     """Top-level preprocessing config."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -159,7 +159,6 @@ class PreprocessorModel(ConfigModel):
     )
     split_column: str | None = None
     max_target_offset: int = Field(default=1, ge=0)
-    window_stride: int | None = Field(default=None, gt=0)
     prediction_length: Optional[int] = Field(default=None, gt=0)
     prediction_alignment_steps: int = Field(default=1, gt=0)
     target_offset: Optional[int] = Field(default=None, ge=0)
@@ -641,9 +640,3 @@ class PreprocessorModel(ConfigModel):
                 "prediction_length and target_offset require at least one aligned split"
             )
         return self
-
-    @property
-    def resolved_window_stride(self) -> int:
-        return (
-            self.window_lengths[0] if self.window_stride is None else self.window_stride
-        )

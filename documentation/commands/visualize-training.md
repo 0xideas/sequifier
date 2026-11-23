@@ -32,6 +32,10 @@ Unlike other commands that rely on a YAML config, `visualize-training` is config
 
 For a single-dataset model, the command reads `logs/[MODEL_NAME]/[MODEL_NAME]-training-full.csv` and `logs/[MODEL_NAME]/[MODEL_NAME]-validation-full.csv`. The corresponding files without `-full` contain only condensed global-loss records.
 
+For a mixed run, pass the parent model name. The report shows a plot for each phase
+so supervised loss and policy metrics retain their own scales. It also reads older
+phase-specific log directories when their records carry the same run ID.
+
 ## Outputs
 
 The interactive HTML reports are saved in the `outputs/visualization/` directory.

@@ -588,7 +588,8 @@ splits:
 Use `operation: prepare_policy` for policy demonstrations. It takes the same
 `source` and `policy_binding` declarations as `import_sequences`, and adds
 named `splits.train` and `splits.validation` with fractions and window lengths, `window_stride`, and optional overrides
-for categorical and real feature roles. It writes the same indexed format and
+for categorical and real feature roles. Omitting `window_stride` or setting it to
+`null` uses the training split’s window length for both splits. It writes the same indexed format and
 chooses disjoint episode/group/content components for training and validation.
 Rewards, action records, and transition flags retain their domain values.
 Set `metadata_config_path` to reuse an established feature contract. Structured

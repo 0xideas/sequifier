@@ -4,6 +4,7 @@ import html
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -52,6 +53,9 @@ class StructuredMetricsParser:
     def parse_files(self, training_file: str, validation_file: str) -> TrainingMetrics:
         training_rows = self._read_rows(training_file)
         validation_rows = self._read_rows(validation_file)
+        return self.parse_rows(training_rows, validation_rows)
+
+    def parse_rows(self, training_rows, validation_rows, *, allow_training_only=False):
         total_training_rows = [
             row
             for row in training_rows
@@ -140,6 +144,8 @@ class StructuredMetricsParser:
             elif metric == "loss" and target:
                 metrics.var_losses.setdefault(target, {})[epoch_position] = value
 
+        if allow_training_only and not validation_rows:
+            return metrics
         if not metrics.val_losses:
             raise DataContinuityError(
                 f"[{self.model}]: No valid validation loss data found."
@@ -227,6 +233,83 @@ def get_metrics_filepaths(args: argparse.Namespace, model: str) -> tuple[str, st
             f"Structured metric files not found for model {model!r}: {missing!r}"
         )
     return training_file, validation_file
+
+
+def _model_plot_data(args, model):
+    """Match native phase tables to the same logical run before plotting them."""
+    parser = StructuredMetricsParser(model)
+    logs = Path(args.project_root) / "logs"
+    phase_directory = re.compile(re.escape(model) + r"-phase-\d{3,}")
+    parent = logs / model
+    tables = []
+    directories = [
+        parent,
+        *sorted(
+            path for path in logs.iterdir() if phase_directory.fullmatch(path.name)
+        ),
+    ]
+    for directory in directories:
+        for path in sorted(directory.glob("*-training-full.csv")):
+            prefix = path.name.removesuffix("-training-full.csv")
+            if prefix != directory.name and not prefix.startswith(directory.name + "-"):
+                continue
+            rows = parser._read_rows(str(path))
+            if rows:
+                tables.append((directory, prefix, rows))
+
+    parent_rows = [rows[-1] for directory, _, rows in tables if directory == parent]
+    if not parent_rows:
+        training, validation = get_metrics_filepaths(args, model)
+        return format_plot_data(
+            parser.parse_files(training, validation),
+            args.bucket_training_batches,
+            model,
+        )
+    run_id = max(parent_rows, key=lambda row: row["timestamp_utc"])["run_id"]
+    series = []
+    for directory, prefix, rows in tables:
+        rows = [row for row in rows if row["run_id"] == run_id]
+        if not rows:
+            continue
+        validation = directory / f"{prefix}-validation-full.csv"
+        evaluations = (
+            [
+                row
+                for row in parser._read_rows(str(validation))
+                if row["run_id"] == run_id
+            ]
+            if validation.is_file()
+            else []
+        )
+        dataset = prefix[len(directory.name) :].removeprefix("-")
+        series.append((dataset, rows, evaluations))
+
+    if len(series) == 1:
+        _, rows, evaluations = series[0]
+        if (
+            all(row["algorithm"] == "supervised" for row in rows)
+            or len({row["phase"] for row in rows}) == 1
+        ):
+            metrics = parser.parse_rows(rows, evaluations)
+            return format_plot_data(metrics, args.bucket_training_batches, model)
+
+    phases = {}
+    for dataset, rows, evaluations in series:
+        for phase in dict.fromkeys(row["phase"] for row in rows):
+            label = " / ".join(filter(None, (model, phase, dataset)))
+            training = [row for row in rows if row["phase"] == phase]
+            validation = [row for row in evaluations if row["phase"] == phase]
+            metrics = parser.parse_rows(training, validation, allow_training_only=True)
+            phases[label] = (
+                training[0]["timestamp_utc"],
+                format_plot_data(metrics, args.bucket_training_batches, label),
+            )
+    return {
+        "phases": {
+            label: data
+            for label, (_, data) in sorted(phases.items(), key=lambda item: item[1][0])
+        }
+    }
 
 
 @beartype
@@ -343,14 +426,13 @@ def _add_invalid_runs(fig: go.Figure, invalid_runs: dict[str, str]) -> None:
 
 
 @beartype
-def _generate_single_model_plot(
+def _single_model_figure(
     model: str,
     data: dict[str, Any],
     yaxis_type: str,
-    out_path: str,
     invalid_runs: Optional[dict[str, str]] = None,
-) -> None:
-    """Write a single-model training report."""
+) -> go.Figure:
+    """Build the training plot for a model or one phase of a mixed run."""
     policy_metrics = data.get("training_label", "Training Loss") != "Training Loss"
     if policy_metrics:
         yaxis_type = "linear"
@@ -442,8 +524,7 @@ def _generate_single_model_plot(
     fig.update_layout(title_text=f"Training Visualization: {model}")
     if invalid_runs is not None:
         _add_invalid_runs(fig, invalid_runs)
-    fig.write_html(out_path, include_plotlyjs="cdn")
-    logger.info(f"Visualization HTML generated and saved successfully to {out_path}")
+    return fig
 
 
 @beartype
@@ -555,15 +636,40 @@ def generate_html_report(
 
     yaxis_type = "log" if args.log_scale else "linear"
 
-    if len(models) == 1 and report_name is None:
-        model = models[0]
-        out_path = os.path.join(output_dir, f"{model}-training-visualization.html")
-        _generate_single_model_plot(model, all_data[model], yaxis_type, out_path)
+    if any("phases" in data for data in all_data.values()):
+        filename = report_name or (
+            f"{models[0]}-training-visualization"
+            if len(models) == 1
+            else "multi-model-training-visualization"
+        )
+        figures = [
+            _single_model_figure(label, data, yaxis_type)
+            for model in models
+            for label, data in all_data[model]
+            .get("phases", {model: all_data[model]})
+            .items()
+        ]
+        if invalid_runs:
+            _add_invalid_runs(figures[-1], invalid_runs)
+        with open(
+            os.path.join(output_dir, f"{filename}.html"), "w", encoding="utf-8"
+        ) as file:
+            file.write("<!doctype html><html><head><meta charset='utf-8'></head><body>")
+            for index, figure in enumerate(figures):
+                file.write(
+                    figure.to_html(
+                        full_html=False, include_plotlyjs="cdn" if index == 0 else False
+                    )
+                )
+            file.write("</body></html>")
     elif len(models) == 1:
         model = models[0]
-        out_path = os.path.join(output_dir, f"{report_name}.html")
-        _generate_single_model_plot(
-            model, all_data[model], yaxis_type, out_path, invalid_runs or {}
+        filename = report_name or f"{model}-training-visualization"
+        figure = _single_model_figure(
+            model, all_data[model], yaxis_type, invalid_runs if report_name else None
+        )
+        figure.write_html(
+            os.path.join(output_dir, f"{filename}.html"), include_plotlyjs="cdn"
         )
     else:
         filename = (
@@ -584,7 +690,6 @@ def visualize_training(args: argparse.Namespace) -> None:
     if not models:
         raise ValueError("No models provided to visualize.")
 
-    bucket_batches = args.bucket_training_batches
     all_data: dict[str, Any] = {}
     invalid_runs: dict[str, str] = {}
 
@@ -594,11 +699,7 @@ def visualize_training(args: argparse.Namespace) -> None:
 
         logger.info(f"Parsing structured metrics for model: {model}")
         try:
-            training_file, validation_file = get_metrics_filepaths(args, model)
-            metrics = StructuredMetricsParser(model).parse_files(
-                training_file, validation_file
-            )
-            all_data[model] = format_plot_data(metrics, bucket_batches, model)
+            all_data[model] = _model_plot_data(args, model)
         except (DataContinuityError, FileNotFoundError) as error:
             invalid_runs[model] = str(error).removeprefix(f"[{model}]: ")
             logger.warning(f"Skipping invalid training run '{model}': {error}")

@@ -30,6 +30,7 @@ def execute_supervised(
     integration_specs=(),
     integration_instances=(),
     semantic_optimizer_grouping=False,
+    log_model_name=None,
     **build_options,
 ):
     """Build and finalize one native runtime in the supplied worker environment."""
@@ -41,7 +42,7 @@ def execute_supervised(
     torch.set_float32_matmul_precision(settings.precision.float32_matmul_precision)
     logger = configure_logger(
         config.project_root,
-        config.model_name,
+        log_model_name or config.model_name,
         execution.rank,
         dataset_names=dataset_names,
         rank_specific=execution.distributed,
@@ -60,7 +61,9 @@ def execute_supervised(
     )
     run = RunBuilder(
         semantic_optimizer_grouping=semantic_optimizer_grouping
-    ).build_if_needed(group, execution, integrations, **build_options)
+    ).build_if_needed(
+        group, execution, integrations, log_model_name=log_model_name, **build_options
+    )
     if run is None:
         return
     try:

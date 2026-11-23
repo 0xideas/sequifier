@@ -354,7 +354,9 @@ With a named split, the metadata selects the physical input. An indexed view
 supplies its own fitted metadata for artifact validation. A policy prediction on
 a within-sequence split uses the stored preceding action when available and
 writes one row per split-owned decision. A fragment without a stored predecessor
-can supply `input.previous_action_columns`.
+can supply `input.previous_action_columns`. When supplied, these columns provide the
+lagged actions after episode position zero. A row with empty lag columns can use
+the preceding recorded action. At position zero the policy uses its initial feedback.
 
 To infer directly from fresh data in the original preprocessing input layout,
 use the training metadata config and select the raw input layout.

@@ -15,7 +15,7 @@ from sequifier.config.policy_config import (
     ResolvedPolicyBinding,
 )
 from sequifier.config.policy_train_config import SequenceSourceConfig
-from sequifier.config.splits import WindowSplit
+from sequifier.config.splits import WindowSplit, WindowStrideSettings
 
 CommandRun = TypeVar("CommandRun", bound=CommandRunSettings)
 
@@ -78,7 +78,9 @@ class SequenceImportConfig(EpisodeSourceConfig[CommandRunSettings]):
     episodes_per_shard: int = Field(default=64, gt=0)
 
 
-class PreparePolicyConfig(EpisodeSourceConfig[SeededPreprocessingRun]):
+class PreparePolicyConfig(
+    EpisodeSourceConfig[SeededPreprocessingRun], WindowStrideSettings
+):
     run: SeededPreprocessingRun = Field(default_factory=SeededPreprocessingRun)
     operation: Literal["prepare_policy"]
     splits: dict[Literal["train", "validation"], WindowSplit]
@@ -93,7 +95,6 @@ class PreparePolicyConfig(EpisodeSourceConfig[SeededPreprocessingRun]):
             "validation"
         ].window_length
 
-    window_stride: int = Field(default=128, gt=0)
     max_target_offset: int = Field(default=1, ge=0)
     categorical_columns: list[str] | None = None
     real_columns: list[str] | None = None

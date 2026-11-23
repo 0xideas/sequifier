@@ -223,7 +223,7 @@ def _prepare_policy(config, writer):
             first,
             first + len(rows),
             config.window_lengths[split],
-            config.window_stride,
+            config.resolved_window_stride,
         )
         writer.add(
             rows,
@@ -246,7 +246,7 @@ def _prepare_policy(config, writer):
         window_length=config.window_lengths[0],
         window_lengths=list(config.window_lengths),
         max_target_offset=config.max_target_offset,
-        window_stride=config.window_stride,
+        window_stride=config.resolved_window_stride,
         image_sources={
             name: image.compatibility_signature() for name, image in images.items()
         },

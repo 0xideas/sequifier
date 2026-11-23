@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class SupervisedPhaseGroup:
+    log_model_name: str
     index: int
     artifacts: PhaseArtifacts
     compiled: PreparedSupervisedGroup
@@ -62,6 +63,7 @@ class SupervisedPhaseGroup:
             environment,
             initial_artifact=incoming,
             phase_offset=self.index,
+            log_model_name=self.log_model_name,
             identity=identity,
             publication=publication,
             backbone_revision=revision,
@@ -182,5 +184,9 @@ def compile_phase_group(config, phases, index, inputs):
     )
     compiled = PreparedSupervisedGroup.compile(resolved, validate_sources=True)
     return SupervisedPhaseGroup(
-        index, artifacts, compiled, supervised_dependencies(compiled.config)
+        config.model_name,
+        index,
+        artifacts,
+        compiled,
+        supervised_dependencies(compiled.config),
     )
