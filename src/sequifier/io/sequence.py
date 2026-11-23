@@ -4,6 +4,7 @@ These records describe data, independently of the simulator, collection context
 length, prediction bindings, preprocessing or the algorithm that will consume it.
 """
 
+from polars import Int64
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -15,6 +16,14 @@ from pydantic import (
 )
 
 from sequifier.io.values import DomainValue
+
+
+def validate_sequence_ids(frame, column="sequenceId"):
+    ids = frame[column]
+    if not ids.dtype.is_integer() or ids.null_count():
+        raise ValueError(f"{column} must contain non-null integers")
+    # Match the signed tensor coordinates used by prepared and supervised data.
+    ids.cast(Int64, strict=True)
 
 
 def ordered_sequence_rows(frame, position_column="itemPosition"):

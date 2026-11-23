@@ -18,7 +18,7 @@ from sequifier.io.inference_workspace import rollout_journal
 from sequifier.io.inference_workspace import write_inference_data as write_data
 from sequifier.io.inference_workspace import write_inference_trajectory
 from sequifier.io.policy_window import PolicyWindowView
-from sequifier.io.sequence import ordered_sequence_rows
+from sequifier.io.sequence import ordered_sequence_rows, validate_sequence_ids
 from sequifier.rl.checkpoint import load_policy
 from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import load_online_adapter
@@ -100,7 +100,13 @@ def _policy_input_frames(policy, config):
     if config.input_layout == "raw":
         from sequifier.io.prepare_inference import fresh_view_from_raw
 
-        auxiliary = set(config.previous_action_columns.values())
+        uses_feedback = bool(spec.previous_action_inputs) and config.rollout is None
+        auxiliary = (
+            set(config.previous_action_columns.values()) if uses_feedback else set()
+        )
+        for column in (config.sequence_id_column, config.item_position_column):
+            if column not in {"sequenceId", "itemPosition"}:
+                auxiliary.add(column)
         if spec.return_conditioned and config.desired_return is None:
             auxiliary.add(config.desired_return_column)
         with fresh_view_from_raw(
@@ -111,7 +117,7 @@ def _policy_input_frames(policy, config):
                 if name in policy.interface.column_data_types
             ),
             passthrough_columns=auxiliary,
-            optional_passthrough=spec.actions if spec.previous_action_inputs else (),
+            optional_passthrough=spec.actions if uses_feedback else (),
         ) as view:
             yield _indexed_policy_frames(view, spec, config), True
     elif config._indexed_view is not None:
@@ -123,7 +129,20 @@ def _policy_input_frames(policy, config):
         data = (
             pl.read_csv(path) if config.read_format == "csv" else pl.read_parquet(path)
         )
+        _validate_policy_coordinates(data, config)
         yield iter(((data, None),)), False
+
+
+def _validate_policy_coordinates(rows, config):
+    for column in {"sequenceId", config.sequence_id_column}:
+        if column in rows.columns:
+            validate_sequence_ids(rows, column)
+    for column, default in (
+        (config.sequence_id_column, "sequenceId"),
+        (config.item_position_column, "itemPosition"),
+    ):
+        if column != default and column not in rows.columns:
+            raise ValueError(f"Missing configured coordinate column {column!r}")
 
 
 def _indexed_policy_frames(view, spec, config):
@@ -136,7 +155,7 @@ def _indexed_policy_frames(view, spec, config):
         raise ValueError(
             f"Policy model inputs are stored as raw auxiliary columns: {sorted(conflicts)}"
         )
-    if view.view["view"] == "predict":
+    if view.view["view"] == "predict" and not config.rollout:
         required_raw = {
             name
             for name in spec.previous_action_inputs.values()
@@ -163,10 +182,6 @@ def _indexed_policy_frames(view, spec, config):
         rows, previous = _prepared_frame(
             rows, sequence, start, static, media, metadata, decode, spec, config
         )
-        if view.sequence_labels:
-            rows = rows.with_columns(
-                pl.lit(view.sequence_labels[sequence]).alias("sequenceId")
-            )
         yield rows, previous
 
 
@@ -230,6 +245,7 @@ def _prepared_frame(
         rows = rows.join(
             static.filter(pl.col("sequenceId") == sequence), on="sequenceId"
         )
+    _validate_policy_coordinates(rows, config)
     if media is not None:
         images, masks = media.gather(
             torch.tensor([sequence]),
@@ -243,7 +259,11 @@ def _prepared_frame(
                 else value[0].tolist()
             )
             rows = rows.with_columns(pl.Series(name, values))
-    domain_columns = set(spec.actions) if ACTION_RECORD not in rows.columns else set()
+    domain_columns = (
+        set(spec.actions)
+        if not config.rollout and ACTION_RECORD not in rows.columns
+        else set()
+    )
     if config.rollout is not None and spec.input_encoding == "raw":
         domain_columns.update(spec.observation_columns + spec.static_columns)
     encoded_columns = set(metadata.column_data_types) - set(

@@ -314,7 +314,7 @@ class StructuredMetricWriters:
         run_id: str,
         session_id: str,
         timestamp: str,
-        epoch: int,
+        epoch: int | None,
         batch: int,
         batches_total: int,
         global_step: int,

@@ -88,7 +88,13 @@ def _prepare_policy(config, writer):
         raise ValueError(f"Policy preparation lacks depth masks: {sorted(missing)}")
     features = [name for name in observations if name not in media_inputs | depth_masks]
     actions = list(policy.actions)
-    temporal = features + actions + list(policy.previous_action_inputs)
+    # A shared self-feedback/target column stores the executed action, as in
+    # supervised next-step prediction. Policy windows obtain its lag from the
+    # separate previous-action record, including at a fragment boundary.
+    feedback = [
+        name for name, action in policy.previous_action_inputs.items() if name != action
+    ]
+    temporal = features + actions + feedback
     columns = temporal + static
     if len(columns) != len(set(columns)):
         raise ValueError(
@@ -290,9 +296,14 @@ def _action_features(rows, policy):
         .fill_null(pl.lit(policy.initial_inputs.get(name)))
         .alias(name)
         for name, action in policy.previous_action_inputs.items()
+        if name != action
     ]
     result = rows.with_columns(*targets, *previous)
-    if any(result[name].null_count() for name in policy.previous_action_inputs):
+    if any(
+        name not in policy.initial_inputs
+        and rows[PREVIOUS_ACTION_RECORD].struct.field(action).null_count()
+        for name, action in policy.previous_action_inputs.items()
+    ):
         raise ValueError(
             "Policy preparation requires feedback initial values for missing lagged actions"
         )

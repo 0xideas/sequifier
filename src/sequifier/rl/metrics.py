@@ -79,7 +79,7 @@ class PolicyMetrics:
             validation=validation,
             run_id=self.run_id,
             session_id=self.session_id,
-            epoch=context.index + 1,
+            epoch=session.epoch,
             iteration=session.transaction,
             batches_total=session.iteration_budget,
             global_step=sum(session.steps.values()),

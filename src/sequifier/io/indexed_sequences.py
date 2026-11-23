@@ -26,7 +26,7 @@ from sequifier.helpers import PANDAS_TO_TORCH_TYPES, StoredWindowLayout
 from sequifier.io.atomic import atomic_path
 from sequifier.io.preprocessing import normalization_statistics
 from sequifier.io.pt_payload import StoredTensorBatch
-from sequifier.io.sequence import ordered_sequence_rows
+from sequifier.io.sequence import ordered_sequence_rows, validate_sequence_ids
 from sequifier.io.window_placement import (
     PredictionAlignment,
     WindowPlacement,
@@ -298,7 +298,6 @@ class IndexedView:
     manifest_path: Path
     view: dict
     dataset: dict
-    sequence_labels: dict[int, str] | None = None
 
     @classmethod
     def load(cls, path):
@@ -382,6 +381,16 @@ class IndexedView:
         return ImageStore(sources, prefix, project_root or str(self.root))
 
     def validate_resources(self):
+        for sequence in self.dataset["sequences"]:
+            if str(int(sequence)) != sequence or not -(2**63) <= int(sequence) < 2**63:
+                raise ValueError(
+                    f"{self.path}: invalid integer sequenceId {sequence!r}"
+                )
+        if any(
+            (isinstance(sequence, int) is False)
+            for sequence, _, _ in self.view["ranges"]
+        ):
+            raise ValueError(f"{self.path}: split ranges require integer sequence IDs")
         metadata = self._metadata
         normalization_statistics(metadata.selected_columns_statistics)
         for column, mapping in metadata.id_maps.items():
@@ -566,7 +575,10 @@ class IndexedView:
             stop_group = bisect_right(offsets, high - 1)
             groups = range(first_group, stop_group)
             table = file.read_row_groups(list(groups), columns=columns)
-            return pl.DataFrame(table.slice(low - offsets[first_group], high - low))
+            frame = pl.DataFrame(table.slice(low - offsets[first_group], high - low))
+            if "sequenceId" in frame.columns:
+                validate_sequence_ids(frame)
+            return frame
 
     def tensor_batches(self, metadata, columns, width, entries=None):
         if entries is None:

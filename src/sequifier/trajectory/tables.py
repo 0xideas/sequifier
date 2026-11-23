@@ -42,11 +42,17 @@ def scan_tables(paths: tuple[Path, ...]):
     scans = []
     for path in paths:
         if path.suffix.lower() == ".csv":
-            scans.append(pl.scan_csv(path, infer_schema_length=None))
+            scan = pl.scan_csv(path, infer_schema_length=None)
         elif path.suffix.lower() == ".parquet":
-            scans.append(pl.scan_parquet(path))
+            scan = pl.scan_parquet(path)
         else:
             raise ValueError("table sources require CSV or Parquet files")
+        schema = scan.collect_schema()
+        if "sequenceId" in schema:
+            if not schema["sequenceId"].is_integer():
+                raise ValueError("sequenceId must contain non-null integers")
+            scan = scan.with_columns(pl.col("sequenceId").cast(pl.Int64))
+        scans.append(scan)
     return pl.concat(scans, how="vertical_relaxed")
 
 
@@ -73,10 +79,8 @@ class IndexedTable:
         offset = 0
         for batch in table.iter_batches(columns=[sequence_column]):
             for identity in batch.column(0).to_pylist():
-                if isinstance(identity, bool) or not isinstance(identity, (int, str)):
-                    raise ValueError(
-                        "sequence IDs must be non-null integers or strings"
-                    )
+                if isinstance(identity, bool) or not isinstance(identity, int):
+                    raise ValueError("sequenceId must contain non-null integers")
                 if identity not in self.ranges:
                     self.ranges[identity] = [offset, offset + 1]
                 else:
@@ -183,7 +187,7 @@ def model_decoder(metadata, actions):
 class TableEpisodeReference:
     source: SequenceSourceConfig
     policy: PolicyEpisodeSpec
-    sequence_id: str | int
+    sequence_id: int
     table: IndexedTable | IndexedEpisodeTable
     metadata: DatasetMetadata | None = None
     prepared: bool = False

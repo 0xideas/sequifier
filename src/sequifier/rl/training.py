@@ -68,8 +68,10 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
             **{phase.evaluation.monitor.metric: score},
         )
 
+    session.epoch = batches.epoch
     session.evaluate_initial(evaluate)
     while batches.epoch < phase.budget.epochs and not session.stopping.triggered:
+        session.epoch = batches.epoch + 1
         group = batches.next()
         session.zero_grad()
         total = 0.0

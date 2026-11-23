@@ -9,6 +9,7 @@ import torch
 from torch import Tensor
 
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES, normalize_path
+from sequifier.io.sequence import validate_sequence_ids
 from sequifier.io.tensors import gather_tensor
 
 
@@ -18,6 +19,7 @@ class StaticFeatureTable:
         missing = set(columns) - set(frame.columns)
         if missing:
             raise ValueError(f"Static table lacks columns: {sorted(missing)}")
+        validate_sequence_ids(frame)
         self.sequence_ids = torch.tensor(
             frame.get_column("sequenceId").to_numpy(), dtype=torch.int64
         )

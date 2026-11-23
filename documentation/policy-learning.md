@@ -49,7 +49,7 @@ manifests and prepared histories. An authored manifest that lists trajectory
 files declares `format: sequifier.trajectory-source` and an `episodes`
 list with a `path` per entry. At row `t`, observations and lagged actions form
 inputs; the recorded current action is the label, and reward/successor describe
-its resulting transition. Tables use `sequenceId` and `itemPosition`.
+its resulting transition. Tables use integer `sequenceId` and `itemPosition` coordinates. Use `episodeId` for a string episode label.
 Observations and static inputs use the same names in the table, metadata and model.
 When importing without a model, declare those names in the
 `source.columns.observations` and `source.columns.static_inputs` lists.

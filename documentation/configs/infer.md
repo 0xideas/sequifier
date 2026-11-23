@@ -314,6 +314,12 @@ selection, read/write formats, device, seed, `enforce_determinism` and batch siz
 | `output.output_probabilities` | false; include joint log probability and write separate target-specific categorical probability files |
 | `rollout` | null; execute in an online policy environment instead of writing prediction rows |
 
+Sequence identifiers must be non-null integers, including a custom
+`input.sequence_id_column`. Fresh raw tables use the preprocessing coordinates
+`sequenceId` and `itemPosition` and may supply additional integer coordinates
+for policy history. A rollout starts a new history at the selected observation
+and initializes action feedback from the policy binding.
+
 Optional assertions `assertions.input_columns`, `assertions.static_columns`,
 `assertions.target_columns`, `assertions.column_data_types`, `assertions.target_column_types`, `assertions.training_objective`,
 `assertions.context_length`, `assertions.target_offset`, `assertions.prediction_length` and `assertions.decoder_support_length` must

@@ -223,7 +223,7 @@ def tabular_tensor_batch(
             for col in curriculum_storage_columns(data.columns)
         ]
     stored = [curriculum_storage_column(name) for name in curriculum]
-    if any(not data.schema[key].is_integer() for key in keys):
+    if any(not data.schema[key].is_integer() or data[key].null_count() for key in keys):
         raise ValueError("Stored sequence and subsequence IDs must be integers")
     values = []
     for name, alias in zip(curriculum, stored):
@@ -263,7 +263,9 @@ def tabular_tensor_batch(
         )
 
     def coordinate(name):
-        return torch.tensor(positions[name].to_numpy(), dtype=torch.int64)
+        return torch.tensor(
+            positions[name].cast(pl.Int64).to_numpy(), dtype=torch.int64
+        )
 
     return StoredTensorBatch(
         sequences=sequences,

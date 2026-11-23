@@ -38,6 +38,7 @@ class TrainingMetrics:
         default_factory=dict
     )
     train_window_batches: dict[float, dict[int, int]] = field(default_factory=dict)
+    use_iterations: bool = False
     training_label: str = "Training Loss"
     validation_label: str = "Validation Loss"
 
@@ -97,15 +98,15 @@ class StructuredMetricsParser:
             )
         else:
             validation_metric = "loss"
-        metrics = TrainingMetrics()
+        metrics = TrainingMetrics(use_iterations=policy_rows)
         if total_training_rows[-1].get("algorithm") not in {None, "", "supervised"}:
             metrics.training_label = total_training_rows[-1].get("metric", "Training")
 
         for row in total_training_rows:
             if row.get("run_id") != run_id:
                 continue
-            epoch = int(row["epoch"])
-            batch = int(row["batch"])
+            epoch = 0 if policy_rows else int(row["epoch"])
+            batch = int(row["iteration"] if policy_rows else row["batch"])
             batches_total = int(row["batches_total"])
             metrics.train_losses.setdefault(epoch, {})[batch] = (
                 batches_total,
@@ -124,7 +125,9 @@ class StructuredMetricsParser:
         for row in validation_rows:
             if row.get("run_id") != run_id:
                 continue
-            epoch_position = self._epoch_position(row)
+            epoch_position = (
+                int(row["iteration"]) if policy_rows else self._epoch_position(row)
+            )
             metric = row.get("metric")
             target = row.get("target")
             value = float(row["value"])
@@ -180,7 +183,7 @@ class StructuredMetricsParser:
         batch = int(row["batch"])
         batches_total = int(row["batches_total"])
         if row.get("evaluation_kind") == "initial":
-            return float(epoch - 1) if row.get("algorithm") != "supervised" else 0.0
+            return 0.0
         if batch > 0 and batches_total > 0:
             return round(epoch - 1 + batch / batches_total, 8)
         return float(epoch)
@@ -327,6 +330,9 @@ def format_plot_data(
 
     train_x, train_y = [], []
 
+    def position(epoch, batch, total):
+        return batch if metrics.use_iterations else round(epoch - 1 + batch / total, 8)
+
     for epoch in sorted(list(metrics.train_losses.keys())):
         epoch_dict = metrics.train_losses[epoch]
         if not epoch_dict:
@@ -358,7 +364,7 @@ def format_plot_data(
                     / chunk_batches
                 )
                 last_batch, num_batches = chunk[-1][0], chunk[-1][1]
-                train_x.append(round(epoch - 1 + last_batch / num_batches, 8))
+                train_x.append(position(epoch, last_batch, num_batches))
                 train_y.append(avg_loss)
                 chunk = []
                 chunk_batches = 0
@@ -386,7 +392,7 @@ def format_plot_data(
                 append_chunk()
         else:
             for batch, num_batches, loss, _ in epoch_data:
-                train_x.append(round(epoch - 1 + batch / num_batches, 8))
+                train_x.append(position(epoch, batch, num_batches))
                 train_y.append(loss)
 
     if not train_x:
@@ -395,6 +401,7 @@ def format_plot_data(
         )
 
     return {
+        "progress_label": "Iteration" if metrics.use_iterations else "Epoch",
         "val_x": val_x,
         "val_y": val_y,
         "base_y": base_y,
@@ -433,6 +440,7 @@ def _single_model_figure(
     invalid_runs: Optional[dict[str, str]] = None,
 ) -> go.Figure:
     """Build the training plot for a model or one phase of a mixed run."""
+    progress_label = data.get("progress_label", "Epoch")
     policy_metrics = data.get("training_label", "Training Loss") != "Training Loss"
     if policy_metrics:
         yaxis_type = "linear"
@@ -454,7 +462,7 @@ def _single_model_figure(
             y=data["val_y"],
             mode="lines",
             name=data.get("validation_label", "Validation Loss"),
-            hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+            hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
         ),
         row=1,
         col=1,
@@ -465,7 +473,7 @@ def _single_model_figure(
             y=data["train_y"],
             mode="lines",
             name=data.get("training_label", "Training Loss"),
-            hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+            hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
         ),
         row=1,
         col=1,
@@ -479,13 +487,13 @@ def _single_model_figure(
                 mode="lines",
                 name="Baseline Loss",
                 line=dict(dash="dash"),
-                hovertemplate=f"<b>{model}</b><br>Baseline Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+                hovertemplate=f"<b>{model}</b><br>Baseline Loss: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
             ),
             row=1,
             col=1,
         )
 
-    fig.update_xaxes(title_text="Epoch", dtick=1, row=1, col=1)
+    fig.update_xaxes(title_text=progress_label, dtick=1, row=1, col=1)
     fig.update_yaxes(title_text="Loss", type=yaxis_type, row=1, col=1)
 
     if has_var_losses:
@@ -506,13 +514,13 @@ def _single_model_figure(
                     y=y_norm,
                     mode="lines",
                     name=var,
-                    hovertemplate=f"<b>{var}</b>: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+                    hovertemplate=f"<b>{var}</b>: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
                 ),
                 row=1,
                 col=2,
             )
 
-        fig.update_xaxes(title_text="Epoch", dtick=1, row=1, col=2)
+        fig.update_xaxes(title_text=progress_label, dtick=1, row=1, col=2)
         fig.update_yaxes(
             title_text="Loss / Epoch 0 Loss", type=yaxis_type, row=1, col=2
         )
@@ -549,6 +557,7 @@ def _generate_multi_model_plot(
 
     for i, model in enumerate(models):
         data = all_data[model]
+        progress_label = data.get("progress_label", "Epoch")
         color = colors[i % len(colors)]
 
         fig.add_trace(
@@ -560,7 +569,7 @@ def _generate_multi_model_plot(
                 legendgroup=model,
                 line=dict(color=color),
                 showlegend=True,
-                hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+                hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
             ),
             row=1,
             col=1,
@@ -575,7 +584,7 @@ def _generate_multi_model_plot(
                 legendgroup=model,
                 line=dict(color=color),
                 showlegend=False,
-                hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+                hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
             ),
             row=1,
             col=2,
@@ -611,9 +620,11 @@ def _generate_multi_model_plot(
             col=1,
         )
 
-    fig.update_xaxes(title_text="Epoch", dtick=1, row=1, col=1)
+    labels = {data.get("progress_label", "Epoch") for data in all_data.values()}
+    progress_label = " / ".join(sorted(labels))
+    fig.update_xaxes(title_text=progress_label, dtick=1, row=1, col=1)
     fig.update_yaxes(title_text="Loss", type=yaxis_type, row=1, col=1)
-    fig.update_xaxes(title_text="Epoch", dtick=1, row=1, col=2)
+    fig.update_xaxes(title_text=progress_label, dtick=1, row=1, col=2)
     fig.update_yaxes(title_text="Loss", type=yaxis_type, row=1, col=2)
 
     fig.update_layout(title_text="Multi-Model Training Visualization")

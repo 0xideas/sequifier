@@ -18,6 +18,7 @@ import torch
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import normalize_path
+from sequifier.io.sequence import validate_sequence_ids
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
@@ -528,6 +529,7 @@ class ImageStore:
                     data = pl.read_parquet(
                         normalize_path(source.time_index_path, project_root)
                     )
+                    validate_sequence_ids(data)
                     self.item_times = {}
                     for sequence_id, frame in data.partition_by(
                         "sequenceId", as_dict=True

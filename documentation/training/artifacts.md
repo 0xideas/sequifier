@@ -85,7 +85,9 @@ iteration identity, run/session IDs, UTC timestamps and progress. Named scalar
 observations use `metric`, `target`, `value` and `is_primary`; policy observations
 use `target: __total__`. Policy rows name the dataset and view in `dataset` and
 `part` when the observation can be attributed to each. Online observations leave
-both empty. The phase report records the policy interface in `provenance.model_interface`. Nested diagnostic records remain in phase reports.
+both empty. The phase report records the policy interface in `provenance.model_interface`. Imitation rows record the sampler epoch (zero at initial evaluation, then one-based).
+Iteration-budgeted policy phases leave `epoch` empty. Policy plots use the
+committed iteration for progress. Nested diagnostic records remain in phase reports.
 
 `run.logging.log_interval_batches` controls supervised training observations;
 `run.logging.log_interval_iterations` controls policy training observations and

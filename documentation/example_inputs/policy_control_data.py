@@ -48,7 +48,7 @@ def generate(directory):
                     )
                     writer.writerow(
                         {
-                            "sequenceId": identity,
+                            "sequenceId": 2 * context + int(kind == "rejected"),
                             "episodeId": identity,
                             "__group": f"context-{context}",
                             "itemPosition": step,

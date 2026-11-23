@@ -218,6 +218,7 @@ class PhaseSession:
         self.steps = dict.fromkeys(self.modules, 0)
         self.sampler = torch.Generator().manual_seed(context.identity.sampling_seed)
         self.state = context.resume_state or {}
+        self.epoch: int | None = None
         self.transaction = self.state.get("transaction", 0)
         self.iteration_budget = context.phase.iteration_budget(
             context.optimization.step_budget

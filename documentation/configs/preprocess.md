@@ -592,6 +592,9 @@ for categorical and real feature roles. Omitting `window_stride` or setting it t
 `null` uses the training split’s window length for both splits. It writes the same indexed format and
 chooses disjoint episode/group/content components for training and validation.
 Rewards, action records, and transition flags retain their domain values.
+When a target and its own action feedback share a name, the feature column holds
+the executed action at each item. Policy windows use the previous-action record
+and the configured initial feedback at an episode boundary.
 Set `metadata_config_path` to reuse an established feature contract. Structured
 depth demonstrations use that frozen metadata and supply the corresponding
 per-item depth masks.
