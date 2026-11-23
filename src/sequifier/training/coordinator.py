@@ -11,7 +11,10 @@ from uuid import uuid4
 
 import torch
 
-from sequifier.artifacts.backbone_repository import select_revision
+from sequifier.artifacts.backbone_repository import (
+    publish_selected_backbone,
+    select_revision,
+)
 from sequifier.artifacts.checkpoint_envelope import (
     checkpoint_envelope,
     phase_boundary,
@@ -209,10 +212,8 @@ def _run_learning_plan(config, prepared):
     state["seed"] = config.seed
 
     revision = None
-    if (
-        phases[0].algorithm == "supervised"
-        and not config.initialize_from
-        and (not resuming or state["backbone_revision"] is not None)
+    if not config.initialize_from and (
+        not resuming or state["backbone_revision"] is not None
     ):
         revision = select_revision(
             config.execution.backbone,
@@ -394,6 +395,14 @@ def _run_learning_plan(config, prepared):
         completion_reason=completion_reason,
         source_provenance=manifest.identity,
         initialization=initialization,
+        backbone_parent_revision_id=state["backbone_revision"],
+        backbone_publication=publish_selected_backbone(
+            config,
+            final.model_state_dict,
+            state["backbone_revision"],
+            identity.run_id,
+            completed[-1].result,
+        ),
         plan_fingerprint=plan_identity,
         resource_accounting=prepared.accounting.snapshot(),
     )

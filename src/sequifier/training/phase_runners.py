@@ -125,6 +125,7 @@ class PolicyPhaseGroup:
             identity=identity,
             publication=publication,
             preparation=self.preparation,
+            backbone_revision=revision if self.index == 0 else None,
         )
 
 

@@ -1377,6 +1377,8 @@ class OwnedModelSpec(ConfigModel):
             declared.execution.model_dump(exclude_unset=True) if declared else {}
         )
         if declared:
+            if declared.backbone is not None:
+                values["backbone"]["repository"] = declared.backbone.repository
             for name, interface in declared.interfaces.items():
                 if name in values["interfaces"]:
                     values["interfaces"][name]["input_contract"] = (

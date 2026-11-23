@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from sequifier.artifacts.dependencies import add_initialization
+from sequifier.artifacts.backbone_repository import (
+    load_revision,
+    publish_selected_backbone,
+    select_revision,
+)
+from sequifier.artifacts.dependencies import add_backbone_revision, add_initialization
 from sequifier.artifacts.phase import CommittedPhases, PhaseArtifacts, PhasePublication
 from sequifier.artifacts.reports import (
     PhaseResult,
@@ -154,6 +159,7 @@ def execute_policy(
     identity=None,
     publication: PhasePublication = PhasePublication(),
     preparation=None,
+    backbone_revision=None,
 ):
     torch.set_float32_matmul_precision("highest")
     configure_determinism(
@@ -179,10 +185,23 @@ def execute_policy(
     terminal = recovery is not None and (
         recovery.phase_index == len(config.phases) or recovery.stopped
     )
+    if publication.standalone and not config.initialize_from:
+        if recovery is None:
+            backbone_revision = select_revision(
+                config.parent.execution.backbone, config.project_root
+            )
+        elif pinned := recovery.initialization.get("backbone_parent_revision_id"):
+            backbone_revision = select_revision(
+                config.parent.execution.backbone,
+                config.project_root,
+                revision_id=pinned,
+            )
+    parent_revision_id = backbone_revision["revision_id"] if backbone_revision else None
     if preparation is None:
         preparation = PolicyGroupPreparation.build(
             config,
             prepared,
+            backbone_revision_id=parent_revision_id,
             saved=recovery.data_identity if recovery is not None else None,
             known_adapters=recovery.adapter_contract if recovery and terminal else None,
             committed_reference_count=(
@@ -194,6 +213,9 @@ def execute_policy(
     else:
         # The selected handoff only exists once the preceding group has committed.
         add_initialization(preparation.dependencies, config)
+        add_backbone_revision(
+            preparation.dependencies, config.parent, parent_revision_id
+        )
         validate_training_destinations(
             config,
             config.checkpoint_path,
@@ -225,6 +247,9 @@ def execute_policy(
                 actor.grpo_policy_version = (clocks["groups"] + width - 1) // width
     else:
         actor = _initialize_actor(config)
+        if backbone_revision and not config.initialize_from:
+            load_revision(actor.backbone, backbone_revision)
+            validate_policy_weights(actor)
         representation = ActorRepresentation.from_actor(actor)
     normalization = config.parent.normalization_by_interface.get(
         config.policy.interface_name
@@ -266,6 +291,7 @@ def execute_policy(
             {
                 "path": config.initialize_from,
                 "transfer": actor.transfer_report,
+                "backbone_parent_revision_id": parent_revision_id,
                 "weight_hash": weight_fingerprint(actor.network.state_dict()),
             },
             clone_weights(actor.network),
@@ -419,6 +445,14 @@ def execute_policy(
             source_provenance=data_identity,
             reference_provenance=recovery.reference_contract,
             initialization=recovery.initialization,
+            backbone_parent_revision_id=parent_revision_id,
+            backbone_publication=publish_selected_backbone(
+                config.parent,
+                recovery.incoming_actor,
+                parent_revision_id,
+                identity.run_id,
+                recovery.completed[-1].result,
+            ),
             resource_accounting=prepared.accounting.snapshot(),
         )
         results = tuple(PhaseResult.model_validate(phase) for phase in report["phases"])
