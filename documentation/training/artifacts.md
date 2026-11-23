@@ -83,7 +83,9 @@ Structured scalar observations use the supervised writer's `*-training.csv`,
 Full tables include phase, algorithm and
 iteration identity, run/session IDs, UTC timestamps and progress. Named scalar
 observations use `metric`, `target`, `value` and `is_primary`; policy observations
-use `target: __total__`. Nested diagnostic records remain in phase reports.
+use `target: __total__`. Policy rows name the dataset and view in `dataset` and
+`part` when the observation can be attributed to each. Online observations leave
+both empty. The phase report records the policy interface in `provenance.model_interface`. Nested diagnostic records remain in phase reports.
 
 `run.logging.log_interval_batches` controls supervised training observations;
 `run.logging.log_interval_iterations` controls policy training observations and
@@ -108,7 +110,9 @@ sampled run.
 
 Forecast and policy predictions share `sequenceId`, `subsequenceId`,
 `windowStartOffset`, `itemPosition` and named prediction columns. Independent
-policy rows receive synthetic sequence/item identities. Categorical probabilities
+policy rows receive synthetic sequence/item identities. `windowStartOffset` is
+relative to the subsequence. Each policy decision materializes a single window
+in its subsequence, so its offset is zero. Categorical probabilities
 are separate target-specific files under
 `outputs/probabilities/<model>/<target>/part-NNN.<format>`, with decoded category
 labels as column names. Policy predictions additionally include

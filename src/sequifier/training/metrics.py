@@ -575,6 +575,8 @@ class StructuredMetricWriters:
         primary,
         learning_rate,
         elapsed_seconds=0.0,
+        dataset=None,
+        part=None,
         initial=False,
     ):
         """Use the supervised tables for named algorithm-specific scalar metrics."""
@@ -584,6 +586,8 @@ class StructuredMetricWriters:
             session_id=session_id,
             timestamp=_timestamp_utc(),
             epoch=epoch,
+            dataset=dataset,
+            part=part,
             batch=iteration,
             batches_total=max(1, batches_total),
             global_step=global_step,

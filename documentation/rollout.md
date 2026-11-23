@@ -55,7 +55,8 @@ together. Unsupported shapes, overflow and non-finite transformed inputs fail.
 
 Policy rollout uses the [online policy adapter](policy-learning.md#online-adapters),
 matching `units` and seeded `reset_from_observation`. It selects
-raw CSV/Parquet rows with `seed_row_index`, rejects forecast bindings, and executes
+a row with `seed_row_index` from the same input as policy prediction, including
+a named preprocessing split. Row zero of a split is its first owned decision. It executes
 named policy actions. A seed supplies exactly one current observation; model history,
 codecs and normalization come from its artifact. See
 [inference options](configs/infer.md#policy-model-interfaces) and the

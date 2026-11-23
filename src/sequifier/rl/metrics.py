@@ -11,7 +11,6 @@ class PolicyMetrics:
             config.project_root,
             config.model_name,
             0,
-            dataset_name=config.policy.interface_name,
         )
         self.run_id = identity.run_id
         self.session_id = identity.session_id
@@ -70,7 +69,13 @@ class PolicyMetrics:
                 scalars[f"{role}_learning_rate"] = float(
                     optimizer.param_groups[0]["lr"]
                 )
+        sources = context.phase.data_sources
+        refs = sources.evaluation if validation else sources.training
+        datasets = {ref.dataset for ref in refs}
+        parts = {ref.part for ref in refs}
         self.writer.write_observation(
+            dataset=next(iter(datasets)) if len(datasets) == 1 else None,
+            part=next(iter(parts)) if len(datasets) == len(parts) == 1 else None,
             validation=validation,
             run_id=self.run_id,
             session_id=self.session_id,

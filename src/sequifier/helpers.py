@@ -812,9 +812,10 @@ def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Tensor:
 @beartype
 def normalize_path(path: str, project_root: str) -> str:
     """Return path rooted under project_root."""
+    if os.path.isabs(path):
+        return path
     project_root_normalized = (project_root + os.sep).replace(os.sep + os.sep, os.sep)
-    path2 = os.path.join(project_root, path.replace(project_root_normalized, ""))
-    return path2
+    return os.path.join(project_root, path.removeprefix(project_root_normalized))
 
 
 @beartype

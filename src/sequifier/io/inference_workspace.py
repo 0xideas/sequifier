@@ -161,6 +161,9 @@ def inference_workspace(request, *, random_seed, skip_metadata):
         identity["output"] = default[request.task]().model_dump(exclude_none=True)
     if random_seed:
         identity["run"]["reproducibility"]["seed"] = "random"
+    if request.task == "policy" and not request.rollout:
+        # Regenerate tables cached with absolute policy window offsets.
+        identity["prediction_table_version"] = ContractVersions.POLICY_PREDICTION_TABLE
     identity["skip_metadata"] = skip_metadata
     with _lock(directory / "run.lock"):
         record = _read(directory / "run.json")

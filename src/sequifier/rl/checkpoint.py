@@ -7,7 +7,7 @@ import torch
 from sequifier.artifacts.model_artifact import (
     ModelArtifact,
     build_model_artifact,
-    read_artifact,
+    read_execution_artifact,
     restore_execution_network,
     save_model_artifact,
 )
@@ -78,9 +78,7 @@ def load_policy(
         assert artifact is not None and execution is not None
     else:
         artifact = (
-            path
-            if isinstance(path, ModelArtifact)
-            else read_artifact(path, expected_type="sequifier_model")[0]
+            path if isinstance(path, ModelArtifact) else read_execution_artifact(path)
         )
         execution, _ = model_execution_from_model_config(
             artifact.model_config.values, interface_name=interface_name

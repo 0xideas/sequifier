@@ -1,6 +1,6 @@
 """Inference options for policy interfaces in ordinary portable model artifacts."""
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, PrivateAttr, model_validator
 
@@ -11,6 +11,9 @@ from sequifier.config.inference_common import (
 )
 from sequifier.config.policy_config import PolicyConfigBase
 from sequifier.config.policy_plan import OnlineEnvironmentConfig
+
+if TYPE_CHECKING:
+    from sequifier.trajectory.sources import ResolvedSequenceSource
 
 
 class PolicyRolloutConfig(PolicyConfigBase):
@@ -25,7 +28,7 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     model_paths: list[str] = Field(min_length=1, max_length=1)
     task: Literal["policy"]
 
-    data_path: str
+    data_path: str | None = None
     image_paths: MediaPath = None
     preconditioning_image_paths: MediaPath = None
     output_probabilities: bool = False
@@ -50,11 +53,6 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
 
     @model_validator(mode="after")
     def validate_execution(self):
-        if self.read_format not in {"csv", "parquet"} or self.write_format not in {
-            "csv",
-            "parquet",
-        }:
-            raise ValueError("policy inference formats must be csv or parquet")
         if self.rollout is not None and self.output_probabilities:
             raise ValueError(
                 "rollout writes a trajectory including action log probabilities"
@@ -66,4 +64,11 @@ class ResolvedPolicyInferenceConfig(PolicyInferenceConfig):
     """Validated policy request with selected artifact/interface and assertions."""
 
     _model: ResolvedInferenceModel = PrivateAttr()
+    _prepared_source: "ResolvedSequenceSource | None" = PrivateAttr(default=None)
     _indexed_view: object | None = PrivateAttr(default=None)
+
+    def input_paths(self):
+        paths = super().input_paths()
+        if self._prepared_source is not None:
+            paths.extend(self._prepared_source.dependencies.identity)
+        return paths

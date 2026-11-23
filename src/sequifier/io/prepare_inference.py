@@ -14,7 +14,6 @@ from sequifier.io.categorical import is_hash_bucket_label
 from sequifier.io.indexed_sequences import (
     IndexedSequenceWriter,
     IndexedView,
-    feature_contract_id,
     is_indexed_view,
 )
 
@@ -185,27 +184,19 @@ def resolve_inference_view(config, *, skip_metadata=False):
                 "Indexed inference requires original preprocessing metadata"
             )
         view.verify()
-        if config.metadata_config_path and view.view["view"] == "predict":
-            explicit = Path(config.project_root) / config.metadata_config_path
-            if feature_contract_id(explicit) != feature_contract_id(
-                view.original_metadata_path
-            ):
-                raise ValueError(
-                    "metadata_config_path differs from the original metadata used to prepare this input"
-                )
     return view
 
 
 def original_metadata_path(config, view):
+    if view is not None:
+        return (
+            view.original_metadata_path
+            if view.view["view"] == "predict"
+            else view.metadata_path
+        )
     if config.metadata_config_path:
         return Path(config.project_root) / config.metadata_config_path
-    if view is None:
-        return None
-    return (
-        view.original_metadata_path
-        if view.view["view"] == "predict"
-        else view.metadata_path
-    )
+    return None
 
 
 @contextmanager

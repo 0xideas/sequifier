@@ -23,6 +23,9 @@ class TrainingRoute(ConfigModel):
 
 
 class InferenceInput(ConfigModel):
+    format: Literal["csv", "parquet", "pt"] | None = None
+    path: str | None = None
+    split: str | None = None
     layout: Literal["auto", "raw", "indexed"] = "auto"
     metadata_config_path: str | None = None
     static_data_path: str | None = None
@@ -30,34 +33,34 @@ class InferenceInput(ConfigModel):
     image_paths: MediaPath = None
     preconditioning_image_paths: MediaPath = None
 
-
-class PredictionInput(InferenceInput):
-    path: str | None = None
-    format: Literal["csv", "parquet", "pt"] | None = None
-    training_route: TrainingRoute | None = None
-    inline_metadata: dict | None = None
-    split: str | None = None
-    static_features_path: str | None = None
-    window_stride: int | None = Field(default=None, gt=0)
-    fresh_prediction_positions: Literal["right_edge", "observed"] | None = None
-
     @model_validator(mode="after")
     def select_split(self):
         if self.split is not None and (
-            (not self.metadata_config_path and self.inline_metadata is None)
-            or self.path
-            or self.training_route
-            or self.layout == "raw"
+            self.path or self.layout == "raw" or not self.has_split_metadata()
         ):
             raise ValueError(
                 "input.split selects a named split from the supplied preprocessing metadata"
             )
         return self
 
+    def has_split_metadata(self):
+        return bool(self.metadata_config_path)
+
+
+class PredictionInput(InferenceInput):
+    training_route: TrainingRoute | None = None
+    inline_metadata: dict | None = None
+    static_features_path: str | None = None
+    window_stride: int | None = Field(default=None, gt=0)
+    fresh_prediction_positions: Literal["right_edge", "observed"] | None = None
+
+    def has_split_metadata(self):
+        return self.training_route is None and (
+            bool(self.metadata_config_path) or self.inline_metadata is not None
+        )
+
 
 class PolicyInput(InferenceInput):
-    path: str
-    format: Literal["csv", "parquet"] | None = None
     previous_action_columns: dict[str, str] = Field(default_factory=dict)
     sequence_id_column: str = "sequenceId"
     item_position_column: str = "itemPosition"

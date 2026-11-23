@@ -293,13 +293,13 @@ ORT installation. Outputs stay indexed by outer item coordinates.
 ## Policy model interfaces
 
 `task` explicitly selects the operation. `task: policy` requires one
-policy-bound portable PT artifact. `task: forecast` requests ordinary predictions,
+portable PT model or executable run checkpoint with a policy-bound interface. `task: forecast` requests ordinary predictions,
 including from a policy-bound interface with a supported forecast contract.
 `task: embedding` extracts representations. Select `artifact.interface` when ambiguous.
 The artifact validates task support; it never chooses the operation implicitly.
 The CLI uses `--task forecast|policy|embedding`.
 
-Policy input accepts raw observation rows or an indexed prediction view. History alignment, codecs and
+Policy input accepts observation rows, indexed views, and stored preprocessing splits. History alignment, codecs and
 normalization come from the artifact. Common fields cover model/interface/data
 selection, read/write formats, device, seed, `enforce_determinism` and batch size.
 
@@ -314,7 +314,7 @@ selection, read/write formats, device, seed, `enforce_determinism` and batch siz
 | `output.output_probabilities` | false; include joint log probability and write separate target-specific categorical probability files |
 | `rollout` | null; execute in an online policy environment instead of writing prediction rows |
 
-Optional assertions `input.metadata_config_path`, `assertions.input_columns`, `assertions.static_columns`,
+Optional assertions `assertions.input_columns`, `assertions.static_columns`,
 `assertions.target_columns`, `assertions.column_data_types`, `assertions.target_column_types`, `assertions.training_objective`,
 `assertions.context_length`, `assertions.target_offset`, `assertions.prediction_length` and `assertions.decoder_support_length` must
 match the selected artifact. Unknown/cross-route options fail even at default values.
@@ -341,7 +341,20 @@ meaning and the training run's execution-determinism setting.
 
 Point `input.path` at an indexed split manifest to run inference for that split.
 For example, point it at `data/events-indexed/2.split.json` for a third split. The
-manifest resolves its sequence shards and preprocessing metadata.
+manifest resolves its sequence shards and preprocessing metadata. Forecast, embedding,
+policy prediction, and both rollout routes also accept a preprocessing split by name:
+
+```yaml
+input:
+  metadata_config_path: data/events-indexed/metadata.json
+  split: validation
+```
+
+With a named split, the metadata selects the physical input. An indexed view
+supplies its own fitted metadata for artifact validation. A policy prediction on
+a within-sequence split uses the stored preceding action when available and
+writes one row per split-owned decision. A fragment without a stored predecessor
+can supply `input.previous_action_columns`.
 
 To infer directly from fresh data in the original preprocessing input layout,
 use the training metadata config and select the raw input layout.

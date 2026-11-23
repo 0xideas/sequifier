@@ -534,6 +534,7 @@ class PhaseSession:
             clocks,
             {
                 **provenance,
+                "model_interface": self.context.actor.interface_name,
                 "trainable_parameters": self.mask_ids,
                 "resolved_seeds": {
                     "run": self.context.identity.run_seed,

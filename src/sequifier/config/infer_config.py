@@ -334,18 +334,43 @@ def _resolve_policy_inference(
         resolve_inference_view,
     )
 
-    indexed = resolve_inference_view(request)
-    metadata_path = original_metadata_path(request, indexed)
-    if metadata_path is not None:
-        validate_policy_metadata(
-            execution,
-            selected,
-            metadata_path,
-            layout=_metadata_layout(request, indexed),
-        )
+    root = Path(request.project_root)
+    metadata = None
+    if request.data_path is None:
+        if request.input_layout == "raw" or not request.metadata_config_path:
+            raise ValueError("Select input.path or a split from preprocessing metadata")
+        metadata = load_dataset_metadata(str(root / request.metadata_config_path))
+        authored["data_path"] = _metadata_input_path(metadata, request.split)
     config = ResolvedPolicyInferenceConfig.model_validate(authored)
+    assert config.data_path is not None
+    indexed = resolve_inference_view(config)
+    metadata_path = original_metadata_path(config, indexed)
+    prepared_source = None
+    if metadata_path is not None:
+        if indexed is not None or metadata is None:
+            metadata = load_dataset_metadata(str(metadata_path))
+        layout = _metadata_layout(config, indexed)
+        if indexed is None and config.input_layout != "raw":
+            from sequifier.config.policy_train_config import SequenceSourceConfig
+            from sequifier.trajectory.sources import resolve_source
+
+            split_paths = [(root / path).resolve() for path in metadata.split_paths]
+            path = (root / config.data_path).resolve()
+            if path in split_paths:
+                source = SequenceSourceConfig(
+                    metadata_config_path=str(metadata_path.resolve()),
+                    split=metadata.split_names[split_paths.index(path)],
+                )
+                prepared_source = resolve_source(source, root, metadata=metadata)
+                layout = "stored"
+        InferenceMetadataSource(
+            interface, execution.interface_storage.get(selected), "policy metadata"
+        ).validate(metadata, layout)
+    if config.read_format == "pt" and prepared_source is None and indexed is None:
+        raise ValueError("PT policy input requires a prepared preprocessing split")
     config._model = model
     config._indexed_view = indexed
+    config._prepared_source = prepared_source
     return config
 
 
@@ -557,11 +582,6 @@ def _resolve_inference_request(public_request, skip_metadata, config_path):
             "metadata."
         )
 
-    if sources:
-        media = sources[0].media
-        if any(entry.media != media for entry in sources[1:]):
-            raise ValueError("Inference model artifacts select different image views")
-        metadata = metadata.model_copy(update=metadata.select_media(*media))
     if metadata_path is None and selected_metadata_path is not None:
         config.metadata_config_path = selected_metadata_path
 
@@ -573,6 +593,17 @@ def _resolve_inference_request(public_request, skip_metadata, config_path):
     ):
         config.data_path = _metadata_input_path(metadata, config.split)
         indexed_view = resolve_inference_view(config, skip_metadata=skip_metadata)
+        if indexed_view is not None:
+            config.metadata_config_path = str(
+                original_metadata_path(config, indexed_view)
+            )
+            metadata = load_dataset_metadata(config.metadata_config_path)
+
+    if sources:
+        media = sources[0].media
+        if any(entry.media != media for entry in sources[1:]):
+            raise ValueError("Inference model artifacts select different image views")
+        metadata = metadata.model_copy(update=metadata.select_media(*media))
     if config.input_layout == "indexed" and indexed_view is None:
         raise ValueError("Indexed inference requires an indexed split manifest")
     layout = _metadata_layout(config, indexed_view)
@@ -832,7 +863,6 @@ class _InferenceConfigBase(
     data_path: _DataPathT
     fresh_prediction_positions: Literal["right_edge", "observed"] | None = None
     training_config_path: Optional[str] = None
-    split: str | None = None
     dataset: Optional[str] = None
     part: Optional[str] = None
 
@@ -1202,27 +1232,6 @@ class ResolvedInferenceConfig(
         v2 = normalize_path(v, info.data["run"].project_root)
         if not os.path.exists(v2):
             raise ValueError(f"{v2} does not exist")
-        return v
-
-    @field_validator("read_format")
-    @classmethod
-    @beartype
-    def validate_read_format(cls, v: str) -> str:
-        if v not in ["csv", "parquet", "pt"]:
-            raise ValueError(
-                "Currently only 'csv', 'parquet' and 'pt' are supported for "
-                "inference input"
-            )
-        return v
-
-    @field_validator("write_format")
-    @classmethod
-    @beartype
-    def validate_write_format(cls, v: str) -> str:
-        if v not in ["csv", "parquet"]:
-            raise ValueError(
-                "Currently only 'csv' and 'parquet' are supported for inference output"
-            )
         return v
 
     @field_validator("target_column_types")

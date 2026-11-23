@@ -30,6 +30,7 @@ class InferenceExecutionConfig(ConfigModel):
     write_format: str = "csv"
     output_path: str | None = None
     metadata_config_path: str | None = None
+    split: str | None = None
     input_layout: Literal["auto", "raw", "indexed"] = "auto"
     static_data_path: str | None = None
     mask_column: str | None = None
@@ -38,6 +39,25 @@ class InferenceExecutionConfig(ConfigModel):
         data_path: Any
         task: Any
         rollout: Any
+
+    @field_validator("read_format")
+    @classmethod
+    def validate_read_format(cls, v: str) -> str:
+        if v not in ["csv", "parquet", "pt"]:
+            raise ValueError(
+                "Currently only 'csv', 'parquet' and 'pt' are supported for "
+                "inference input"
+            )
+        return v
+
+    @field_validator("write_format")
+    @classmethod
+    def validate_write_format(cls, v: str) -> str:
+        if v not in ["csv", "parquet"]:
+            raise ValueError(
+                "Currently only 'csv' and 'parquet' are supported for inference output"
+            )
+        return v
 
     @field_validator("model_paths")
     @classmethod
