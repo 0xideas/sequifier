@@ -43,6 +43,7 @@ class ContractVersions:
     ONLINE_POLICY_ADAPTER = 100
     MODEL_EXECUTION_SCHEMA = 100
     EXPORT_PREFLIGHT = 101
+    INFERENCE_WORKSPACE = 100
 
     # Algorithm and implementation identities used in fingerprints and seeds.
     HASH_CODEC = 100

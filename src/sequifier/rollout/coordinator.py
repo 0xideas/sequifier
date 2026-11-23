@@ -2,6 +2,8 @@
 
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import asdict
+from typing import cast
 from uuid import uuid4
 
 from sequifier.config.rollout_config import RolloutConfig
@@ -34,6 +36,8 @@ def collect_rollout(
     random_seed: int = 1010,
     metadata: dict | None = None,
     history_validator: Callable | None = None,
+    journal=None,
+    replay_predictor_rng=False,
 ) -> Trajectory:
     """Collect one episode fragment. This call owns and always closes the adapter.
 
@@ -63,15 +67,27 @@ def collect_rollout(
         ):
             raise ValueError("prediction_columns must be nonempty and unique")
         config.validate_bindings(list(history.observations), prediction_columns)
-        episode_id = str(uuid4())
+        episode_id = journal.episode_id if journal else str(uuid4())
         reset_request = ResetRequest(
             episode_id,
-            {key: tuple(values) for key, values in history.observations.items()},
+            {
+                key: tuple(cast(list[DomainValue], values))
+                for key, values in history.observations.items()
+            },
             tuple(history.attention_valid_mask),
-            dict(history.static_inputs),
+            dict(cast(dict[str, DomainValue], history.static_inputs)),
             random_seed,
         )
-        adapter.reset(deepcopy(reset_request))
+        if journal:
+            journal.execute(
+                adapter,
+                "reset",
+                asdict(reset_request),
+                lambda: adapter.reset(deepcopy(reset_request)),
+                None,
+            )
+        else:
+            adapter.reset(deepcopy(reset_request))
         recorder = TrajectoryRecorder(episode_id, config.max_episode_steps)
         external_keys = {
             binding.key
@@ -79,24 +95,44 @@ def collect_rollout(
             if binding.source == "environment"
         }
 
-        for step_id in range(max_steps):
-            predictions = numeric_fields(
+        def predict():
+            return numeric_fields(
                 predictor(history.model_copy(deep=True)),
                 set(prediction_columns),
                 "predictions",
             )
-            observation = {
-                key: values[-1] for key, values in history.observations.items()
-            }
-            result = adapter.step(
-                StepRequest(
-                    episode_id,
-                    step_id,
-                    dict(observation),
-                    dict(predictions),
-                    dict(history.static_inputs),
+
+        for step_id in range(max_steps):
+            if journal and replay_predictor_rng:
+                # ORT dropout exposes a seed but no serializable RNG cursor.
+                # Advance it once per replayed model call; deliver the recorded forecast.
+                candidate = predict()
+                predictions = journal.decision(step_id, lambda: candidate)
+            else:
+                predictions = (
+                    journal.decision(step_id, predict) if journal else predict()
                 )
+            observation = {
+                key: cast(DomainValue, values[-1])
+                for key, values in history.observations.items()
+            }
+            request = StepRequest(
+                episode_id,
+                step_id,
+                dict(observation),
+                dict(predictions),
+                dict(cast(dict[str, DomainValue], history.static_inputs)),
             )
+            if journal:
+                result = journal.execute(
+                    adapter,
+                    step_id,
+                    asdict(request),
+                    lambda: adapter.step(request),
+                    StepResult,
+                )
+            else:
+                result = adapter.step(request)
             if not isinstance(result, StepResult):
                 raise ValueError("adapter.step must return StepResult")
             if not isinstance(result.terminated, bool) or not isinstance(

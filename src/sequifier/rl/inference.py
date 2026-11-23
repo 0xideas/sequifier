@@ -11,9 +11,12 @@ import torch
 from loguru import logger
 
 from sequifier.config.policy_infer_config import ResolvedPolicyInferenceConfig
-from sequifier.helpers import configure_determinism, normalize_path, write_data
+from sequifier.helpers import configure_determinism, normalize_path
 from sequifier.io.actions import encode_action
 from sequifier.io.batch import SequifierInputs, collate_model_inputs
+from sequifier.io.inference_workspace import rollout_journal
+from sequifier.io.inference_workspace import write_inference_data as write_data
+from sequifier.io.inference_workspace import write_inference_trajectory
 from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.sequence import ordered_sequence_rows
 from sequifier.rl.checkpoint import load_policy
@@ -23,7 +26,6 @@ from sequifier.rl.history import PolicyFrame, history_inputs
 from sequifier.rl.runtime import collect_policy_rollout
 from sequifier.rollout.history import numeric_scalar
 from sequifier.trajectory.schema import SeedHistory
-from sequifier.trajectory.store import save_trajectory
 
 
 def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
@@ -215,6 +217,7 @@ def infer_rollout(policy, row, config):
         desired_return=budget,
         action_selection=config.action_selection,
         random_seed=config.seed,
+        journal=rollout_journal(),
     )
     trajectory.metadata.update(
         {
@@ -227,7 +230,7 @@ def infer_rollout(policy, row, config):
     )
     destination = normalize_path(rollout.trajectory_path, config.project_root)
     config.validate_output_destination(destination, label="trajectory_path")
-    save_trajectory(trajectory, destination)
+    write_inference_trajectory(trajectory, destination)
     logger.info(
         f"Wrote {len(trajectory.transitions)} policy transitions to '{destination}'"
     )

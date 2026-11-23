@@ -375,3 +375,40 @@ For a folder of raw files, set `input.format` to their source format.
 Fresh forward forecasts default to the right edge of each sequence. Set
 `input.fresh_prediction_positions: observed` to select predictions within the supplied
 data. Supply prior items when a new batch contains only a sequence fragment.
+
+## Repeating an inference command
+
+A completed forecast, embedding, policy prediction, or rollout is reused when
+the request and destination match. This includes probability tables and every
+output part. Concurrent copies of the command share the execution. A
+`seed: random` request keeps the seed chosen on its first execution.
+File references identify inputs and models. Use a new destination when
+replacing their contents in place and requesting fresh inference.
+
+Sequifier keeps run records under `.sequifier-inference` beside the outputs.
+Interrupted prediction work can restart as a whole. Publication can resume
+from staged files. A completed rollout keeps a copy of its trajectory so a
+missing output can be restored without contacting the environment.
+
+### Recovering an interrupted rollout
+
+External adapters can implement
+`inference_operation(episode_id, step, payload)`. The first operation uses
+`step="reset"`. Subsequent operations use zero-based integer steps. The
+adapter must attach to the same episode across process restarts. Apply an
+operation at most once and return its original response on retry. Persist the
+key, payload, response, and environment change together at the point where
+the effect occurs. Reject a different payload under an existing key.
+
+| Route | Reset payload and response | Step payload and response |
+| --- | --- | --- |
+| Forecast | JSON fields of `ResetRequest`, returning `None` | JSON fields of `StepRequest`, returning `StepResult` |
+| Policy | `{"initial": ..., "seed": ...}` with the fields of `OnlineResetResult`, returning `OnlineResetResult` | Domain action mapping, returning `OnlineStepResult` |
+
+An isolated, in-process simulator can instead declare
+`inference_isolated_snapshot = True` and implement `snapshot_state()` and
+`restore_state(state)` with a complete JSON-compatible snapshot, including
+its random state. This requires all effects to be private to the simulator.
+Adapters using the original reset and step methods still run normally on
+the first invocation. An interrupted episode using those methods requires
+manual reconciliation before starting a fresh rollout at a new destination.

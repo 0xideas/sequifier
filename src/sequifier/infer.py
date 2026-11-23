@@ -1,6 +1,7 @@
 import json
 import os
 import warnings
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -27,8 +28,10 @@ from sequifier.helpers import (
     resolve_window_sampling_plan,
     subset_to_input_columns,
     validate_stored_window_width,
-    write_data,
 )
+from sequifier.io.inference_workspace import bind_inference_inputs, rollout_journal
+from sequifier.io.inference_workspace import write_inference_data as write_data
+from sequifier.io.inference_workspace import write_inference_trajectory
 from sequifier.io.output_paths import require_file_destinations, unique_paths
 from sequifier.io.preprocessing import denormalize_values
 from sequifier.model.execution_schema import ExecutionSchema
@@ -151,8 +154,16 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     )
 
     skip_metadata = args_config.get("skip_metadata", False)
-    config = load_inferer_config(config_path, args_config, skip_metadata)
+    with ExitStack() as stack:
+        config = load_inferer_config(
+            config_path, args_config, skip_metadata, workspace_stack=stack
+        )
+        if config is not None:
+            bind_inference_inputs(config)
+            _execute_inference(config)
 
+
+def _execute_inference(config):
     from sequifier.config.policy_infer_config import ResolvedPolicyInferenceConfig
 
     if isinstance(config, ResolvedPolicyInferenceConfig):
@@ -1196,7 +1207,6 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
     from sequifier.rollout.coordinator import collect_rollout
     from sequifier.rollout.factories import load_adapter
     from sequifier.rollout.preprocessing import FixedNumericPreprocessing
-    from sequifier.trajectory.store import save_trajectory
 
     rollout = config.rollout
     remaining = rollout.seed_window_index
@@ -1280,6 +1290,8 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
         rollout.max_steps,
         random_seed=config.seed,
         history_validator=validate_history,
+        journal=rollout_journal(),
+        replay_predictor_rng=config.infer_with_dropout,
         metadata={
             "model_id": model_id,
             "model_paths": config.model_paths,
@@ -1304,7 +1316,7 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
     )
     path = normalize_path(rollout.trajectory_path, config.project_root)
     config.validate_output_destination(path, label="trajectory_path")
-    save_trajectory(trajectory, path)
+    write_inference_trajectory(trajectory, path)
     logger.info(
         f"Wrote {len(trajectory.transitions)} rollout transitions to '{path}'; return={trajectory.total_return}"
     )

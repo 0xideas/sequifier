@@ -351,8 +351,8 @@ def _resolve_policy_inference(
 
 @beartype
 def load_inferer_config(
-    config_path: str, args_config: dict, skip_metadata: bool
-) -> "ResolvedInferenceConfig | ResolvedPolicyInferenceConfig":
+    config_path: str, args_config: dict, skip_metadata: bool, *, workspace_stack=None
+) -> "ResolvedInferenceConfig | ResolvedPolicyInferenceConfig | None":
     """Compose inference YAML, load model defaults, and resolve metadata."""
 
     config_values = load_composed_yaml_config(config_path)
@@ -366,7 +366,26 @@ def load_inferer_config(
     from sequifier.config.inference_request import REQUESTS, inference_overrides
 
     composed = merge_config_fragments((config_values, inference_overrides(cli_values)))
-    authored_values = REQUESTS.validate_python(composed).resolver_values()
+    public_request = REQUESTS.validate_python(composed)
+    if workspace_stack is not None:
+        from sequifier.io.inference_workspace import inference_workspace
+
+        authored_seed = composed.get("run", {}).get("reproducibility", {}).get("seed")
+        workspace = workspace_stack.enter_context(
+            inference_workspace(
+                public_request,
+                random_seed=authored_seed == "random",
+                skip_metadata=skip_metadata,
+            )
+        )
+        if workspace is None:
+            return None
+        public_request.run.reproducibility.seed = workspace.record["seed"]
+    return _resolve_inference_request(public_request, skip_metadata, config_path)
+
+
+def _resolve_inference_request(public_request, skip_metadata, config_path):
+    authored_values = public_request.resolver_values()
     inline_metadata = authored_values.pop("inline_metadata", None)
     if inline_metadata is not None:
         if not skip_metadata:
