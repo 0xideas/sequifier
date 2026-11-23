@@ -12,6 +12,7 @@ from sequifier.artifacts.reports import HandoffCandidate, PhaseResult
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.contract_versions import ContractVersions
 from sequifier.fingerprints import fingerprint
+from sequifier.rl.compilation import compile_critics
 from sequifier.rl.phase_optimization import PhaseOptimization, PhaseRoles
 from sequifier.rl.policy import Policy
 from sequifier.rl.telemetry import TelemetryJournal
@@ -196,6 +197,7 @@ class PhaseSession:
         roles = PhaseRoles.build(
             context.actor, context.phase, restoring=context.resume_state is not None
         )
+        compile_critics(context.run.parent.run.execution.policy_compile_mode, roles)
         self.modules = roles.trainable
         self.networks = {**self.modules, **roles.frozen}
         self.mask_ids = context.optimization.masks

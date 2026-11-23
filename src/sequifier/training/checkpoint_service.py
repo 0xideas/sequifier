@@ -119,7 +119,9 @@ class CheckpointCompatibility:
                     for name, interface in config.interfaces.items()
                 },
             },
-            "owned_execution": config.run.execution.model_dump(mode="python"),
+            "owned_execution": config.run.execution.model_dump(
+                mode="python", exclude={"policy"}
+            ),
             "normalization_by_interface": {
                 name: value.model_dump(mode="python")
                 for name, value in config.normalization_by_interface.items()

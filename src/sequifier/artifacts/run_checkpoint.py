@@ -51,7 +51,11 @@ def training_plan_identity(config):
     values = config.model_dump(
         mode="json",
         exclude={
-            "run": {"retrain": True, "recovery": {"resume"}},
+            "run": {
+                "retrain": True,
+                "recovery": {"resume"},
+                "execution": {"policy"},  # Policy compilation is runtime-only.
+            },
             "training_plan": True,
         },
     )

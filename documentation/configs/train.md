@@ -1252,6 +1252,26 @@ All algorithms use `phases`. Declare policy sequence/preference
 parts in `datasets`, and attach actions with `policy_bindings` keyed by interface. Run-wide settings remain in
 `run` and `model.execution`; no alternate run discriminator is needed.
 
+Set `run.execution.policy.compilation.torch_compile` for policy phases, including
+online collection and offline updates. In a mixed plan, supervised phases use
+their own `run.execution.supervised.compilation.torch_compile` setting.
+
+```yaml
+run:
+  execution:
+    device: cuda
+    policy:
+      compilation:
+        torch_compile: inner
+```
+
+The default, `none`, runs eagerly. `inner` compiles each distinct transformer
+encoder layer, including layers in the actor, reference, and critics. `outer`
+compiles the actor and reference history encoder and action-decoding calls, plus
+the full value and Q prediction from normalized inputs. Environment interaction,
+action sampling, and phase orchestration run eagerly. Checkpoints and exported
+actors use the same weight format across modes.
+
 See the complete [supervised template](../../src/sequifier/templates/train-supervised.yaml),
 [policy template](../../src/sequifier/templates/train-policy.yaml), and
 [supervised-to-policy template](../../src/sequifier/templates/train-supervised-to-policy.yaml).

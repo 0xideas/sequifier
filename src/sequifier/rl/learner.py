@@ -26,6 +26,7 @@ from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
 from sequifier.io.output_paths import validate_training_destinations
 from sequifier.rl.checkpoint import save_policy, validate_policy_weights
+from sequifier.rl.compilation import compiled_policies
 from sequifier.rl.preparation import (
     PolicyGroupPreparation,
     build_actor,
@@ -375,7 +376,10 @@ def execute_policy(
                 else None,
                 preserve_optimizer=transition.preserves_optimizer,
             )
-            execution = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
+            with compiled_policies(
+                config.parent.run.execution.policy_compile_mode, actor, reference
+            ):
+                execution = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
             telemetry_position = telemetry.commit()
         representation.validate_actor(
             execution.actor, f"phases.{phase.name}.selected_actor"

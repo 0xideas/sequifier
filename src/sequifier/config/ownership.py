@@ -47,8 +47,21 @@ class PrecisionSettings(Settings):
     float32_matmul_precision: Literal["highest", "high", "medium"] = "highest"
 
 
+CompileMode = Literal["outer", "inner", "none"]
+
+
 class CompilationSettings(Settings):
-    torch_compile: Literal["outer", "inner", "none"] = "outer"
+    torch_compile: CompileMode = "outer"
+
+
+class PolicyCompilationSettings(Settings):
+    torch_compile: CompileMode = "none"
+
+
+class PolicyExecution(Settings):
+    compilation: PolicyCompilationSettings = Field(
+        default_factory=PolicyCompilationSettings
+    )
 
 
 class DataLoadingSettings(Settings):
@@ -83,6 +96,11 @@ class ExecutionSettings(Settings):
     device: str = "cpu"
     supervised: SupervisedExecution | None = None
     offline: OfflineExecution | None = None
+    policy: PolicyExecution | None = None
+
+    @property
+    def policy_compile_mode(self) -> CompileMode:
+        return self.policy.compilation.torch_compile if self.policy else "none"
 
     @property
     def supervised_settings(self) -> SupervisedExecution:

@@ -11,6 +11,8 @@ def validate_runner_settings(
     run: RunSettings, *, supervised: bool, policy: bool
 ) -> None:
     execution = run.execution
+    if not policy and execution.policy is not None:
+        raise ValueError("run.execution.policy requires a policy phase")
     if not supervised and execution.supervised is not None:
         raise ValueError("run.execution.supervised requires a supervised phase")
     if (
