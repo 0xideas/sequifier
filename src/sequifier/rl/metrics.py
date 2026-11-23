@@ -1,7 +1,6 @@
 """Policy observations in the native supervised metric tables."""
 
 import math
-import time
 
 from sequifier.training.metrics import StructuredMetricWriters
 
@@ -16,7 +15,6 @@ class PolicyMetrics:
         )
         self.run_id = identity.run_id
         self.session_id = identity.session_id
-        self.started = time.monotonic()
         self.pending = None
 
     def record(
@@ -24,6 +22,7 @@ class PolicyMetrics:
         session,
         values,
         *,
+        elapsed_seconds,
         validation=False,
         primary=None,
         initial=False,
@@ -31,7 +30,7 @@ class PolicyMetrics:
     ):
         context = session.context
         if not validation:
-            self.pending = (session, values)
+            self.pending = (session, values, elapsed_seconds)
         if (
             not validation
             and not final
@@ -44,7 +43,7 @@ class PolicyMetrics:
             name: float(value)
             for name, value in values.items()
             if isinstance(value, (float, int))
-            and not isinstance(value, bool)
+            and name != "initial"
             and math.isfinite(value)
         }
         if not scalars:
@@ -66,7 +65,11 @@ class PolicyMetrics:
             )
         self.writer.phase = context.phase.name
         self.writer.algorithm = context.phase.algorithm
-        now = time.monotonic()
+        for role, (optimizer, _) in session.optimization.items():
+            if role != "actor":
+                scalars[f"{role}_learning_rate"] = float(
+                    optimizer.param_groups[0]["lr"]
+                )
         self.writer.write_observation(
             validation=validation,
             run_id=self.run_id,
@@ -78,13 +81,13 @@ class PolicyMetrics:
             values=scalars,
             primary=primary,
             learning_rate=float(session.optimization["actor"][0].param_groups[0]["lr"]),
-            elapsed_seconds=now - self.started,
+            elapsed_seconds=elapsed_seconds,
             initial=initial,
         )
         if not validation:
-            self.started = now
             self.pending = None
 
     def flush(self, session):
         if self.pending is not None and self.pending[0] is session:
-            self.record(session, self.pending[1], final=True)
+            _, values, elapsed_seconds = self.pending
+            self.record(session, values, elapsed_seconds=elapsed_seconds, final=True)

@@ -75,7 +75,9 @@ and units; a reward monitor is not represented as a loss.
 
 ## Logging and scalar metrics
 
-Every native runner configures the model-scoped logger under `logs/<model_name>`.
+Every native runner logs training start, progress and completion to stderr and
+the model-scoped log under `logs/<model_name>`. Policy phases also log their
+name and algorithm when they start.
 Structured scalar observations use the supervised writer's `*-training.csv`,
 `*-training-full.csv`, `*-validation.csv` and `*-validation-full.csv` tables.
 Full tables include phase, algorithm and
@@ -87,7 +89,13 @@ use `target: __total__`. Nested diagnostic records remain in phase reports.
 `run.logging.log_interval_iterations` controls policy training observations and
 defaults to 10. Mixed plans may configure both. Evaluations are written whenever
 the phase evaluation schedule runs, and final policy training progress is always
-written. Policy iteration clocks count committed updates, even when an iteration
+written. Each policy training observation describes one sampled iteration.
+Its `seconds_per_batch` measures that iteration’s collection and optimization
+work (offline phases only optimize). Validation `elapsed_seconds` measures the
+evaluation itself. Condensed policy tables contain the primary training metric
+or available evaluation monitor. Full tables include secondary metrics, numeric
+status flags and non-actor optimizer learning rates. An unavailable evaluation
+monitor is identified in the operational log. Policy iteration clocks count committed updates, even when an iteration
 contains several optimizer steps. Policy visualizations display the actual
 monitor names on a linear scale and do not invent baseline measurements.
 

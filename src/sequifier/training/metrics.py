@@ -125,6 +125,13 @@ def _format_number(number: float) -> str:
     return f"{adjusted:5.2f}e{order_of_magnitude}"
 
 
+def _log_training_progress(progress, metric, value, learning_rate, seconds, unit):
+    logger.info(
+        f"[INFO] {progress} | {metric}: {_format_number(value)} | "
+        f"LR: {_format_number(learning_rate)} | S/{unit} {_format_number(seconds)}"
+    )
+
+
 def validate_metrics_csv_header(fields, path):
     if fields is None or "schema_version" not in fields:
         raise ValueError(
@@ -347,11 +354,13 @@ class StructuredMetricWriters:
         if self._training is None:
             self._training = _CsvAppender(self.training_path, TRAINING_CONDENSED_FIELDS)
         self._training.append([condensed], durable=False)
-        logger.info(
-            f"[INFO] Epoch {epoch:3d} | Batch {batch:5d}/{batches_total:5d} | "
-            f"Loss: {_format_number(total_value)} | "
-            f"LR: {_format_number(float(learning_rate))} | "
-            f"S/Batch {_format_number(float(seconds_per_batch))}"
+        _log_training_progress(
+            f"Epoch {epoch:3d} | Batch {batch:5d}/{batches_total:5d}",
+            "Loss",
+            total_value,
+            float(learning_rate),
+            float(seconds_per_batch),
+            "Batch",
         )
 
     @beartype
@@ -580,15 +589,31 @@ class StructuredMetricWriters:
             VALIDATION_CONDENSED_FIELDS if validation else TRAINING_CONDENSED_FIELDS
         )
         condensed.append(
-            [{key: row.get(key, "") for key in fields} for row in rows],
+            [
+                {key: row.get(key, "") for key in fields}
+                for row in rows
+                if row["is_primary"]
+            ],
             durable=validation,
         )
-        if primary in values:
+        progress = (
+            f"Phase {self.phase} ({self.algorithm}) | "
+            f"Iteration {iteration:5d}/{batches_total:5d}"
+        )
+        if validation:
+            value = (
+                _format_number(values[primary]) if primary in values else "unavailable"
+            )
             logger.info(
-                "{} {} | Iteration {} | {}: {}",
-                self.phase,
-                "Validation" if validation else "Training",
-                iteration,
+                f"[INFO] Validation | {progress} | {primary}: {value} | "
+                f"Elapsed {_format_number(elapsed_seconds)}s"
+            )
+        else:
+            _log_training_progress(
+                progress,
                 primary,
                 values[primary],
+                learning_rate,
+                elapsed_seconds,
+                "Iteration",
             )

@@ -211,7 +211,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                     restart_stream=restart_stream,
                 ),
             )
-            logger.info(
+            logger.debug(
                 "GRPO iteration {}: {} steps, collection {:.2f}s ({:.1f} steps/s), "
                 "update {:.2f}s, evaluation {:.2f}s",
                 session.transaction,

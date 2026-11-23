@@ -196,7 +196,9 @@ def execute_policy(
     data_identity = dependencies.identity
     adapter_contract = preparation.adapters
     data = preparation.data
-    configure_logger(config.project_root, config.model_name, 0)
+    logger = configure_logger(config.project_root, config.model_name, 0)
+    identity = identity or RunIdentity.start(recovery.run_id if recovery else None)
+    logger.info(f"Starting training for {config.model_name}, run {identity.run_id}")
     if recovery is not None:
         recovery.validate_dependencies(config, data_identity)
         require_equal(
@@ -236,11 +238,10 @@ def execute_policy(
             clone_weights(actor.network),
             capture_rng_state(actor.device),
             completed=CommittedPhases(config.phases, config.phase_offset),
+            run_id=identity.run_id,
         )
     from sequifier.rl.metrics import PolicyMetrics
 
-    identity = identity or RunIdentity.start(recovery.run_id)
-    recovery.run_id = identity.run_id
     metrics = PolicyMetrics(config, identity)
     references = PolicyReferences(config, recovery, resuming=resuming)
     saved_random = capture_rng_state(actor.device)
@@ -259,6 +260,7 @@ def execute_policy(
         position, phase = transition.index, transition.phase
         phase_identity = phase_identities[position]
         phase_index = phase_identity.index
+        logger.info(f"Starting phase {phase.name} ({phase.algorithm})")
         current_state = recovery.phase_state
         dependencies.revalidate()
         incoming_weight_hash = weight_fingerprint(actor.network.state_dict())
@@ -386,6 +388,7 @@ def execute_policy(
         results = tuple(PhaseResult.model_validate(phase) for phase in report["phases"])
         save_policy(actor.eval(), config.outputs.model_path, metadata=report)
         publish_run_report(report, config.outputs.report_path)
+    logger.info(f"Training complete ({completion_reason})")
     return PolicyRunResult(
         actor,
         results,
