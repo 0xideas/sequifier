@@ -258,7 +258,10 @@ class ExecutionSchema:
         return features, metadata
 
     def validate(self, features, metadata):
-        from sequifier.io.pt_payload import validate_tensor_inputs
+        from sequifier.io.pt_payload import (
+            valid_categorical_ids,
+            validate_tensor_inputs,
+        )
 
         layouts = DepthLayoutRegistryModel.model_validate(self.depth_layouts)
         selected = {
@@ -281,10 +284,8 @@ class ExecutionSchema:
                     f"{item.key}: expected shape {item.shape}, got {tuple(value.shape)}"
                 )
             if item.role == "static_feature":
-                if item.dtype == "int64" and (
-                    value.is_floating_point()
-                    or (value < 0).any().item()
-                    or (value >= self.n_classes[item.key]).any().item()
+                if item.dtype == "int64" and not valid_categorical_ids(
+                    value, self.n_classes[item.key]
                 ):
                     raise ValueError(f"{item.key}: invalid static categorical IDs")
                 if item.dtype == "float32" and not torch.isfinite(value).all().item():

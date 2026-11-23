@@ -8,6 +8,7 @@ from torch import nn
 
 from sequifier.config.policy_plan import IQLPhaseConfig
 from sequifier.io.iql_dataset import IQLTransitionDataset
+from sequifier.io.tensors import gather_tensor
 from sequifier.rl.offline_data import OfflineData
 from sequifier.rl.run_state import PhaseContext, PhaseSession
 from sequifier.rl.window_storage import collated_windows
@@ -40,7 +41,7 @@ def build_iql_roles(actor, phase, *, metadata_only, restoring):
 
 def _select(inputs, mask):
     return type(inputs)(
-        {name: value[mask] for name, value in inputs.inputs.items()},
+        {name: gather_tensor(value, mask) for name, value in inputs.inputs.items()},
         {name: value[mask] for name, value in inputs.metadata.items()},
     )
 

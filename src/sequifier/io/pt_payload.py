@@ -9,6 +9,13 @@ from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.contract_versions import ContractVersions, require_contract_version
 
 
+def valid_categorical_ids(values: Tensor, n_classes: int) -> bool:
+    if values.is_floating_point() or values.is_complex() or values.dtype == torch.bool:
+        return False
+    ids = values.to(torch.int64)
+    return not (ids < 0).any().item() and not (ids >= n_classes).any().item()
+
+
 def validate_tensor_inputs(
     sequences: dict[str, Tensor],
     masks: dict[str, Tensor],
@@ -36,11 +43,7 @@ def validate_tensor_inputs(
                 f"{column}: all values, including masked slots, must be finite"
             )
         if n_classes and column in n_classes:
-            if (
-                values.is_floating_point()
-                or (values.to(torch.int64) < 0).any().item()
-                or (values.to(torch.int64) >= n_classes[column]).any().item()
-            ):
+            if not valid_categorical_ids(values, n_classes[column]):
                 raise ValueError(
                     f"{column}: categorical IDs must be integers in [0, {n_classes[column]})"
                 )

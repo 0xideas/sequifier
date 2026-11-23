@@ -9,6 +9,7 @@ import torch.distributed as dist
 from torch import Tensor
 
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.tensors import transfer_tensor
 from sequifier.model.network import ComposableTransformerNetwork, ModelOutput
 from sequifier.training.accurate_cross_entropy import AccurateCrossEntropyLoss
 from sequifier.training.runtime import DatasetRuntime
@@ -59,29 +60,28 @@ class LossService:
             else []
         )
         static_features = {
-            key: value.to(device, non_blocking=True)
+            key: transfer_tensor(value, device)
             for key, value in batch.inputs.items()
             if key in static_columns
         }
         image_features = {
-            key: value.to(device, non_blocking=True)
+            key: transfer_tensor(value, device)
             for key, value in batch.inputs.items()
             if key.startswith("__image:") or key == "__preconditioning_image"
         }
         features = {
-            key: value.to(device, non_blocking=True)
+            key: transfer_tensor(value, device)
             for key, value in batch.inputs.items()
             if key in interface.input_columns
         }
         features.update(image_features)
         targets = {
-            key: value.to(device, non_blocking=True)
+            key: transfer_tensor(value, device)
             for key, value in batch.targets.items()
             if key in interface.target_column_types
         }
         metadata = {
-            key: value.to(device, non_blocking=True)
-            for key, value in batch.metadata.items()
+            key: transfer_tensor(value, device) for key, value in batch.metadata.items()
         }
         features, targets, metadata = dataset.objective.prepare_batch(
             features, targets, metadata, eval_seed=eval_seed

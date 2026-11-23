@@ -13,6 +13,7 @@ from sequifier.artifacts.model_artifact import restore_execution_network
 from sequifier.config.inference_common import ResolvedInferenceModel
 from sequifier.config.train_config import load_train_config
 from sequifier.helpers import get_torch_dtype
+from sequifier.io.tensors import transfer_tensor
 from sequifier.model.embedding import embedding_layer_trace_site
 from sequifier.model.tracing import CaptureRequest
 from sequifier.training.coordinator import run_training as run_training
@@ -77,10 +78,12 @@ def _tensor_batches(
     categorical = set(model.categorical_columns)
     layer_types = model.config.options.layer_type_dtypes or {}
     reference_dtype = get_torch_dtype(layer_types.get("linear", "float32"))
+    target_device = torch.device(device)
     for index, features in enumerate(x):
         values = {
-            column: torch.from_numpy(array).to(
-                device,
+            column: transfer_tensor(
+                torch.from_numpy(array),
+                target_device,
                 dtype=(
                     torch.uint8
                     if column.startswith("__image:")

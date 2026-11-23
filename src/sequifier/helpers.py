@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from torch import Tensor
 
 from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.io.tensors import gather_tensor
 from sequifier.logging_paths import (
     dataset_artifact_prefix,
     model_artifact_path,
@@ -437,7 +438,7 @@ class ModelWindowSamplingPlan:
         positions = (
             input_starts[:, None] + position_offset + relative_positions[None, :]
         )
-        return tensor[stored_row_indices[:, None], positions]
+        return gather_tensor(tensor, (stored_row_indices[:, None], positions))
 
     @beartype
     def build_masks(

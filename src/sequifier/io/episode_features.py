@@ -72,7 +72,7 @@ class EpisodeFeatures:
         self._features_validated = True
 
     def validate_normalization(self, interface):
-        """Check FP32 transforms for decisions in the selected episode prefixes."""
+        """Check fitted transforms at the input columns' stored precision."""
         statistics = interface.selected_columns_statistics
         signature = (interface.normalize_real_columns, statistics)
         if self._validated_statistics == signature:

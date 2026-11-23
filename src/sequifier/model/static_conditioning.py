@@ -65,8 +65,12 @@ class StaticConditionEncoder(nn.Module):
         ]
         parts.extend(
             projection(
-                cast_floating_to_module_dtype(
-                    features[column].unsqueeze(-1).float(), projection
+                features[column]
+                .unsqueeze(-1)
+                .to(
+                    self.projection.weight.dtype
+                    if isinstance(projection, nn.Identity)
+                    else projection.weight.dtype
                 )
             )
             for column, projection in zip(self.real_columns, self.real_projections)
