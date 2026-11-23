@@ -550,7 +550,7 @@ features from it. See [the training guide](train.md#depth-encoders-and-nested-co
 
 `operation: import_sequences` selects the explicit policy-data import operation.
 It accepts a `source`, a model-independent `policy` data schema, an `output_path`
-(new dataset directory) and optional `episodes_per_shard` (default 64). Sources
+(dataset directory) and optional `episodes_per_shard` (default 64). Sources
 can be raw CSV/Parquet tables, existing scalar prepared histories with their
 metadata, or JSON rollout recordings. Import preserves domain values and missing
 transition information; it does not fit vocabularies/statistics or create padded
@@ -597,6 +597,20 @@ per-item depth masks.
 Image demonstrations can reuse frozen image metadata by supplying the matching
 frames and masks as observations. The indexed store keeps those aligned frames
 with the item data and keeps preconditioning images with the static data.
+
+For `import_sequences`, `prepare_policy`, and supervised `indexed_output_path`,
+a published dataset at the same path is reused with either setting of
+`continue_preprocessing`. Set it to `true` to resume interrupted work or
+`false` (the default) to discard partial work and start over. Import resumes
+after the last completed shard. Policy preparation reuses the saved episode
+schema, fitted feature metadata, and completed episodes. Supervised indexed
+preprocessing reuses completed item files and repeats feature fitting and window
+placement. Both indexed routes rebuild their split indexes before publication.
+
+Keep inputs and settings consistent when resuming. The output path identifies
+the run. To build a different dataset after publication, choose a new output
+path. Checkpoints live under `.sequifier-preprocessing` beside the destination
+until publication succeeds.
 
 To prepare fresh model inputs explicitly, reuse the JSON that was generated for
 training. Give the fresh data its own output location.

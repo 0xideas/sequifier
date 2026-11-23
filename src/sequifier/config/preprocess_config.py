@@ -419,7 +419,11 @@ class PreprocessorModel(ConfigModel):
     @classmethod
     @beartype
     def validate_continue_preprocessing(cls, v: bool, info: Any) -> bool:
-        if v and info.data.get("merge_output"):
+        if (
+            v
+            and info.data.get("merge_output")
+            and not info.data.get("indexed_output_path")
+        ):
             raise ValueError(
                 "'continue_preprocessing' can only be set to true if "
                 "merge_output is False, not single files"

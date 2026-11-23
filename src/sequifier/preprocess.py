@@ -61,6 +61,7 @@ from sequifier.io.feature_fitting import (
     validate_cardinality_values,
 )
 from sequifier.io.images import _time_ms, validate_sources
+from sequifier.io.preprocessing_workspace import WORKSPACE_DIR, preprocessing_workspace
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
     CURRICULUM_COLUMN_PREFIX,
@@ -506,7 +507,7 @@ def _folder_input_files(
     """Return folder input files in a stable traversal order."""
     file_paths = []
     for root, directories, files in os.walk(data_path):
-        directories.sort()
+        directories[:] = sorted(name for name in directories if name != WORKSPACE_DIR)
         file_paths.extend(
             os.path.join(root, file)
             for file in sorted(files)
@@ -867,18 +868,19 @@ class Preprocessor:
         self.config = config
 
     def run(self, *, indexed_writer=None, indexed_prediction=False) -> None:
-        from contextlib import nullcontext
-
         from sequifier.io.indexed_sequences import IndexedSequenceWriter
 
         path = self.config.indexed_output_path
-        destination = (
-            IndexedSequenceWriter(Path(self.config.project_root) / path)
-            if path is not None and indexed_writer is None
-            else nullcontext(indexed_writer)
-        )
-        with destination as writer:
-            self._process(writer, indexed_prediction)
+        if path is None or indexed_writer is not None:
+            self._process(indexed_writer, indexed_prediction)
+            return
+        destination = Path(self.config.project_root) / path
+        with preprocessing_workspace(
+            destination, indexed=True, resume=self.config.continue_preprocessing
+        ) as work:
+            if work is not None:
+                with IndexedSequenceWriter(destination, workspace=work) as writer:
+                    self._process(writer, indexed_prediction)
 
     def _process(self, indexed_writer, indexed_prediction) -> None:
         from sequifier.io.preprocessing_output import IndexedOutput, WindowOutput
@@ -929,7 +931,7 @@ class Preprocessor:
         self.output = (
             WindowOutput(self)
             if indexed_writer is None
-            else IndexedOutput(self, indexed_writer, config.continue_preprocessing)
+            else IndexedOutput(self, indexed_writer)
         )
         frozen_metadata = self._frozen_metadata if self.output.indexed else None
         self.normalize_real_columns = config.normalize_real_columns
@@ -1014,7 +1016,7 @@ class Preprocessor:
             self.output.finish()
             return
 
-        if config.continue_preprocessing:
+        if config.continue_preprocessing and not self.output.indexed:
             if config.merge_output:
                 paths_to_check = self.split_paths
             else:
@@ -1761,7 +1763,7 @@ class Preprocessor:
 
         temp_path = os.path.join(self.config.project_root, "data", self.target_dir)
 
-        if self.config.continue_preprocessing:
+        if self.config.continue_preprocessing and not self.output.indexed:
             if not os.path.exists(temp_path):
                 raise Exception(f"temp folder at '{temp_path}' does not exist")
         else:
@@ -2072,7 +2074,10 @@ class Preprocessor:
         ) as f:
             json.dump(manifest, f, indent=4)
 
-        if self.config.continue_preprocessing:
+        if (
+            self.config.continue_preprocessing
+            and self.config.indexed_output_path is None
+        ):
             if not os.path.exists(manifest_path):
                 raise ValueError(
                     "Cannot continue preprocessing because the temp manifest is missing."

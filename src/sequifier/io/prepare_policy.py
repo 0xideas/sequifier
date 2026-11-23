@@ -1,5 +1,6 @@
 """Prepare indexed training views from canonical policy demonstrations."""
 
+import json
 from pathlib import Path
 
 import polars as pl
@@ -10,10 +11,12 @@ from sequifier.config.depth_layout import (
     depth_mask_metadata_key,
 )
 from sequifier.config.metadata import load_dataset_metadata
+from sequifier.io.atomic import atomic_path
 from sequifier.io.episode_corpus import EpisodeCorpus
 from sequifier.io.feature_fitting import FeatureStatistics, FittedColumns, FittingRules
 from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_partition_indices
+from sequifier.io.preprocessing_workspace import preprocessing_workspace
 from sequifier.io.window_placement import WindowPlacement
 from sequifier.trajectory.export import EpisodeTableEncoder, cast_episode_table
 from sequifier.trajectory.tables import (
@@ -24,6 +27,16 @@ from sequifier.trajectory.tables import (
 
 
 def prepare_policy(config):
+    destination = Path(config.project_root) / config.output_path
+    with preprocessing_workspace(
+        destination, indexed=True, resume=config.continue_preprocessing
+    ) as work:
+        if work is not None:
+            with IndexedSequenceWriter(destination, workspace=work) as writer:
+                _prepare_policy(config, writer)
+
+
+def _prepare_policy(config, writer):
     from sequifier.preprocess import _validate_declared_column_roles
 
     original = (
@@ -92,19 +105,24 @@ def prepare_policy(config):
     categorical, real = list(dict.fromkeys(categorical)), list(dict.fromkeys(real))
     _validate_declared_column_roles(columns, categorical, real)
 
-    destination = Path(config.project_root) / config.output_path
     encoder = EpisodeTableEncoder(policy)
     episodes = decisions.episodes
-    schema = None
-    for index, episode in enumerate(source_episodes):
-        current = encoder.table(index, episode).schema
-        schema = (
-            current
-            if schema is None
-            else pa.unify_schemas([schema, current], promote_options="permissive")
-        )
-    if schema is None or not len(episodes):
-        raise ValueError("Policy preparation requires eligible episodes")
+    schema_path = writer.workspace / "episode-schema.arrow"
+    if schema_path.exists():
+        schema = pa.ipc.read_schema(pa.BufferReader(schema_path.read_bytes()))
+    else:
+        schema = None
+        for index, episode in enumerate(source_episodes):
+            current = encoder.table(index, episode).schema
+            schema = (
+                current
+                if schema is None
+                else pa.unify_schemas([schema, current], promote_options="permissive")
+            )
+        if schema is None or not len(episodes):
+            raise ValueError("Policy preparation requires eligible episodes")
+        with atomic_path(schema_path) as temporary:
+            temporary.write_bytes(schema.serialize().to_pybytes())
     if collisions := set(actions + list(policy.previous_action_inputs)) & set(
         schema.names
     ):
@@ -121,51 +139,71 @@ def prepare_policy(config):
 
     derived = ["__policy_return"] if policy.return_conditioned else []
     raw_schema = _action_features(pl.from_arrow(schema.empty_table()), policy).schema
-    with IndexedSequenceWriter(destination) as writer:
-        if frozen is None:
-            rules = FittingRules(
-                precomputed=policy.categorical_id_maps(),
-                categorical=categorical,
-                real=real,
-            )
-            features_fit = FeatureStatistics()
-            for index in sorted(train):
-                rows = episode_rows(index).head(decisions.lengths[index])
-                for frame, selected in ((rows, temporal), (rows.head(1), static)):
-                    if nested := [
-                        name for name in selected if frame[name].dtype.is_nested()
-                    ]:
-                        raise ValueError(
-                            f"Structured policy inputs require metadata_config_path: {nested}"
-                        )
-                    if selected:
-                        features_fit.observe(frame, selected, rules)
-            maps, stats = features_fit.finish(rules)
-            fitted = FittedColumns.resolve(columns, maps, stats, raw_schema)
-        else:
-            stored = columns + [
-                name
-                for name in derived
-                if name in frozen.column_data_types and name not in columns
-            ]
-            fitted = FittedColumns.from_metadata(stored, dict(frozen))
+    fit_path = writer.workspace / "feature-fit.json"
+    if frozen is None and fit_path.exists():
+        metadata = json.loads(fit_path.read_text())
+        metadata["id_maps"] = {
+            name: dict(pairs) for name, pairs in metadata["id_maps"].items()
+        }
+        fitted = FittedColumns.from_metadata(columns, metadata)
+    elif frozen is None:
+        rules = FittingRules(
+            precomputed=policy.categorical_id_maps(),
+            categorical=categorical,
+            real=real,
+        )
+        features_fit = FeatureStatistics()
+        for index in sorted(train):
+            rows = episode_rows(index).head(decisions.lengths[index])
+            for frame, selected in ((rows, temporal), (rows.head(1), static)):
+                if nested := [
+                    name for name in selected if frame[name].dtype.is_nested()
+                ]:
+                    raise ValueError(
+                        f"Structured policy inputs require metadata_config_path: {nested}"
+                    )
+                if selected:
+                    features_fit.observe(frame, selected, rules)
+        maps, stats = features_fit.finish(rules)
+        fitted = FittedColumns.resolve(columns, maps, stats, raw_schema)
+        metadata = fitted.metadata(for_resume=True)
+        # Preserve numeric categorical keys across the JSON round trip.
+        metadata["id_maps"] = {
+            name: list(mapping.items()) for name, mapping in maps.items()
+        }
+        with atomic_path(fit_path) as temporary:
+            temporary.write_text(json.dumps(metadata))
+    else:
+        stored = columns + [
+            name
+            for name in derived
+            if name in frozen.column_data_types and name not in columns
+        ]
+        fitted = FittedColumns.from_metadata(stored, dict(frozen))
 
-        transforms = {}
-        for name in columns:
-            dtype = raw_schema[name]
-            if layouts.is_deep_column(name):
-                if not isinstance(dtype, (pl.List, pl.Array)):
-                    raise ValueError(f"{name}: depth values require a list or array")
-                dtype = dtype.inner
-            transforms[name] = fitted.column_transform(
-                name, dtype, normalize, cardinality
-            )
-        static_rows = []
-        for index in range(len(episodes)):
+    transforms = {}
+    for name in columns:
+        dtype = raw_schema[name]
+        if layouts.is_deep_column(name):
+            if not isinstance(dtype, (pl.List, pl.Array)):
+                raise ValueError(f"{name}: depth values require a list or array")
+            dtype = dtype.inner
+        transforms[name] = fitted.column_transform(name, dtype, normalize, cardinality)
+    static_rows = []
+    static_payload = [*static, *([PREFIX_IMAGE] if prefix else [])]
+    for index in range(len(episodes)):
+        record = episodes.metadata(index)
+        episode_id = record.episode_id
+        sequence_id = sequence_ids[episode_id]
+        split = split_by_index[index]
+        checkpoint = writer.item_checkpoint(sequence_id)
+        static_path = writer.workspace / f"static-{sequence_id}.parquet"
+        if checkpoint.is_file():
+            if static_payload:
+                static_rows.append(pl.read_parquet(static_path))
+            rows = pl.read_parquet(checkpoint, columns=["sequenceId", "itemPosition"])
+        else:
             rows = episode_rows(index)
-            record = episodes.metadata(index)
-            episode_id = record.episode_id
-            split = split_by_index[index]
             rows = rows.with_columns(
                 _encoded_observation(rows, name, source_prefix, layouts, transform)
                 for name, transform in transforms.items()
@@ -173,71 +211,73 @@ def prepare_policy(config):
                     ("", SUCCESSOR_PREFIX) if name in features else ("",)
                 )
             )
-            static_payload = [*static, *([PREFIX_IMAGE] if prefix else [])]
             if static_payload:
-                static_rows.append(rows.select("sequenceId", *static_payload).head(1))
+                static_row = rows.select("sequenceId", *static_payload).head(1)
+                static_rows.append(static_row)
+                with atomic_path(static_path) as temporary:
+                    static_row.write_parquet(temporary)
                 rows = rows.drop(static_payload)
-            first = rows["itemPosition"][0]
-            placement = WindowPlacement.for_split(
-                first,
-                first,
-                first + len(rows),
-                config.window_lengths[split],
-                config.window_stride,
-            )
-            writer.add(
-                rows,
-                {split: (placement, None)},
-                episode_id=episode_id,
-                group_id=record.group_id,
-                content_key=record.content_key,
-            )
-        if static_rows:
-            writer.write_static(pl.concat(static_rows, how="vertical_relaxed"))
-        for name in derived:
-            fitted.col_types.setdefault(name, "Float32")
-            fitted.statistics.setdefault(name, {"mean": 0.0, "std": 1.0})
-        metadata = dict(
-            split_paths=["0.split.json", "1.split.json"],
-            indexed_views=["0", "1"],
-            split_names=["train", "validation"],
-            fit_split_indices=[0] if frozen is None else [],
-            depth_layouts=layouts,
-            window_length=config.window_lengths[0],
-            window_lengths=list(config.window_lengths),
-            max_target_offset=config.max_target_offset,
-            window_stride=config.window_stride,
-            image_sources={
-                name: image.compatibility_signature() for name, image in images.items()
-            },
-            preconditioning_image=(
-                prefix.model_copy(
-                    update={
-                        "view_names": sorted(prefix.views),
-                        "paths": None,
-                        "signature": None,
-                    }
-                )
-                if prefix
-                else None
-            ),
-            indexed_inline_media=bool(images or prefix),
-            time_alignment_column=frozen.time_alignment_column if frozen else None,
-            **fitted.metadata(),
-            normalize_real_columns=normalize,
-            normalize_on_all_data=frozen.normalize_on_all_data if frozen else False,
-            cardinality_config=cardinality,
-            raw_mask_column=frozen.raw_mask_column if frozen else None,
-            static_columns=static,
-            static_features_path="static.parquet" if static_rows else None,
-            indexed_derived_features=derived,
+        first = rows["itemPosition"][0]
+        placement = WindowPlacement.for_split(
+            first,
+            first,
+            first + len(rows),
+            config.window_lengths[split],
+            config.window_stride,
         )
-        writer.publish(
-            metadata,
-            feature_columns=columns + derived,
-            original_metadata=original,
-            provenance=resolved.provenance(),
+        writer.add(
+            rows,
+            {split: (placement, None)},
+            episode_id=episode_id,
+            group_id=record.group_id,
+            content_key=record.content_key,
         )
+    if static_rows:
+        writer.write_static(pl.concat(static_rows, how="vertical_relaxed"))
+    for name in derived:
+        fitted.col_types.setdefault(name, "Float32")
+        fitted.statistics.setdefault(name, {"mean": 0.0, "std": 1.0})
+    metadata = dict(
+        split_paths=["0.split.json", "1.split.json"],
+        indexed_views=["0", "1"],
+        split_names=["train", "validation"],
+        fit_split_indices=[0] if frozen is None else [],
+        depth_layouts=layouts,
+        window_length=config.window_lengths[0],
+        window_lengths=list(config.window_lengths),
+        max_target_offset=config.max_target_offset,
+        window_stride=config.window_stride,
+        image_sources={
+            name: image.compatibility_signature() for name, image in images.items()
+        },
+        preconditioning_image=(
+            prefix.model_copy(
+                update={
+                    "view_names": sorted(prefix.views),
+                    "paths": None,
+                    "signature": None,
+                }
+            )
+            if prefix
+            else None
+        ),
+        indexed_inline_media=bool(images or prefix),
+        time_alignment_column=frozen.time_alignment_column if frozen else None,
+        **fitted.metadata(),
+        normalize_real_columns=normalize,
+        normalize_on_all_data=frozen.normalize_on_all_data if frozen else False,
+        cardinality_config=cardinality,
+        raw_mask_column=frozen.raw_mask_column if frozen else None,
+        static_columns=static,
+        static_features_path="static.parquet" if static_rows else None,
+        indexed_derived_features=derived,
+    )
+    writer.publish(
+        metadata,
+        feature_columns=columns + derived,
+        original_metadata=original,
+        provenance=resolved.provenance(),
+    )
 
 
 def _action_features(rows, policy):

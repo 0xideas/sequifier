@@ -146,9 +146,7 @@ class IndexedOutput:
     indexed: Literal[True] = True
     time_index_name = "item-times.parquet"
 
-    def __init__(self, run, writer, resume):
-        if resume:
-            raise ValueError("Indexed preparation can be restarted from raw input")
+    def __init__(self, run, writer):
         self.run = run
         self.writer = writer
         self.metadata = {}

@@ -2,9 +2,7 @@
 
 import json
 import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 import pyarrow as pa
@@ -12,6 +10,8 @@ import pyarrow as pa
 from sequifier.contract_versions import ContractVersions
 from sequifier.fingerprints import file_checksum
 from sequifier.io.action_record import action_record_layout
+from sequifier.io.atomic import atomic_path
+from sequifier.io.preprocessing_workspace import preprocessing_workspace
 from sequifier.io.sequence import TransitionColumns
 from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.tables import (
@@ -174,25 +174,50 @@ class EpisodeTableEncoder:
 
 def import_sequences(config) -> Path:
     """Commit canonical columnar episodes as checksummed raw Parquet shards."""
+    destination = (Path(config.project_root) / config.output_path).absolute()
+    with preprocessing_workspace(
+        destination, indexed=False, resume=config.continue_preprocessing
+    ) as work:
+        if work is not None:
+            _write_import(config, destination, work)
+    return destination / "manifest.json"
+
+
+def _write_import(config, destination, work):
     import pyarrow.parquet as pq
 
     policy = config.resolved_policy()
-    destination = (Path(config.project_root) / config.output_path).resolve()
-    if destination.exists():
-        raise ValueError(
-            "sequence import output_path must name a new dataset directory"
-        )
-    destination.parent.mkdir(parents=True, exist_ok=True)
     resolved_source = config.resolved_source()
     references = source_episodes(resolved_source, policy)
     if not references:
         raise ValueError("sequence import requires at least one episode")
     encoder = EpisodeTableEncoder(policy)
-    stage = Path(tempfile.mkdtemp(prefix=".sequifier-import-", dir=destination.parent))
+    stage = work / "publication"
+    stage.mkdir()
     tables, shards, seen, schema = [], [], set(), None
 
-    def flush():
+    def record_shard(path):
         nonlocal schema
+        with pq.ParquetFile(path) as file:
+            current = file.schema_arrow
+            shards.append({"path": path.name, "decisions": file.metadata.num_rows})
+        schema = (
+            current
+            if schema is None
+            else pa.unify_schemas([schema, current], promote_options="permissive")
+        )
+
+    for path in sorted(work.glob("part-*.parquet")):
+        ids = (
+            pq.read_table(path, columns=[EPISODE_ID_COLUMN])
+            .column(0)
+            .unique()
+            .to_pylist()
+        )
+        seen.update(ids)
+        record_shard(path)
+
+    def flush():
         if tables:
             shard_schema = pa.unify_schemas(
                 [table.schema for table in tables], promote_options="permissive"
@@ -200,54 +225,40 @@ def import_sequences(config) -> Path:
             table = pa.concat_tables(
                 [cast_episode_table(table, shard_schema) for table in tables]
             )
-            schema = (
-                shard_schema
-                if schema is None
-                else pa.unify_schemas(
-                    [schema, shard_schema], promote_options="permissive"
-                )
-            )
-            name = f"part-{len(shards):05d}.parquet"
-            pq.write_table(table, stage / name)
-            shards.append(
-                {
-                    "path": name,
-                    "decisions": table.num_rows,
-                }
-            )
+            path = work / f"part-{len(shards):05d}.parquet"
+            with atomic_path(path) as temporary:
+                pq.write_table(table, temporary)
+            record_shard(path)
             tables.clear()
 
-    try:
-        for index, reference in enumerate(references):
-            episode = reference.load()
-            if episode.episode_id in seen:
-                raise ValueError("duplicate episode IDs in sequence import")
-            seen.add(episode.episode_id)
-            tables.append(encoder.table(index, episode))
-            if (index + 1) % config.episodes_per_shard == 0:
-                flush()
-        flush()
-        # Promote earlier shards only when a later episode widened their schema.
-        for shard in shards:
-            path = stage / shard["path"]
-            if pq.read_schema(path) != schema:
-                table = cast_episode_table(pq.read_table(path), schema)
-                pq.write_table(table, path)
-            shard["sha256"] = file_checksum(path)
-        manifest = {
-            "format": "sequifier.sequence-data",
-            "version": ContractVersions.SEQUENCE_DATA_MANIFEST,
-            "episodes": len(seen),
-            "decisions": sum(shard["decisions"] for shard in shards),
-            "policy_schema": policy.model_dump(mode="json"),
-            "shards": shards,
-            "provenance": resolved_source.provenance(),
-        }
-        (stage / "manifest.json").write_text(
-            json.dumps(manifest, indent=2, allow_nan=False) + "\n", encoding="utf-8"
-        )
-        os.rename(stage, destination)
-        return destination / "manifest.json"
-    finally:
-        if stage.exists():
-            shutil.rmtree(stage)
+    for index in range(len(seen), len(references)):
+        episode = references[index].load()
+        if episode.episode_id in seen:
+            raise ValueError("duplicate episode IDs in sequence import")
+        seen.add(episode.episode_id)
+        tables.append(encoder.table(index, episode))
+        if len(tables) == config.episodes_per_shard:
+            flush()
+    flush()
+    # Keep checkpoints intact if schema promotion or publication is interrupted.
+    for shard in shards:
+        source = work / shard["path"]
+        path = stage / shard["path"]
+        if pq.read_schema(source) == schema:
+            os.link(source, path)
+        else:
+            pq.write_table(cast_episode_table(pq.read_table(source), schema), path)
+        shard["sha256"] = file_checksum(path)
+    manifest = {
+        "format": "sequifier.sequence-data",
+        "version": ContractVersions.SEQUENCE_DATA_MANIFEST,
+        "episodes": len(seen),
+        "decisions": sum(shard["decisions"] for shard in shards),
+        "policy_schema": policy.model_dump(mode="json"),
+        "shards": shards,
+        "provenance": resolved_source.provenance(),
+    }
+    (stage / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
+    os.rename(stage, destination)
