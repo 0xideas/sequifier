@@ -176,7 +176,7 @@ def import_sequences(config) -> Path:
     """Commit canonical columnar episodes as checksummed raw Parquet shards."""
     destination = (Path(config.project_root) / config.output_path).absolute()
     with preprocessing_workspace(
-        destination, indexed=False, resume=config.continue_preprocessing
+        destination, indexed=False, resume=not config.reprocess
     ) as work:
         if work is not None:
             _write_import(config, destination, work)

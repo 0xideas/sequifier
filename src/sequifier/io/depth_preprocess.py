@@ -1000,7 +1000,7 @@ def preprocess_depth(owner, selected_columns):
         "serial": ContractVersions.SERIAL_DEPTH_LEDGER,
         "parallel": ContractVersions.PARALLEL_DEPTH_LEDGER,
     }
-    if config.continue_preprocessing and ledger_path.exists():
+    if not config.reprocess and ledger_path.exists():
         ledger = json.loads(ledger_path.read_text())
         mode = ledger.get("mode") if isinstance(ledger, dict) else None
         if not isinstance(mode, str) or mode not in ledger_versions:
@@ -1157,6 +1157,11 @@ def preprocess_depth(owner, selected_columns):
         if folder.exists():
             for stale in folder.glob("*.pt"):
                 if stale.name not in expected_shards:
+                    suffix = stale.stem.removeprefix(f"{folder.name}-0-")
+                    if config.reprocess and suffix != stale.stem and suffix.isdigit():
+                        stale.unlink()
+                        Path(f"{stale}.metadata.json").unlink(missing_ok=True)
+                        continue
                     raise ValueError(
                         f"Existing split folder contains stale output {stale}; "
                         "use a fresh output location"

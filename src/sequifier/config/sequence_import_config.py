@@ -26,7 +26,7 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
     policy_binding: PolicyBinding
     initialize_from: str | None = None
     output_path: str
-    continue_preprocessing: bool = False
+    reprocess: bool = False
 
     @property
     def project_root(self):

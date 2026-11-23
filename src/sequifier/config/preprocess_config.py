@@ -166,7 +166,7 @@ class PreprocessorModel(ConfigModel):
     max_rows: Optional[int] = None
     batches_per_file: int = 1024
     process_by_file: bool = True
-    continue_preprocessing: bool = False
+    reprocess: bool = False
 
     use_precomputed_maps: Optional[list[str]] = None
     cardinality_config: dict[str, CardinalityLimitModel] = Field(default_factory=dict)
@@ -414,21 +414,6 @@ class PreprocessorModel(ConfigModel):
         if any(not column for column in value) or len(value) != len(set(value)):
             raise ValueError(f"{info.field_name} must contain unique, non-empty names")
         return value
-
-    @field_validator("continue_preprocessing")
-    @classmethod
-    @beartype
-    def validate_continue_preprocessing(cls, v: bool, info: Any) -> bool:
-        if (
-            v
-            and info.data.get("merge_output")
-            and not info.data.get("indexed_output_path")
-        ):
-            raise ValueError(
-                "'continue_preprocessing' can only be set to true if "
-                "merge_output is False, not single files"
-            )
-        return v
 
     @model_validator(mode="after")
     @beartype

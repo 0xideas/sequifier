@@ -52,6 +52,7 @@ from sequifier.helpers import (
     read_data,
     resolve_unified_polars_numeric_dtype,
 )
+from sequifier.io.atomic import write_json_atomic
 from sequifier.io.feature_fitting import (
     FeatureStatistics,
     FittedColumns,
@@ -876,7 +877,7 @@ class Preprocessor:
             return
         destination = Path(self.config.project_root) / path
         with preprocessing_workspace(
-            destination, indexed=True, resume=self.config.continue_preprocessing
+            destination, indexed=True, resume=not self.config.reprocess
         ) as work:
             if work is not None:
                 with IndexedSequenceWriter(destination, workspace=work) as writer:
@@ -899,9 +900,7 @@ class Preprocessor:
             )
 
         self.data_name_root = Path(config.preprocessing_data_path).stem
-        self.target_dir = (
-            "temp" if config.merge_output else f"{self.data_name_root}-temp"
-        )
+        self.target_dir = f"{self.data_name_root}-temp"
         self.cardinality_config = _normalize_cardinality_config(
             config.cardinality_config
         )
@@ -1016,27 +1015,13 @@ class Preprocessor:
             self.output.finish()
             return
 
-        if config.continue_preprocessing and not self.output.indexed:
-            if config.merge_output:
-                paths_to_check = self.split_paths
-            else:
-                paths_to_check = [
-                    os.path.join(
-                        config.project_root, "data", f"{self.data_name_root}-split{i}"
-                    )
-                    for i in range(self.n_splits)
-                ]
-
-            if any(os.path.exists(p) for p in paths_to_check):
-                logger.info(
-                    "Existing split paths found with continue_preprocessing=True. "
-                    "Skipping processing and running cleanup."
-                )
-                self._restore_resume_manifest_state(
-                    selected_columns, config.write_format
-                )
-                self.output.finish()
-                return
+        if (
+            isinstance(self.output, WindowOutput)
+            and self.output.cleanup_checkpoint.is_file()
+        ):
+            self._restore_resume_manifest_state(selected_columns, config.write_format)
+            self.output.finish()
+            return
 
         if os.path.isfile(config.preprocessing_data_path):
             self._process_file(selected_columns)
@@ -1763,13 +1748,9 @@ class Preprocessor:
 
         temp_path = os.path.join(self.config.project_root, "data", self.target_dir)
 
-        if self.config.continue_preprocessing and not self.output.indexed:
-            if not os.path.exists(temp_path):
-                raise Exception(f"temp folder at '{temp_path}' does not exist")
-        else:
-            if os.path.exists(temp_path):
-                shutil.rmtree(temp_path)
-            os.makedirs(temp_path)
+        if (self.config.reprocess or self.output.indexed) and os.path.exists(temp_path):
+            shutil.rmtree(temp_path)
+        os.makedirs(temp_path, exist_ok=True)
 
     @beartype
     def _setup_split_paths(self, write_format: str, n_splits: int) -> None:
@@ -1949,7 +1930,7 @@ class Preprocessor:
         )
         directory = Path(temp_output_path)
 
-        if not self.target_dir == "temp":
+        if not self.config.merge_output:
             for i, split_path in enumerate(self.split_paths):
                 split = f"split{i}"
                 folder_path = os.path.join(
@@ -2056,32 +2037,16 @@ class Preprocessor:
                 "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             },
         }
-        manifest_path = os.path.join(
-            self.config.project_root,
-            "data",
-            self.target_dir,
-            "preprocess-manifest.json",
+        scratch = Path(self.config.project_root) / "data" / self.target_dir
+        manifest_path = scratch / "preprocess-manifest.json"
+        # A worker or batch number identifies the same windows only under the
+        # same partitioning settings.
+        partitioning = dict(
+            num_workers=self.config.num_workers or multiprocessing.cpu_count(),
+            allow_sequence_splitting=self.config.allow_sequence_splitting,
+            batches_per_file=self.config.batches_per_file,
         )
-
-        with open(
-            os.path.join(
-                self.config.project_root,
-                "data",
-                self.target_dir,
-                "preprocess-manifest-check.json",
-            ),
-            "w",
-        ) as f:
-            json.dump(manifest, f, indent=4)
-
-        if (
-            self.config.continue_preprocessing
-            and self.config.indexed_output_path is None
-        ):
-            if not os.path.exists(manifest_path):
-                raise ValueError(
-                    "Cannot continue preprocessing because the temp manifest is missing."
-                )
+        if not self.config.reprocess and manifest_path.is_file():
             with open(manifest_path, "r") as f:
                 previous_manifest = json.load(f)
             require_contract_version(
@@ -2092,6 +2057,11 @@ class Preprocessor:
             validate_persisted_metadata_versions(
                 previous_manifest["preprocessing_config"]
             )
+            previous_partitioning = previous_manifest.pop("window_partitioning", None)
+            if previous_partitioning not in (None, partitioning):
+                raise ValueError(
+                    "Cannot resume with different window partitioning settings"
+                )
             if _stable_json_value(previous_manifest) != _stable_json_value(manifest):
                 raise ValueError(
                     "Cannot continue preprocessing with a different preprocessing "
@@ -2100,10 +2070,17 @@ class Preprocessor:
                     "settings, max_rows, process_by_file, prediction alignment, "
                     "or metadata/maps/statistics."
                 )
-            return
+        elif not self.config.reprocess and (
+            (scratch / "depth-shards.json").exists()
+            or any(scratch.glob("*.complete.json"))
+        ):
+            raise ValueError(
+                "Cannot continue preprocessing because the temp manifest is missing."
+            )
 
-        with open(manifest_path, "w") as f:
-            json.dump(manifest, f, indent=4)
+        if not self.config.depth_layouts:
+            manifest["window_partitioning"] = partitioning
+        write_json_atomic(manifest_path, manifest, indent=4, allow_nan=True)
 
     @beartype
     def _restore_resume_manifest_state(
@@ -2678,31 +2655,6 @@ def _load_and_preprocess_data(
     return data
 
 
-@beartype
-def _get_processed_prefixes(
-    project_root: str,
-    target_dir: str,
-    write_format: str,
-) -> set[str]:
-    temp_dir = Path(project_root) / "data" / target_dir
-
-    if not temp_dir.is_dir():
-        return set()
-
-    suffix = f".{write_format}"
-    processed = set()
-
-    with os.scandir(temp_dir) as entries:
-        for entry in entries:
-            if not entry.is_file() or not entry.name.endswith(suffix):
-                continue
-
-            if "-split" in entry.name:
-                processed.add(entry.name.rsplit("-split", 1)[0])
-
-    return processed
-
-
 def _process_batches_multiple_files_inner(
     plan,
     features,
@@ -2716,13 +2668,7 @@ def _process_batches_multiple_files_inner(
     """Apply the fitted transform and write each file in this worker's shard."""
     config = plan.config
     outputs = []
-    prefixes = (
-        _get_processed_prefixes(
-            config.project_root, plan.target_dir, config.write_format
-        )
-        if config.continue_preprocessing
-        else set()
-    )
+    scratch = Path(config.project_root) / "data" / plan.target_dir
     if not file_paths:
         raise ValueError("No files found to process.")
     pad_width = len(str(len(file_paths) - 1))
@@ -2737,10 +2683,14 @@ def _process_batches_multiple_files_inner(
             file_index = str(index).zfill(pad_width)
             name = f"{plan.name}-{process_id}-{file_index}"
             file_plan = plan.named(name)
-            processed = name in prefixes
-            if processed:
-                logger.info(f"Skipping already processed file: {path}")
-                if remaining is None:
+            checkpoint = scratch / f"{name}.complete.json"
+            if not config.reprocess and checkpoint.is_file():
+                saved = json.loads(checkpoint.read_text())
+                if all((scratch / part).is_file() for part in saved["parts"]):
+                    rows_read += saved["rows"]
+                    if config.merge_output:
+                        outputs.append(file_plan.intermediate_paths)
+                    logger.info(f"Skipping already processed file: {path}")
                     continue
             data = _load_and_preprocess_data(
                 path,
@@ -2753,8 +2703,6 @@ def _process_batches_multiple_files_inner(
                 split_values=config.split_values,
             )
             rows_read += data.height
-            if processed:
-                continue
             data = features.transform(
                 data,
                 normalize,
@@ -2767,6 +2715,15 @@ def _process_batches_multiple_files_inner(
                 paths = file_plan.intermediate_paths
                 merge_window_outputs(shards, paths, config.write_format)
                 outputs.append(paths)
+            else:
+                paths = [path for batch_paths in shards for path in batch_paths]
+            write_json_atomic(
+                checkpoint,
+                {
+                    "rows": data.height,
+                    "parts": [Path(part).name for part in paths],
+                },
+            )
     return outputs
 
 
@@ -3155,17 +3112,15 @@ def _write_accumulated_windows_pt(
     file_index_str: str,
     target_dir: str,
     col_types: dict[str, str],
-) -> None:
+) -> str:
     """Write one accumulated PT shard without constructing long-format rows."""
-    if not windows_to_write:
-        return
-
     split_path_batch_seq = split_path.replace(
         ".pt", f"-{process_id}-{file_index_str}.pt"
     )
     out_path = insert_top_folder(split_path_batch_seq, target_dir)
     process_and_write_sequence_windows_pt(windows_to_write, out_path, col_types)
     _write_window_shard_summary(out_path, windows_to_write)
+    return out_path
 
 
 def _window_shard_summary(windows: list[SequenceWindows]) -> dict[str, Any]:
@@ -3210,11 +3165,8 @@ def _write_accumulated_windows_parquet(
     file_index_str: str,
     target_dir: str,
     schema: Any,
-) -> None:
+) -> str:
     """Write dense windows through the compatibility long-format Parquet adapter."""
-    if not windows_to_write:
-        return
-
     combined_df = _sequence_windows_to_long_dataframe(windows_to_write, schema)
     curriculum_value_columns = curriculum_storage_columns(combined_df.columns)
     if curriculum_value_columns:
@@ -3232,6 +3184,7 @@ def _write_accumulated_windows_parquet(
     out_path = insert_top_folder(split_path_batch_seq, target_dir)
     combined_df.write_parquet(out_path)
     _write_window_shard_summary(out_path, windows_to_write)
+    return out_path
 
 
 class _MergedLongOutputWriters:
@@ -3348,6 +3301,12 @@ def preprocess_batch(
 ) -> list[str]:
     """Extract and write all split windows for one batch."""
     config = plan.config
+    scratch = Path(config.project_root) / "data" / plan.target_dir
+    checkpoint = scratch / f"{plan.name}-batch-{process_id}.complete.json"
+    if not config.reprocess and checkpoint.is_file():
+        parts = [str(scratch / part) for part in json.loads(checkpoint.read_text())]
+        if all(Path(part).is_file() for part in parts):
+            return parts
     batch_arrays = _batch_to_arrays(batch, plan.columns)
     split_schemas = [
         _schema_for_split(plan.schema, width) for width in plan.windows.widths
@@ -3379,6 +3338,7 @@ def preprocess_batch(
         else None
     )
     file_indices = [0] * len(plan.split_paths)
+    shard_paths = []
     pad_width = len(str(max(1, sequence_count)))
     windows_by_split: list[list[SequenceWindows]] = [[] for _ in plan.split_paths]
     buffered_bytes = [0] * len(plan.split_paths)
@@ -3392,7 +3352,7 @@ def preprocess_batch(
         else:
             file_index = str(file_indices[group]).zfill(pad_width)
             if config.write_format == "pt":
-                _write_accumulated_windows_pt(
+                path = _write_accumulated_windows_pt(
                     pending,
                     plan.split_paths[group],
                     process_id,
@@ -3401,7 +3361,7 @@ def preprocess_batch(
                     plan.col_types,
                 )
             else:
-                _write_accumulated_windows_parquet(
+                path = _write_accumulated_windows_parquet(
                     pending,
                     plan.split_paths[group],
                     process_id,
@@ -3410,6 +3370,7 @@ def preprocess_batch(
                     split_schemas[group],
                 )
             file_indices[group] += 1
+            shard_paths.append(path)
         pending.clear()
         buffered_bytes[group] = 0
 
@@ -3431,7 +3392,9 @@ def preprocess_batch(
     finally:
         if writers is not None:
             writers.close()
-    return writers.paths if writers is not None else []
+    parts = writers.paths if writers is not None else shard_paths
+    write_json_atomic(checkpoint, [Path(part).name for part in parts])
+    return parts
 
 
 def _dense_windows(batch, start, stop, placement, samples, columns):

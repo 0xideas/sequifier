@@ -1,6 +1,7 @@
 """Preprocessing destinations for materialized windows and indexed sequences."""
 
 import json
+import re
 import shutil
 from functools import cached_property
 from pathlib import Path
@@ -44,6 +45,11 @@ class WindowOutput:
 
     def time_index_path(self):
         return Path(self.run.config.project_root) / self.time_index_name
+
+    @property
+    def cleanup_checkpoint(self):
+        scratch = Path(self.run.config.project_root) / "data" / self.run.target_dir
+        return scratch / "windows-complete"
 
     def bind_media(self, manifest):
         """Materialized media references already use project-relative paths."""
@@ -136,6 +142,28 @@ class WindowOutput:
             merge_window_outputs(
                 self.fragments, run.split_paths, run.config.write_format
             )
+        if not run.config.depth_layouts and not self.cleanup_checkpoint.exists():
+            # Only prune before any shards move. A retry of cleanup may find
+            # valid shards in the final folder and no longer in scratch.
+            if not run.config.merge_output:
+                for index, split in enumerate(run.split_paths):
+                    folder = Path(split).with_suffix("")
+                    if not folder.is_dir():
+                        continue
+                    pattern = re.compile(
+                        rf"{re.escape(run.data_name_root)}(?:-.*)?-split{index}"
+                        rf"-\d+-\d+\.{re.escape(run.config.write_format)}"
+                    )
+                    for part in folder.iterdir():
+                        if (
+                            pattern.fullmatch(part.name)
+                            and not (
+                                self.cleanup_checkpoint.parent / part.name
+                            ).is_file()
+                        ):
+                            part.unlink()
+                            Path(f"{part}.metadata.json").unlink(missing_ok=True)
+            self.cleanup_checkpoint.touch()
         run._cleanup(run.config.write_format)
         if run._static_source is not None:
             run._finalize_static_source()

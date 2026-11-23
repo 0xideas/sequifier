@@ -43,7 +43,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | `read_format` | `str` | No | `csv` | Format of input data (`csv`, `parquet`). |
 | `write_format` | `str` | No | `parquet` | Format of output data (`csv`, `parquet`, `pt`). |
 | `merge_output` | `bool` | No | `true` | Whether to merge split files into single files or keep them sharded. |
-| `continue_preprocessing`| `bool` | No | `false` | If `true`, resumes from an existing preprocessing temp folder created by an interrupted run. |
+| `reprocess` | `bool` | No | `false` | By default, reuse completed intermediate work after an interruption. Set to `true` to discard checkpoints and start from scratch. |
 
 
 > **Important Constraint on `write_format`:**
@@ -600,8 +600,8 @@ with the item data and keeps preconditioning images with the static data.
 
 For `import_sequences`, `prepare_policy`, and supervised `indexed_output_path`,
 a published dataset at the same path is reused with either setting of
-`continue_preprocessing`. Set it to `true` to resume interrupted work or
-`false` (the default) to discard partial work and start over. Import resumes
+`reprocess`. Interrupted work resumes by default. Set `reprocess: true`
+to discard partial work and start over. Import resumes
 after the last completed shard. Policy preparation reuses the saved episode
 schema, fitted feature metadata, and completed episodes. Supervised indexed
 preprocessing reuses completed item files and repeats feature fitting and window

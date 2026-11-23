@@ -29,7 +29,7 @@ from sequifier.trajectory.tables import (
 def prepare_policy(config):
     destination = Path(config.project_root) / config.output_path
     with preprocessing_workspace(
-        destination, indexed=True, resume=config.continue_preprocessing
+        destination, indexed=True, resume=not config.reprocess
     ) as work:
         if work is not None:
             with IndexedSequenceWriter(destination, workspace=work) as writer:
