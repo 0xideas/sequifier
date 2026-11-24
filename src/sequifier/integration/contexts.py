@@ -9,6 +9,7 @@ from torch.amp.grad_scaler import GradScaler
 from torch.optim import Optimizer
 
 from sequifier.model.parameter_catalog import ParameterCatalog
+from sequifier.runtime.plan import NORMAL_COMPLETION
 
 
 @dataclass(frozen=True)
@@ -109,4 +110,4 @@ class CheckpointSaved(TrainingEvent):
 
 @dataclass(frozen=True)
 class RunCompleted(TrainingEvent):
-    completion_reason: str = "normal_completion"
+    completion_reason: str = NORMAL_COMPLETION

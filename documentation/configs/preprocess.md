@@ -180,7 +180,7 @@ indexes remains readable through a worker-local scan.
 | `normalize_on_all_data` | `bool` | No | `false` | If `false`, numeric statistics and dynamic categorical vocabularies are fitted only on split 0; values seen only in later splits map to `[other]` or a configured hash bucket. Set to `true` to fit on all splits. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
 | `metadata_config_path` | `Optional[str]` | No | `null` | Use a preexisting metadata config for tokenizing discrete columns and, when enabled, standardizing real-valued columns. |
-| `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set, and it cannot also be `split_column`. |
+| `mask_column` | `Optional[str]` | No | `null` | Row-level observation mask. First-time fitting excludes masked observations from temporal feature statistics and vocabularies. Use a separate column for `split_column`. |
 | `curriculum_column` | `Optional[str \| list[str]]` | No | `null` | One or more optional integer input columns to preserve as per-subsequence curriculum metadata. |
 | `use_precomputed_maps`| `list[str]` | No | `null` | If not `null`, enforces the use of precomputed maps for the variables in the list. |
 

@@ -126,7 +126,9 @@ value when the split column is an observation. An auxiliary split column carries
 the final decision's value forward to its successor. Auxiliary columns named by
 `curriculum_column` also carry the final decision's values onto that row. The
 usual requirement that each curriculum value be constant within a generated
-subsequence applies.
+subsequence applies. A declared static field can supply the cutoff or curriculum
+value for every item in its sequence, including the final successor. Its feature
+values are stored in the static table.
 Existing inference trajectory JSON can be read through the same
 interface. Supervised preprocessing extracts the declared static fields into a
 separate table with one row per sequence.

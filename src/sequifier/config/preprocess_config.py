@@ -342,7 +342,7 @@ class PreprocessorModel(SequencePreprocessingSettings):
 
     @model_validator(mode="after")
     @beartype
-    def validate_mask_column_requires_metadata(self) -> "PreprocessorModel":
+    def validate_preprocessing_settings(self) -> "PreprocessorModel":
         categorical = set(self.categorical_columns or [])
         real = set(self.real_columns or [])
         declared = categorical | real
@@ -465,8 +465,6 @@ class PreprocessorModel(SequencePreprocessingSettings):
                 raise ValueError(
                     "Depth position columns are coordinates, not selected features or column_data_types"
                 )
-        if self.mask_column is not None and self.metadata_config_path is None:
-            raise ValueError("metadata_config_path must be set when mask_column is set")
         if self.mask_column in ("sequenceId", "itemPosition"):
             raise ValueError("mask_column cannot be sequenceId or itemPosition")
         curriculum_columns = (

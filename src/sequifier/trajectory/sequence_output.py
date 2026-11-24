@@ -448,7 +448,9 @@ def supervised_manifest_input(
             static_path = table.with_suffix(".static.parquet")
             scan.select("sequenceId", *static).unique().sink_parquet(static_path)
             scan = scan.drop(
-                [name for name in static if name not in curriculum_columns]
+                name
+                for name in static
+                if name != split_column and name not in curriculum_columns
             )
         scan = scan.with_columns(
             observation_mask(scan, mask_column).alias(mask_column or OBSERVATION_MASK)

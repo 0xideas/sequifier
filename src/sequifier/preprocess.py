@@ -1714,6 +1714,16 @@ class Preprocessor:
                     f"Sequence data {source!r} must use integer sequenceId values"
                 )
             overlap = set(columns) & set(source_schema.names())
+            if self.sequence_manifest_path and not self.external_static_source:
+                # The manifest projection repeats these static fields for window
+                # placement. They still have a single feature in the static table.
+                placement_columns = {
+                    self.config.split_column,
+                    *curriculum_columns(self.config.curriculum_column),
+                }
+                overlap -= placement_columns.difference(
+                    self.config.selected_columns or ()
+                )
             if overlap:
                 raise ValueError(
                     f"Static columns also occur in sequence data: {sorted(overlap)}"

@@ -1034,4 +1034,9 @@ class ResumeConfig(ConfigModel):
                 "run.recovery.resume.checkpoint_path is required when "
                 "policy is 'required'"
             )
+        if (
+            self.checkpoint_path is not None
+            and not self.checkpoint_path.lower().endswith(".pt")
+        ):
+            raise ValueError("run.recovery.resume.checkpoint_path must name a .pt file")
         return self

@@ -41,7 +41,13 @@ from sequifier.integration.contexts import (
     ValidationCompleted,
 )
 from sequifier.logging_paths import model_log_directory
-from sequifier.runtime.plan import PhaseOutcome, metric_improved, run_phases, stop_scope
+from sequifier.runtime.plan import (
+    NORMAL_COMPLETION,
+    PhaseOutcome,
+    metric_improved,
+    run_phases,
+    stop_scope,
+)
 from sequifier.runtime.random_state import RandomState
 from sequifier.runtime.stopping import StoppingState
 from sequifier.training.checkpoint_service import CheckpointRequest
@@ -317,7 +323,7 @@ class TrainingEngine:
         weights = TokenAccumulation()
         last_identity: StepIdentity | None = None
         stop_requested = False
-        completion_reason = "normal_completion"
+        completion_reason = NORMAL_COMPLETION
         pending_metric_positions = {}
         metric_windows: dict[str, dict[str, Any]] = {}
         last_latest = time.monotonic()
@@ -833,7 +839,6 @@ class TrainingEngine:
                 start=len(state.phase_commits),
                 stopped=state.plan_stopped
                 and len(state.phase_commits) > state.phase_index,
-                completion_reason="normal_completion",
                 replay=replay,
                 optimizer_continues=lambda view: view.optimizer_state == "continue",
                 terminal_reason=(

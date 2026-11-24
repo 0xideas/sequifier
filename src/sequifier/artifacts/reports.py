@@ -12,6 +12,7 @@ from sequifier.artifacts.state_dict import weight_fingerprint
 from sequifier.contract_versions import ContractVersions
 from sequifier.fingerprints import file_checksum
 from sequifier.io.atomic import write_json_atomic
+from sequifier.runtime.plan import NORMAL_COMPLETION
 
 
 @dataclass(frozen=True)
@@ -78,7 +79,7 @@ class PhaseResult(BaseModel):
             direction=monitor.direction if monitor else None,
             stop_scope=stop_scope,
             completion_reason=completion_reason
-            or ("early_stopping" if stop_scope else "completed"),
+            or ("early_stopping" if stop_scope else NORMAL_COMPLETION),
             selected_metric=selection.metric,
             selected_transaction=selection.transaction,
             selected_weight_hash=weight_fingerprint(selection.require_weights()),

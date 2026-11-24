@@ -15,7 +15,7 @@ All paths are relative to `run.project_root` unless absolute.
 | `run.outputs.phase_directory` | `outputs/training/<model_name>/phases` |
 | `run.recovery.resume.checkpoint_path` | `checkpoints/runs/<model_name>/<model_name>-latest.pt` |
 
-The final model path must have a `.pt` extension. Every runner publishes this
+The final model and recovery checkpoint paths must have a `.pt` extension. Every runner publishes this
 portable model independently of the optional
 best/last, embedding and ONNX exports controlled by `run.export`. Supervised
 training retains its existing `<model>-best-<epoch>` and `<model>-last-<epoch>`
@@ -66,6 +66,8 @@ Sequifier writes a run manifest at the configured report path and at
 `manifest.json` beside
 the rolling checkpoint. Common fields identify the logical run, current session,
 status, completion reason, final model, checkpoint, exports and completed phases.
+Ordinary budget completion uses `completion_reason: normal_completion` for all
+runners and phase reports. Earlier reports can also contain `completed` for this outcome.
 Additional fields contain runner-specific provenance.
 
 Each phase report includes phase index, name, algorithm,
