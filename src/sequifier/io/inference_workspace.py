@@ -58,8 +58,6 @@ def _primary(request):
 
     output = request.output
     path = output.path if output else None
-    if path and request.task == "policy":
-        return normalize_path(path, root)
     destination, _ = _inference_destination(
         root,
         output.format if output else "csv",
@@ -173,6 +171,8 @@ def inference_workspace(request, *, random_seed, skip_metadata):
     ):
         # A legacy single-observation rollout can resume its original adapter journal.
         identity["rollout"].pop("seed_history", None)
+    if request.task == "policy":
+        identity["policy_input_layout_version"] = ContractVersions.POLICY_INPUT_LAYOUT
     if request.task == "policy" and not request.rollout:
         # Invalidate cached tables when policy prediction semantics change.
         identity["prediction_table_version"] = ContractVersions.POLICY_PREDICTION_TABLE

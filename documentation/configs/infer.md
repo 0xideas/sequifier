@@ -327,7 +327,7 @@ Optional assertions `assertions.input_columns`, `assertions.static_columns`,
 match the selected artifact. Unknown/cross-route options fail even at default values.
 Policy rejects external per-column sampling, dropout, category decoding,
 autoregression and `generation_steps`. Policy accepts `input.training_route` to select a
-prepared dataset view. For an in-memory training partition, supply the inference table via `input.path`.
+prepared dataset view. For an in-memory training partition, select `input.layout: raw` and supply the inference table and its original preprocessing metadata.
 Forecast rejects policy-only output/return/action/history options; embeddings also
 reject generative sampling, decoding, probabilities, autoregression and rollout.
 
@@ -389,8 +389,23 @@ For policy prediction, the direct and prepared paths use the same categorical
 lookup and numeric normalization. An unseen category in an ordinary vocabulary
 maps to `[other]` (ID 1). When preparing a policy view explicitly, list recorded
 action columns used for lagged feedback in `passthrough_columns` to preserve
-their original values. Raw policy inference keeps these columns automatically
-when they are present. Older hashed actors can load the original categorical
+their original values. Raw policy inference preserves named actions and the canonical
+`__executed_action` and `__previous_action` structs when feedback is used.
+For explicit preparation, list those structs in `passthrough_columns` when the
+rollout table uses them. Both forecast and policy inference treat automatic-layout
+tables as prepared windows. For fresh rows, use `input.layout: raw`, integer
+`sequenceId` and `itemPosition`, and the original metadata. For an actor trained
+directly on demonstrations, `sequifier preprocess` with `operation: export_metadata`
+writes its frozen preprocessing metadata. For example, the PPO toy prediction
+and rollout configs use the file produced by this preprocessing config.
+
+```yaml
+operation: export_metadata
+model_path: models/online-ppo.pt
+output_path: configs/metadata_configs/online-ppo.json
+```
+
+Older hashed actors can load the original categorical
 settings through `load_policy(..., metadata_config_path=...)`.
 
 For a folder of raw files, set `input.format` to their source format.

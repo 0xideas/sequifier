@@ -147,7 +147,7 @@ InferenceMetadataLayout = Literal["raw", "indexed", "stored"]
 def _metadata_layout(request, view) -> InferenceMetadataLayout:
     if view is not None:
         return "raw" if view.view["view"] == "predict" else "indexed"
-    if request.input_layout == "raw" or request.task == "policy":
+    if request.input_layout == "raw":
         return "raw"
     return "stored"
 
@@ -346,28 +346,36 @@ def _resolve_policy_inference(
     indexed = resolve_inference_view(config)
     metadata_path = original_metadata_path(config, indexed)
     prepared_source = None
+    storage = execution.interface_storage.get(selected)
     if metadata_path is not None:
         if indexed is not None or metadata is None:
             metadata = load_dataset_metadata(str(metadata_path))
-        layout = _metadata_layout(config, indexed)
-        if indexed is None and config.input_layout != "raw":
-            from sequifier.config.policy_train_config import SequenceSourceConfig
-            from sequifier.trajectory.sources import resolve_source
+    else:
+        metadata = interface.preprocessing_metadata(storage)
+    layout = _metadata_layout(config, indexed)
+    InferenceMetadataSource(interface, storage, "policy metadata").validate(
+        metadata, layout
+    )
+    if layout == "stored":
+        from sequifier.config.policy_train_config import SequenceSourceConfig
+        from sequifier.trajectory.sources import resolve_source
 
-            split_paths = [(root / path).resolve() for path in metadata.split_paths]
-            path = (root / config.data_path).resolve()
-            if path in split_paths:
-                source = SequenceSourceConfig(
-                    metadata_config_path=str(metadata_path.resolve()),
-                    split=metadata.split_names[split_paths.index(path)],
-                )
-                prepared_source = resolve_source(source, root, metadata=metadata)
-                layout = "stored"
-        InferenceMetadataSource(
-            interface, execution.interface_storage.get(selected), "policy metadata"
-        ).validate(metadata, layout)
-    if config.read_format == "pt" and prepared_source is None and indexed is None:
-        raise ValueError("PT policy input requires a prepared preprocessing split")
+        path = (root / config.data_path).resolve()
+        split_paths = [(root / part).resolve() for part in metadata.split_paths]
+        split = (
+            metadata.split_names[split_paths.index(path)]
+            if metadata_path is not None and path in split_paths
+            else None
+        )
+        source = SequenceSourceConfig(
+            split=split,
+            paths=[] if split is not None else [str(path)],
+            metadata_config_path=str(metadata_path.resolve())
+            if metadata_path
+            else None,
+            static_data_path=config.static_data_path,
+        )
+        prepared_source = resolve_source(source, root, metadata=metadata, prepared=True)
     config._model = model
     config._indexed_view = indexed
     config._prepared_source = prepared_source

@@ -830,10 +830,6 @@ def inference_output_path(
 def validate_probability_destinations(config, model_id, target_types, part_count):
     """Reserve all prediction and probability files before writing either."""
     output_path = config.output_path
-    if config.task == "policy" and output_path is not None:
-        output_path = str(
-            Path(normalize_path(output_path, config.project_root)).absolute()
-        )
     paths = []
     for index in range(part_count):
         paths.append(

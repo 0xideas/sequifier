@@ -110,14 +110,8 @@ class TrajectoryReference:
         episode = sequence_from_trajectory(
             load_trajectory(self.path), self.policy, self.action_semantics
         )
-        from sequifier.trajectory.sequence_output import sequence_coordinate
-
-        identity = self.namespace + episode.episode_id
         return episode.model_copy(
-            update={
-                "episode_id": identity,
-                "sequence_id": sequence_coordinate(identity),
-            }
+            update={"episode_id": self.namespace + episode.episode_id}
         )
 
 

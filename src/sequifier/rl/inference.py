@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 
 from sequifier.config.policy_infer_config import ResolvedPolicyInferenceConfig
-from sequifier.helpers import configure_determinism, normalize_path
+from sequifier.helpers import configure_determinism
 from sequifier.io.actions import encode_action
 from sequifier.io.batch import SequifierInputs, collate_model_inputs
 from sequifier.io.inference_workspace import rollout_journal
@@ -109,21 +109,17 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
             policy_row_key(first_rows, spec, config),
             prepared=prepared,
         )
-    if config.output_path is None:
-        from sequifier.infer import inference_output_path
+    from sequifier.infer import inference_output_path
 
-        destination = inference_output_path(
-            config.project_root,
-            config.write_format,
-            "predictions",
-            Path(config.model_paths[0]).stem,
-            0,
-            config=config,
-        )
-    else:
-        destination = normalize_path(config.output_path, config.project_root)
-        config.validate_output_destination(destination, label="output_path")
-        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+    destination = inference_output_path(
+        config.project_root,
+        config.write_format,
+        "predictions",
+        Path(config.model_paths[0]).stem,
+        0,
+        output_path=config.output_path,
+        config=config,
+    )
     write_data(predictions, destination, config.write_format)
     logger.info(f"Wrote {len(predictions)} policy predictions to '{destination}'")
 
@@ -153,20 +149,16 @@ def _policy_input_frames(policy, config):
                 if name in policy.interface.column_data_types
             ),
             passthrough_columns=auxiliary,
-            optional_passthrough=spec.actions if uses_feedback else (),
+            optional_passthrough=(*spec.actions, ACTION_RECORD, PREVIOUS_ACTION_RECORD)
+            if uses_feedback
+            else (),
         ) as view:
             yield _indexed_policy_frames(view, spec, config), True
     elif config._indexed_view is not None:
         yield _indexed_policy_frames(config._indexed_view, spec, config), True
-    elif config._prepared_source is not None:
-        yield _stored_policy_frames(config._prepared_source, spec, config), True
     else:
-        path = normalize_path(config.data_path, config.project_root)
-        data = (
-            pl.read_csv(path) if config.read_format == "csv" else pl.read_parquet(path)
-        )
-        _validate_policy_coordinates(data, config)
-        yield iter(((data, None),)), False
+        assert config._prepared_source is not None
+        yield _stored_policy_frames(config._prepared_source, spec, config), True
 
 
 def _validate_policy_coordinates(rows, config):
@@ -198,6 +190,8 @@ def _indexed_policy_frames(view, spec, config):
             if name in metadata.column_data_types
             and (spec.actions[name].type == "real" or spec.raw_mask_column is not None)
         }
+        if raw_columns.intersection({ACTION_RECORD, PREVIOUS_ACTION_RECORD}):
+            required_raw.clear()
         if config.previous_action_columns:
             required_raw = set(config.previous_action_columns.values())
         if missing := required_raw - raw_columns:
@@ -586,14 +580,9 @@ def _decision_histories(frames, spec, config, row_key, *, prepared, seed_index=N
         offset += len(data)
         if context is not None:
             indexed = pl.concat([context, indexed], how="diagonal_relaxed")
-        groups = (
-            indexed.partition_by(config.sequence_id_column, maintain_order=True)
-            if config.sequence_id_column in indexed.columns
-            else indexed.iter_slices(1)
-        )
-        for group in groups:
-            if config.item_position_column not in group.columns:
-                group = group.with_row_index(config.item_position_column)
+        for group in indexed.partition_by(
+            config.sequence_id_column, maintain_order=True
+        ):
             group = ordered_sequence_rows(group, config.item_position_column)
             if seed_index is not None:
                 selected = group.filter(pl.col(row_key) == seed_index)
@@ -632,7 +621,7 @@ def _decision_histories(frames, spec, config, row_key, *, prepared, seed_index=N
                 observation = {name: row[name] for name in spec.observation_columns}
                 if not prepared and spec.raw_mask_column in row:
                     observation[spec.raw_mask_column] = row[spec.raw_mask_column]
-                sequence = row.get(config.sequence_id_column, row[row_key])
+                sequence = row[config.sequence_id_column]
                 if row.get(CONTEXT_COLUMN) and (
                     seed_index is None or config.rollout.seed_history == "available"
                 ):

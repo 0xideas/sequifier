@@ -43,6 +43,12 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
                 else metadata.window_length
             )
             data = read_data(str(path), path.suffix.lower().lstrip("."))
+            if "inputCol" not in data.columns:
+                raise ValueError(
+                    f"{path}: expected prepared sequence windows with inputCol. "
+                    "For fresh inference rows, select input.layout: raw and supply "
+                    "input.metadata_config_path."
+                )
             batch = tabular_tensor_batch(
                 data,
                 {

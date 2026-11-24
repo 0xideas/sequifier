@@ -111,6 +111,7 @@ def resolve_source(
     project_root: str | Path = ".",
     *,
     metadata: DatasetMetadata | None = None,
+    prepared: bool = False,
 ) -> ResolvedSequenceSource:
     root = Path(project_root).resolve()
     dependencies = DependencyManifest()
@@ -124,7 +125,7 @@ def resolve_source(
             metadata = load_dataset_metadata(str(metadata_path))
     # Keep manifest-relative locations for symlink revalidation.
     paths, manifest = _source_files(source, root, metadata, dependencies)
-    kind = "prepared" if source.split is not None else source.format
+    kind = "prepared" if prepared or source.split is not None else source.format
     if manifest is not None and manifest.get("format") == "sequifier.sequence-data":
         if source.encoding != "raw" or source.episode_end != "unknown":
             raise ValueError(

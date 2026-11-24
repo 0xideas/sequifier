@@ -10,6 +10,8 @@ artifact:
   paths:
   - models/online-ppo.pt
 input:
+  layout: raw
+  metadata_config_path: configs/metadata_configs/online-ppo.json
   path: documentation/example_inputs/ppo-observations.csv
   format: csv
 output:

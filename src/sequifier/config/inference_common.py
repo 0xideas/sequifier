@@ -110,11 +110,7 @@ class InferenceExecutionConfig(ConfigModel):
             for destination in destinations:
                 self.validate_output_destination(destination, label="rollout output")
         elif self.output_path is not None:
-            destination = (
-                normalize_path(self.output_path, self.project_root)
-                if self.task == "policy"
-                else Path(self.project_root) / self.output_path
-            )
+            destination = Path(self.project_root) / self.output_path
             self.validate_output_destination(destination, label="output_path")
         return self
 

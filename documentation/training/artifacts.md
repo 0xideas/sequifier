@@ -80,8 +80,11 @@ the model-scoped log under `logs/<model_name>`. Policy phases also log their
 name and algorithm when they start.
 Structured scalar observations use the supervised writer's `*-training.csv`,
 `*-training-full.csv`, `*-validation.csv` and `*-validation-full.csv` tables.
-Full tables include phase, algorithm and
-iteration identity, run/session IDs, UTC timestamps and progress. Named scalar
+Condensed and full tables identify the phase, algorithm, iteration and run-wide
+`global_step`. Full tables also include session IDs and UTC timestamps. When
+continuing a log with the older condensed header, new condensed rows go to
+`<prefix>.phases-training.csv` and `<prefix>.phases-validation.csv`. The original
+files retain the byte positions referenced by older recovery checkpoints. Named scalar
 observations use `metric`, `target`, `value` and `is_primary`; policy observations
 use `target: __total__`. Policy rows name the dataset and view in `dataset` and
 `part` when the observation can be attributed to each. Online observations leave
@@ -118,8 +121,7 @@ sampled run.
 ## Inference and collection outputs
 
 Forecast and policy predictions share `sequenceId`, `subsequenceId`,
-`windowStartOffset`, `itemPosition` and named prediction columns. Independent
-policy rows receive synthetic sequence/item identities. `windowStartOffset` is
+`windowStartOffset`, `itemPosition` and named prediction columns. Independent policy rows use distinct sequence IDs and item position zero. `windowStartOffset` is
 relative to the subsequence. Each policy decision materializes a single window
 in its subsequence, so its offset is zero. Categorical probabilities
 are separate target-specific files under
@@ -128,7 +130,8 @@ labels as column names. Policy predictions additionally include
 `action_log_probability` when probabilities are requested. Conditional policy
 probabilities remain conditional on the selected preceding actions.
 
-All inference routes accept `output_path` for one model. It overrides the first
+All inference routes accept `output.path` for one model. A relative path resolves
+under `run.project_root`. An absolute path is used directly. It overrides the first
 prediction/embedding file; later chunks append `-part-NNN` to its stem. Probability
 files keep their canonical target-specific destinations.
 

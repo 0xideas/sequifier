@@ -75,8 +75,13 @@ def _prepare_inference(
     missing |= {"sequenceId", "itemPosition"} - available
     if missing:
         raise ValueError(f"Fresh data is missing model columns: {sorted(missing)}")
-    passthrough = set(passthrough_columns)
-    passthrough.update((set(optional_passthrough) & available) - required_columns)
+    optional = set(optional_passthrough)
+    for schema in schemas:
+        if partial := (optional & set(schema.names())) - available:
+            raise ValueError(
+                f"Auxiliary columns must occur in every input file: {sorted(partial)}"
+            )
+    passthrough = set(passthrough_columns) | ((optional & available) - required_columns)
     if conflicts := passthrough & required_columns:
         raise ValueError(
             f"Raw auxiliary columns also used as model inputs: {sorted(conflicts)}"

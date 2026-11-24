@@ -53,11 +53,19 @@ TRAINING_FIELDS = FULL_COMMON_FIELDS + [
     "seconds_per_batch",
 ]
 
-TRAINING_CONDENSED_FIELDS = [
-    "schema_version",
+CONDENSED_PROGRESS = [
     "run_id",
+    "phase",
+    "algorithm",
+    "iteration",
+    "global_step",
     "epoch",
     "batch",
+]
+
+TRAINING_CONDENSED_FIELDS = [
+    "schema_version",
+    *CONDENSED_PROGRESS,
     "metric",
     "value",
     "learning_rate",
@@ -77,9 +85,7 @@ VALIDATION_FIELDS = FULL_COMMON_FIELDS + [
 
 VALIDATION_CONDENSED_FIELDS = [
     "schema_version",
-    "run_id",
-    "epoch",
-    "batch",
+    *CONDENSED_PROGRESS,
     "metric",
     "value",
 ]
@@ -140,9 +146,15 @@ def validate_metrics_csv_header(fields, path):
         )
 
 
+def _metric_version(fields):
+    if list(fields) in (TRAINING_CONDENSED_FIELDS, VALIDATION_CONDENSED_FIELDS):
+        return ContractVersions.CONDENSED_METRICS_SCHEMA
+    return ContractVersions.METRICS_SCHEMA
+
+
 def validate_metrics_csv_row(row, path):
     value = row.get("schema_version")
-    if value != str(ContractVersions.METRICS_SCHEMA):
+    if value != str(_metric_version(row)):
         raise ValueError(f"Unsupported metrics schema in {path}")
 
 
@@ -173,12 +185,28 @@ METRIC_SCHEMAS = {
 }
 
 
+def _legacy_condensed_fields(path, fields):
+    if (
+        fields in (TRAINING_CONDENSED_FIELDS, VALIDATION_CONDENSED_FIELDS)
+        and path.is_file()
+    ):
+        legacy = [
+            f
+            for f in fields
+            if f not in {"phase", "algorithm", "iteration", "global_step"}
+        ]
+        with path.open(encoding="utf-8", newline="") as stream:
+            if next(csv.reader(stream), []) == legacy:
+                return legacy
+    return None
+
+
 def model_metric_tables(project_root, model_name):
     directory = model_log_directory(project_root, model_name)
     for path in directory.glob("*.csv"):
         for suffix, fields in METRIC_SCHEMAS.items():
             if path.name.endswith(suffix):
-                yield path, fields
+                yield path, _legacy_condensed_fields(path, fields) or fields
                 break
 
 
@@ -248,13 +276,10 @@ class _CsvAppender:
     def append(self, rows: Iterable[Mapping[str, Any]], *, durable: bool) -> None:
         row_group = [dict(row) for row in rows]
         if "schema_version" in self.fields:
+            expected = _metric_version(self.fields)
             for row in row_group:
-                version = row.setdefault(
-                    "schema_version", ContractVersions.METRICS_SCHEMA
-                )
-                require_contract_version(
-                    "metrics schema", version, ContractVersions.METRICS_SCHEMA
-                )
+                version = row.setdefault("schema_version", expected)
+                require_contract_version("metrics schema", version, expected)
         if not row_group:
             return
         with self.path.open("a", encoding="utf-8", newline="") as file:
@@ -307,6 +332,18 @@ class StructuredMetricWriters:
         self.validation_path = Path(f"{prefix}-validation.csv")
         self.validation_full_path = Path(f"{prefix}-validation-full.csv")
         self.class_share_path = Path(f"{prefix}-validation-class-shares.csv")
+        # Recovery offsets refer to bytes. Leave legacy files in place and start
+        # a companion table for observations that use the expanded header.
+        self._legacy_tables = []
+        for attr, fields in (
+            ("training_path", TRAINING_CONDENSED_FIELDS),
+            ("validation_path", VALIDATION_CONDENSED_FIELDS),
+        ):
+            path = getattr(self, attr)
+            if legacy := _legacy_condensed_fields(path, fields):
+                self._legacy_tables.append((path, legacy))
+                suffix = path.name.removeprefix(prefix.name)
+                setattr(self, attr, prefix.with_name(f"{prefix.name}.phases{suffix}"))
         self._training: _CsvAppender | None = _CsvAppender(
             self.training_path, TRAINING_CONDENSED_FIELDS
         )
@@ -328,6 +365,7 @@ class StructuredMetricWriters:
 
     def _tables(self):
         return (
+            *self._legacy_tables,
             (self.training_path, TRAINING_CONDENSED_FIELDS),
             (self.training_full_path, TRAINING_FIELDS),
             (self.validation_path, VALIDATION_CONDENSED_FIELDS),
@@ -343,6 +381,12 @@ class StructuredMetricWriters:
 
     def restore_positions(self, run_id, positions):
         """Remove this run's uncommitted suffix, preserving other runs' rows."""
+        if self._legacy_tables and positions:
+            positions = {
+                self.training_path.name: 0,
+                self.validation_path.name: 0,
+                **positions,
+            }
         restore_metric_positions(self._tables(), run_id, positions)
 
     @beartype
@@ -430,9 +474,7 @@ class StructuredMetricWriters:
 
         total_value = _metric_value(total_loss)
         condensed = {
-            "run_id": run_id,
-            "epoch": epoch,
-            "batch": batch,
+            **{field: common[field] for field in CONDENSED_PROGRESS},
             "metric": "loss",
             "value": total_value,
             "learning_rate": float(learning_rate),
@@ -532,9 +574,7 @@ class StructuredMetricWriters:
         baseline_value = _metric_value(baseline_loss)
         condensed = [
             {
-                "run_id": run_id,
-                "epoch": epoch,
-                "batch": batch,
+                **{field: common[field] for field in CONDENSED_PROGRESS},
                 "metric": metric,
                 "value": value,
             }
@@ -681,7 +721,7 @@ class StructuredMetricWriters:
         )
         condensed.append(
             [
-                {key: row.get(key, "") for key in fields}
+                {key: row[key] for key in fields if key != "schema_version"}
                 for row in rows
                 if row["is_primary"]
             ],

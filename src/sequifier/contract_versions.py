@@ -15,6 +15,7 @@ class ContractVersions:
     PHASE_REPORT = 100
     RUN_MANIFEST = 100
     METRICS_SCHEMA = 100
+    CONDENSED_METRICS_SCHEMA = 101
 
     INITIALIZATION_POLICY = 100
     INITIALIZATION_SEED_DERIVATION = 100
@@ -42,6 +43,7 @@ class ContractVersions:
     MODEL_EXECUTION_SCHEMA = 100
     EXPORT_PREFLIGHT = 101
     INFERENCE_WORKSPACE = 100
+    POLICY_INPUT_LAYOUT = 100
     POLICY_PREDICTION_TABLE = 102
 
     # Algorithm and implementation identities used in fingerprints and seeds.

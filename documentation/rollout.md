@@ -94,7 +94,9 @@ The top-level reward is the raw environment reward. Immutable intermediate shard
 remain available to resume older checkpoints.
 
 Each decision has an integer `sequenceId` and an `itemPosition`. `sequenceName`
-carries the external episode identity and `__group` associates related samples,
+carries the external episode identity. On import, `episode_namespace` prefixes this
+label. The trajectory JSON and sequence manifest retain the same integer coordinates.
+The `__group` column associates related samples,
 such as GRPO siblings. For inference rollouts, both trajectory JSON and sequence
 manifests group runs seeded from the same dataset, sequence ID, and item position. A PPO update boundary can split a sequence across shards.
 Rows carry the current observation, static fields, raw reward, recorded successor
