@@ -212,6 +212,23 @@ class TrainingSources:
                     path = indexed.metadata_path
                     metadata = indexed.metadata()
                 elif (
+                    isinstance(spec, SequencePartSpecModel)
+                    and spec.format in {"auto", "prepared"}
+                    and len(spec.paths) == 1
+                    and is_indexed_view(root / spec.paths[0])
+                ):
+                    indexed = self.indexed_view(spec.paths[0])
+                    path = indexed.metadata_path
+                    if (
+                        spec.metadata_config_path
+                        and (root / spec.metadata_config_path).resolve()
+                        != path.resolve()
+                    ):
+                        raise ValueError(
+                            "Indexed sources resolve metadata from the view"
+                        )
+                    metadata = indexed.metadata()
+                elif (
                     isinstance(spec, (DatasetPartSpecModel, SequencePartSpecModel))
                     and spec.metadata_config_path
                 ):
@@ -407,6 +424,13 @@ class TrainingSources:
                 source = SequenceSourceConfig.model_validate(
                     part.model_dump(exclude={"type"})
                 )
+                if record.indexed is not None:
+                    source = source.model_copy(
+                        update={
+                            "format": "prepared",
+                            "metadata_config_path": str(record.indexed.metadata_path),
+                        }
+                    )
             elif (view := record.indexed) is not None:
                 source = SequenceSourceConfig(
                     paths=[str(view.path)],

@@ -496,6 +496,24 @@ class IndexedView:
     def split_bounds(self):
         return {sequence: (low, high) for sequence, low, high in self.view["ranges"]}
 
+    def history_start(self, sequence, low, high, requested):
+        split = int(self.view["view"])
+        metadata = self._metadata
+        alignment = PredictionAlignment.for_split(metadata, split)
+        if alignment is None:
+            return max(low, requested)
+        width = metadata.width_for_split(split)
+        placement = WindowPlacement.for_split(
+            self.dataset["sequences"][str(sequence)]["position"],
+            low,
+            high,
+            width,
+            getattr(metadata, "window_stride", None) or width,
+            alignment,
+            end=1,
+        )
+        return max(requested, int(placement.starts[0] + placement.padding[0]))
+
     @property
     def is_fitting_split(self) -> bool:
         return (

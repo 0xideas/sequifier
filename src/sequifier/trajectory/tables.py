@@ -143,7 +143,10 @@ class IndexedEpisodeTable:
 
     def load(self, identity):
         start, end = self.ranges[identity]
-        rows = self.view.read(identity, start - self.context_length, end)
+        history = self.view.history_start(
+            identity, start, end, start - self.context_length
+        )
+        rows = self.view.read(identity, history, end)
         record = self.view.dataset["sequences"][str(identity)]
         for field, column in (
             ("episode_id", SEQUENCE_NAME_COLUMN),

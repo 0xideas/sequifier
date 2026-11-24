@@ -135,7 +135,16 @@ def resolve_source(
     if kind == "auto":
         suffixes = {path.resolve().suffix.lower() for path in paths}
         if suffixes <= {".json"}:
-            kind = "trajectory"
+            from sequifier.io.indexed_sequences import is_indexed_view
+
+            if any(is_indexed_view(path) for path in paths):
+                if len(paths) != 1:
+                    raise ValueError(
+                        "An indexed sequence source requires exactly one split manifest"
+                    )
+                kind = "prepared"
+            else:
+                kind = "trajectory"
         elif suffixes <= {".csv", ".parquet"}:
             kind = "table"
         elif suffixes == {".pt"}:

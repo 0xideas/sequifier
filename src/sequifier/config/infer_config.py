@@ -468,7 +468,10 @@ def _policy_training_route(values):
     if part.metadata_path is not None:
         values.setdefault("metadata_config_path", str(part.metadata_path.resolve()))
     if not values.get("data_path"):
-        if part.spec.type not in {"indexed_sequence", "prepared"}:
+        if part.indexed is None and part.spec.type not in {
+            "indexed_sequence",
+            "prepared",
+        }:
             raise ValueError(
                 "A policy training route requires a prepared view or explicit input.path"
             )

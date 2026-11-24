@@ -26,7 +26,7 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
     split_index = (
         metadata.named_split_index(source.declaration.split)
         if source.declaration.split is not None
-        else None
+        else metadata.split_index
     )
 
     identities = getattr(metadata, "sequence_identities", {})
@@ -37,17 +37,25 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
                 path, layouts=metadata.depth_layouts, n_classes=metadata.n_classes
             )
         else:
-            window_length = (
-                metadata.width_for_split(split_index)
-                if split_index is not None
-                else metadata.window_length
-            )
             data = read_data(str(path), path.suffix.lower().lstrip("."))
             if "inputCol" not in data.columns:
                 raise ValueError(
                     f"{path}: expected prepared sequence windows with inputCol. "
                     "For fresh inference rows, select input.layout: raw and supply "
                     "input.metadata_config_path."
+                )
+            steps = {name for name in data.columns if name.isdigit()}
+            window_length = len(steps)
+            allowed = (
+                [metadata.width_for_split(split_index)]
+                if split_index is not None
+                else metadata.window_lengths or [metadata.window_length]
+            )
+            if window_length not in allowed or steps != {
+                str(index) for index in range(window_length)
+            }:
+                raise ValueError(
+                    f"{path}: stored timestep columns disagree with preprocessing widths {allowed}"
                 )
             batch = tabular_tensor_batch(
                 data,

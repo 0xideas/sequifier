@@ -183,6 +183,8 @@ def _indexed_policy_frames(view, spec, config):
             continue
         start, end = bounds.get(sequence, (None, None))
         read_start = _context_start(start, spec)
+        if not predict:
+            read_start = view.history_start(sequence, start, end, read_start)
         rows = view.read(sequence, read_start, end)
         rows, previous = _prepared_frame(
             rows, sequence, start, static, media, metadata, spec, config
