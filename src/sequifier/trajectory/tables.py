@@ -714,7 +714,7 @@ def table_episodes(resolved: ResolvedSequenceSource, policy: PolicyEpisodeSpec):
         source.columns.static_inputs
     ) - set(policy.static_columns):
         raise ValueError("table columns must name declared policy features")
-    static_path, image_store = resolved.static_path, None
+    static_path, image_store = resolved.static_path, resolved.image_store
     if view is not None:
         provenance = view.dataset.get("provenance", {})
         policy.validate_source_units(provenance.get("policy_binding", {}).get("units"))

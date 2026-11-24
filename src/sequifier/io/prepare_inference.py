@@ -16,6 +16,13 @@ from sequifier.io.indexed_sequences import (
     IndexedView,
     is_indexed_view,
 )
+from sequifier.io.sequence import CONTEXT_COLUMN, OBSERVATION_MASK
+
+
+def is_sequence_input(path, read_format):
+    return path.is_file() and (
+        read_format == "sequence" or path.suffix.lower() == ".json"
+    )
 
 
 def prepare_inference(config, *, required_columns=(), optional_passthrough=()):
@@ -44,9 +51,11 @@ def _prepare_inference(
     passthrough_columns,
     optional_passthrough,
     num_workers=1,
+    sequence_table=None,
 ):
     from sequifier.preprocess import Preprocessor, _folder_input_files
 
+    sequence_view = getattr(config, "sequence_view", "decisions")
     metadata_path = root / config.metadata_config_path
     original_contents = metadata_path.read_bytes()
     metadata = load_dataset_metadata(str(metadata_path))
@@ -54,12 +63,58 @@ def _prepare_inference(
         raise ValueError(
             "The original preprocessing metadata changed during preparation"
         )
+    persisted_mask = metadata.raw_mask_column
+    if persisted_mask is not None and config.mask_column not in (None, persisted_mask):
+        raise ValueError("mask_column differs from the original preprocessing metadata")
+    mask_column = config.mask_column or persisted_mask
+    if sequence_table is None and is_sequence_input(raw_path, read_format):
+        from sequifier.trajectory.sequence_output import supervised_manifest_input
+        from sequifier.trajectory.tables import ACTION_RECORD, PREVIOUS_ACTION_RECORD
+
+        with supervised_manifest_input(
+            raw_path,
+            sequence_view,
+            mask_column=mask_column,
+            indexed_passthrough=passthrough_columns,
+            optional_passthrough=(
+                *optional_passthrough,
+                ACTION_RECORD,
+                PREVIOUS_ACTION_RECORD,
+                CONTEXT_COLUMN,
+                *(
+                    [metadata.time_alignment_column]
+                    if metadata.time_alignment_column
+                    else []
+                ),
+            ),
+        ) as table:
+            return _prepare_inference(
+                config,
+                root=root,
+                raw_path=raw_path,
+                destination=destination,
+                read_format="parquet",
+                required_columns=required_columns,
+                passthrough_columns=passthrough_columns,
+                optional_passthrough=optional_passthrough,
+                num_workers=num_workers,
+                sequence_table=table,
+            )
+    if sequence_table is None and sequence_view != "decisions":
+        raise ValueError(
+            "sequence_view observations requires a sequence manifest or trajectory"
+        )
     read_format = read_format or raw_path.suffix.lower().lstrip(".")
     if read_format not in {"csv", "parquet"}:
         raise ValueError("Fresh raw folders require read_format: csv or parquet")
     static_path = (
         str(root / config.static_data_path) if config.static_data_path else None
     )
+    manifest = None
+    if sequence_table is not None:
+        raw_path, manifest, recorded_static = sequence_table
+        if static_path is None and recorded_static is not None:
+            static_path = str(recorded_static)
     files = (
         [str(raw_path)]
         if raw_path.is_file()
@@ -70,7 +125,7 @@ def _prepare_inference(
     scan = pl.scan_csv if read_format == "csv" else pl.scan_parquet
     schemas = [scan(file).collect_schema() for file in files]
     available = set.intersection(*(set(schema.names()) for schema in schemas))
-    from sequifier.io.sequence import DOMAIN_OBSERVATIONS, DOMAIN_STATIC
+    from sequifier.io.sequence import DOMAIN_CONTEXT, DOMAIN_OBSERVATIONS, DOMAIN_STATIC
 
     if any(
         {DOMAIN_OBSERVATIONS, DOMAIN_STATIC}.intersection(schema) for schema in schemas
@@ -88,6 +143,10 @@ def _prepare_inference(
                 f"Auxiliary columns must occur in every input file: {sorted(partial)}"
             )
     passthrough = set(passthrough_columns) | ((optional & available) - required_columns)
+    if sequence_table is not None:
+        from sequifier.trajectory.tables import ACTION_RECORD, PREVIOUS_ACTION_RECORD
+
+        passthrough.update({ACTION_RECORD, PREVIOUS_ACTION_RECORD} & available)
     if conflicts := passthrough & required_columns:
         raise ValueError(
             f"Raw auxiliary columns also used as model inputs: {sorted(conflicts)}"
@@ -104,16 +163,8 @@ def _prepare_inference(
         .lower()
         .startswith(("date", "datetime"))
     ]
-    image_sources, prefix = bind_image_paths(
-        metadata.image_sources,
-        metadata.preconditioning_image,
-        config.image_paths,
-        config.preconditioning_image_paths,
-    )
-    persisted_mask = metadata.raw_mask_column
-    if persisted_mask is not None and config.mask_column not in (None, persisted_mask):
-        raise ValueError("mask_column differs from the original preprocessing metadata")
-    mask_column = config.mask_column or persisted_mask
+    if manifest is not None and manifest.get("masked_observations"):
+        mask_column = mask_column or OBSERVATION_MASK
     if mask_column and mask_column not in available:
         raise ValueError(
             f"Fresh data is missing the original mask column {mask_column!r}"
@@ -121,6 +172,51 @@ def _prepare_inference(
     if any(not schema["sequenceId"].is_integer() for schema in schemas):
         raise ValueError("sequenceId must contain non-null integers")
     depth = bool(metadata.depth_layouts)
+    if manifest is not None and CONTEXT_COLUMN in available:
+        path = raw_path.with_name("context-" + raw_path.name)
+        _prepare_recorded_context(
+            raw_path, path, metadata, manifest.get("observation_columns", ())
+        )
+        raw_path = path
+        passthrough.update((CONTEXT_COLUMN, DOMAIN_CONTEXT))
+    media_columns = {
+        key
+        for name in metadata.image_sources
+        for key in (f"__image:{name}", f"__image_mask:{name}")
+    }
+    inline_media = False
+    if (
+        sequence_table is not None
+        and (media_columns or metadata.preconditioning_image)
+        and not (config.image_paths or config.preconditioning_image_paths)
+    ):
+        from sequifier.io.indexed_sequences import PREFIX_IMAGE
+        from sequifier.trajectory.tables import scan_tables
+
+        prefix_available = metadata.preconditioning_image is None or (
+            static_path
+            and PREFIX_IMAGE in scan_tables((Path(static_path),)).collect_schema()
+        )
+        inline_media = bool(media_columns <= available and prefix_available)
+    if sequence_table is not None and (depth or inline_media):
+        _prepare_structured_rollout(
+            raw_path,
+            static_path,
+            destination,
+            original_contents,
+            metadata,
+            temporal_columns,
+            passthrough,
+            mask_column,
+            inline_media,
+        )
+        return IndexedView.load(destination / "predict.split.json")
+    image_sources, prefix = bind_image_paths(
+        metadata.image_sources,
+        metadata.preconditioning_image,
+        config.image_paths,
+        config.preconditioning_image_paths,
+    )
     with IndexedSequenceWriter(destination) as writer:
         snapshot = writer.root / "original-metadata.json"
         snapshot.write_bytes(original_contents)
@@ -153,11 +249,186 @@ def _prepare_inference(
                 "time_alignment_column": metadata.time_alignment_column,
                 "mask_column": mask_column,
                 "indexed_output_path": str(destination),
-                "indexed_passthrough": sorted(passthrough),
+                "indexed_passthrough": sorted(set(passthrough_columns)),
             }
         )
+        options.indexed_passthrough = sorted(passthrough)
         Preprocessor(options).run(indexed_writer=writer, indexed_prediction=True)
     return IndexedView.load(destination / "predict.split.json")
+
+
+def _prepare_recorded_context(source, destination, metadata, observations):
+    """Retain domain history for rollouts and encode history for policy prediction."""
+    from sequifier.io.prepare_policy import _mask_features
+    from sequifier.io.sequence import CONTEXT_COLUMN, CONTEXT_RECORDS, DOMAIN_CONTEXT
+
+    columns = [name for name in observations if name in metadata.column_data_types]
+
+    def encode(payload):
+        context = CONTEXT_RECORDS.validate_json(payload)
+        if not context:
+            return payload
+        rows = pl.DataFrame([step.observation for step in context])
+        active = [name for name in columns if name in rows.columns]
+        encoded, fitted = _encode_recorded_features(rows, active, metadata)
+        encoded = encoded.with_columns(
+            pl.Series(OBSERVATION_MASK, [step.masked for step in context])
+        )
+        encoded = _mask_features(encoded, active, fitted, metadata.depth_layouts).drop(
+            OBSERVATION_MASK
+        )
+        return CONTEXT_RECORDS.dump_json(
+            tuple(
+                step.model_copy(update={"observation": row})
+                for step, row in zip(context, encoded.to_dicts(), strict=True)
+            )
+        ).decode()
+
+    pl.scan_parquet(source).with_columns(
+        pl.col(CONTEXT_COLUMN).alias(DOMAIN_CONTEXT),
+        pl.col(CONTEXT_COLUMN).map_elements(encode, return_dtype=pl.String),
+    ).sink_parquet(destination)
+
+
+def _encode_recorded_features(rows, columns, metadata):
+    from sequifier.io.feature_fitting import FittedColumns
+    from sequifier.io.prepare_policy import _encoded_observation
+
+    layouts = metadata.depth_layouts
+    fitted = FittedColumns.from_metadata(columns, dict(metadata))
+    encoded = rows.with_columns(
+        _encoded_observation(
+            rows,
+            name,
+            "",
+            layouts,
+            fitted.column_transform(
+                name,
+                rows.schema[name].inner
+                if layouts.is_deep_column(name)
+                else rows.schema[name],
+                metadata.normalize_real_columns,
+                metadata.cardinality_config,
+            ),
+        )
+        for name in columns
+    )
+    return encoded, fitted
+
+
+def _prepare_structured_rollout(
+    source,
+    static_path,
+    destination,
+    original,
+    metadata,
+    columns,
+    passthrough,
+    mask_column,
+    inline_media,
+):
+    from sequifier.config.depth_layout import depth_mask_metadata_key
+    from sequifier.io.indexed_sequences import PREFIX_IMAGE
+    from sequifier.io.prepare_policy import _mask_features
+    from sequifier.io.sequence import (
+        DOMAIN_OBSERVATIONS,
+        DOMAIN_STATIC,
+        with_domain_record,
+    )
+    from sequifier.trajectory.tables import IndexedTable, observation_mask, scan_tables
+
+    if (metadata.image_sources or metadata.preconditioning_image) and not inline_media:
+        raise ValueError(
+            "Structured rollout preparation requires the recorded image inputs"
+        )
+    layouts = metadata.depth_layouts.relevant_layouts(columns)
+    extra = [depth_mask_metadata_key(name) for name in layouts.root]
+    extra.extend(
+        key
+        for name in metadata.image_sources
+        for key in (f"__image:{name}", f"__image_mask:{name}")
+    )
+    scan = pl.scan_parquet(source)
+    mask = observation_mask(scan, mask_column)
+    schema = scan.collect_schema()
+    required = {*extra, *columns, *passthrough}
+    if missing := required - set(schema.names()):
+        raise ValueError(f"Rollout lacks structured input columns: {sorted(missing)}")
+    data = scan.with_columns(mask.alias(OBSERVATION_MASK)).select(
+        "sequenceId",
+        "itemPosition",
+        OBSERVATION_MASK,
+        *sorted(required - {OBSERVATION_MASK}),
+    )
+    table = IndexedTable(data.sort("itemPosition"), "sequenceId")
+    static = scan_tables((Path(static_path),)).collect() if static_path else None
+    static_columns = metadata.static_columns
+    if static_columns or metadata.preconditioning_image:
+        required_static = [
+            *static_columns,
+            *([PREFIX_IMAGE] if metadata.preconditioning_image else []),
+        ]
+        if static is None or set(required_static) - set(static.columns):
+            raise ValueError(f"Rollout lacks static input columns: {required_static}")
+        if static["sequenceId"].n_unique() != len(static) or not set(
+            table.ranges
+        ) <= set(static["sequenceId"]):
+            raise ValueError("Static rollout inputs require one row per sequence")
+        static = with_domain_record(
+            static.select("sequenceId", *required_static), static_columns, DOMAIN_STATIC
+        )
+        static, _ = _encode_recorded_features(static, static_columns, metadata)
+    with IndexedSequenceWriter(destination) as writer:
+        snapshot = writer.root / "original-metadata.json"
+        snapshot.write_bytes(original)
+        if static is not None:
+            writer.write_static(static)
+        for sequence in table.ranges:
+            rows = with_domain_record(
+                table.load(sequence), columns, DOMAIN_OBSERVATIONS
+            )
+            encoded, fitted = _encode_recorded_features(rows, columns, metadata)
+            writer.add(_mask_features(encoded, columns, fitted, layouts), {})
+        prefix = metadata.preconditioning_image
+        writer.publish(
+            {
+                **dict(metadata),
+                "split_paths": ["predict.split.json"],
+                "split_names": ["predict"],
+                "indexed_views": ["predict"],
+                "prediction_aligned_splits": [],
+                "fit_split_indices": [],
+                "window_lengths": None,
+                "split_index": None,
+                "split_ratios": None,
+                "split_column": None,
+                "split_values": None,
+                "indexed_curriculum_columns": [],
+                "indexed_passthrough": sorted(passthrough),
+                "indexed_derived_features": [],
+                "depth_layouts": layouts,
+                "static_features_path": "static.parquet"
+                if static is not None
+                else None,
+                "indexed_inline_media": inline_media,
+                "raw_mask_column": mask_column,
+                "image_sources": {
+                    name: config.compatibility_signature()
+                    for name, config in metadata.image_sources.items()
+                },
+                "preconditioning_image": prefix.model_copy(
+                    update={
+                        "paths": None,
+                        "view_names": sorted(prefix.views),
+                        "signature": None,
+                    }
+                )
+                if prefix
+                else None,
+            },
+            feature_columns=columns,
+            original_metadata=snapshot,
+        )
 
 
 def resolve_inference_view(config, *, skip_metadata=False):
@@ -203,7 +474,9 @@ def fresh_view_from_raw(
             root=root,
             raw_path=raw_path,
             destination=Path(temporary) / "dataset",
-            read_format=config.read_format if raw_path.is_dir() else None,
+            read_format=config.read_format
+            if raw_path.is_dir() or config.read_format == "sequence"
+            else None,
             required_columns=required_columns,
             passthrough_columns=passthrough_columns,
             optional_passthrough=optional_passthrough,

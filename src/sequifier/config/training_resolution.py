@@ -886,6 +886,21 @@ def resolve_training_run(
         if binding is None and source is not None and not history_only:
             binding = source.interface(interface_name).policy
         dataset.validate_policy_units(binding)
+        if binding is not None and metadata_by_part is not None:
+            from sequifier.config.column_names import validate_policy_column_types
+
+            interface = config.model.interfaces[interface_name]
+            columns = set(interface.feature_selection.columns)
+            for part in dataset.sources:
+                metadata = metadata_by_part.get(f"{dataset_name}.{part}")
+                if metadata is not None:
+                    validate_policy_column_types(
+                        {
+                            name: dtype
+                            for name, dtype in metadata.column_data_types.items()
+                            if name in columns
+                        }
+                    )
 
     sources = TrainingSources(config, root, metadata_by_part)
     metadata_paths = {

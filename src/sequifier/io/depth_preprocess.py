@@ -15,11 +15,16 @@ from typing import Generator
 
 import numpy as np
 import polars as pl
+import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 from loguru import logger
 
-from sequifier.config.depth_layout import DepthLayoutModel, DepthLayoutRegistryModel
+from sequifier.config.depth_layout import (
+    DepthLayoutModel,
+    DepthLayoutRegistryModel,
+    depth_mask_metadata_key,
+)
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import file_checksum
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES
@@ -418,6 +423,51 @@ def _validated_item_rows(item, columns, shallow, layout, curriculum_columns):
         sorted(values),
         next(iter(sample_positions)) if sample_positions else None,
     )
+
+
+def collapse_depth_table(source, destination, name, layout):
+    """Convert ordered child rows into the canonical masked decision layout."""
+    schema = pq.read_schema(source)
+    coordinates = {"sequenceId", "itemPosition", layout.position_column}
+    deep = set(layout.columns)
+    shallow = [column for column in schema.names if column not in coordinates | deep]
+    mask_key = depth_mask_metadata_key(name)
+    if mask_key in schema.names:
+        raise ValueError(f"Raw child rows cannot also supply {mask_key}")
+    fields = [
+        pa.field(field.name, pa.list_(field.type)) if field.name in deep else field
+        for field in schema
+        if field.name != layout.position_column
+    ]
+    fields.append(pa.field(mask_key, pa.list_(pa.bool_())))
+    result_schema = pa.schema(fields)
+    with pq.ParquetWriter(destination, result_schema) as writer:
+        pending = []
+        for item in _file_items(
+            str(source), "parquet", schema.names, layout.max_depth_length
+        ):
+            children, _ = _validated_item_rows(item, layout.columns, (), layout, ())
+            row = {column: item.rows[0][column] for column in shallow}
+            if any(
+                any(child[column] != value for column, value in row.items())
+                for child in item.rows[1:]
+            ):
+                raise ValueError(
+                    f"Shallow values disagree for outer item {(item.sequence_id, item.position)}"
+                )
+            row.update(sequenceId=item.sequence_id, itemPosition=item.position)
+            for column in layout.columns:
+                row[column] = [children[0][1][column]] * layout.max_depth_length
+                for slot, child in children:
+                    row[column][slot] = child[column]
+            slots = {slot for slot, _ in children}
+            row[mask_key] = [slot in slots for slot in range(layout.max_depth_length)]
+            pending.append(row)
+            if len(pending) == 1024:
+                writer.write_table(pa.Table.from_pylist(pending, schema=result_schema))
+                pending.clear()
+        if pending:
+            writer.write_table(pa.Table.from_pylist(pending, schema=result_schema))
 
 
 @dataclass(frozen=True)

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
@@ -10,6 +11,9 @@ from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import fingerprint
 from sequifier.trajectory.store import load_trajectory
+
+if TYPE_CHECKING:
+    from sequifier.io.images import ImageStore
 
 
 def _source_files(source, root, metadata, dependencies):
@@ -80,6 +84,7 @@ class ResolvedSequenceSource:
     static_path: Path | None
     dependencies: DependencyManifest
     manifest: dict | None = None
+    image_store: "ImageStore | None" = None
 
     @cached_property
     def cache_key(self) -> str:

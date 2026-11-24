@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
+from sequifier.config.column_names import validate_column_names
 from sequifier.config.command_ownership import InferenceRunSettings
 from sequifier.config.naming import ConfigModel
 from sequifier.helpers import normalize_path
@@ -32,8 +33,10 @@ class InferenceExecutionConfig(ConfigModel):
     metadata_config_path: str | None = None
     split: str | None = None
     input_layout: Literal["auto", "raw", "indexed"] = "auto"
+    sequence_view: Literal["decisions", "observations"] = "decisions"
     static_data_path: str | None = None
     mask_column: str | None = None
+    _sequence_dependencies: tuple[str, ...] | None = PrivateAttr(default=None)
 
     if TYPE_CHECKING:
         data_path: Any
@@ -43,12 +46,21 @@ class InferenceExecutionConfig(ConfigModel):
     @field_validator("read_format")
     @classmethod
     def validate_read_format(cls, v: str) -> str:
-        if v not in ["csv", "parquet", "pt"]:
+        if v not in ["csv", "parquet", "pt", "sequence"]:
             raise ValueError(
-                "Currently only 'csv', 'parquet' and 'pt' are supported for "
+                "Currently only 'csv', 'parquet', 'pt' and 'sequence' are supported for "
                 "inference input"
             )
         return v
+
+    @field_validator("mask_column")
+    @classmethod
+    def validate_mask_column(cls, value):
+        if value is not None:
+            validate_column_names(
+                [value], "mask_column", allowed=("__observation_mask",)
+            )
+        return value
 
     @field_validator("write_format")
     @classmethod
@@ -139,6 +151,29 @@ class InferenceExecutionConfig(ConfigModel):
         indexed = getattr(self, "_indexed_view", None)
         if indexed is not None:
             normalized.extend(str(path) for path in indexed.dependencies())
+        if (
+            self.input_layout == "raw"
+            and self.data_path
+            and self._sequence_dependencies is None
+        ):
+            from sequifier.io.prepare_inference import is_sequence_input
+
+            data_path = Path(self.project_root) / self.data_path
+            dependencies = ()
+            if is_sequence_input(data_path, self.read_format):
+                from sequifier.config.policy_train_config import SequenceSourceConfig
+                from sequifier.trajectory.sources import resolve_source
+
+                with data_path.open(encoding="utf-8") as stream:
+                    kind = json.load(stream).get("format")
+                if kind == "sequifier.sequence-data":
+                    source = resolve_source(
+                        SequenceSourceConfig(manifest_path=str(data_path.resolve())),
+                        data_path.parent,
+                    )
+                    dependencies = tuple(source.dependencies.identity)
+            self._sequence_dependencies = dependencies
+        normalized.extend(self._sequence_dependencies or ())
         return normalized
 
 

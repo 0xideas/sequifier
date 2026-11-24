@@ -8,6 +8,7 @@ from sequifier.config.cardinality import (
     CardinalityHashingModel as CardinalityHashingModel,
 )
 from sequifier.config.cardinality import CardinalityLimitModel
+from sequifier.config.column_names import validate_column_names
 from sequifier.config.command_ownership import (
     CommandRunSettings,
     PreprocessingRunSettings,
@@ -79,12 +80,26 @@ class PrepareInferenceConfig(ConfigModel):
     preprocessing_data_path: str
     metadata_config_path: str
     output_path: str
-    read_format: Literal["csv", "parquet"] | None = None
+    read_format: Literal["csv", "parquet", "sequence"] | None = None
+    sequence_view: Literal["decisions", "observations"] = "decisions"
     static_data_path: str | None = None
     passthrough_columns: list[str] = Field(default_factory=list)
     image_paths: dict[str, str] = Field(default_factory=dict)
     preconditioning_image_paths: dict[str, str] | None = None
     mask_column: str | None = None
+
+    @model_validator(mode="after")
+    def validate_column_roles(self):
+        validate_column_names(
+            self.passthrough_columns,
+            "passthrough_columns",
+            allowed=("__collection", "__executed_action", "__previous_action"),
+        )
+        if self.mask_column:
+            validate_column_names(
+                [self.mask_column], "mask_column", allowed=("__observation_mask",)
+            )
+        return self
 
 
 class PreprocessorModel(SequencePreprocessingSettings):
@@ -143,6 +158,34 @@ class PreprocessorModel(SequencePreprocessingSettings):
     def validate_resources(self):
         from sequifier.io.sample_order import curriculum_columns
 
+        for field in (
+            "selected_columns",
+            "column_data_types",
+            "categorical_columns",
+            "real_columns",
+            "cardinality_config",
+            "use_precomputed_maps",
+            "static_categorical_columns",
+            "static_real_columns",
+        ):
+            validate_column_names(
+                getattr(self, field) or (), field, prefixes=("__executed_",)
+            )
+        validate_column_names(
+            self.indexed_passthrough,
+            "indexed_passthrough",
+            allowed=("__collection", "__executed_action", "__previous_action"),
+        )
+        for field in ("split_column", "time_alignment_column", "mask_column"):
+            if name := getattr(self, field):
+                validate_column_names(
+                    [name],
+                    field,
+                    allowed=("__observation_mask",) if field == "mask_column" else (),
+                )
+        validate_column_names(
+            curriculum_columns(self.curriculum_column), "curriculum_column"
+        )
         if self.indexed_passthrough and self.indexed_output_path is None:
             raise ValueError("indexed_passthrough requires indexed_output_path")
         passthrough = set(self.indexed_passthrough)

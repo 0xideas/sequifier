@@ -384,6 +384,9 @@ input: {path: data/new-events-indexed/predict.split.json}
 
 Both paths apply the same frozen maps, casting rules, and statistics. The
 prepared manifest carries a snapshot of the original metadata.
+Rollout manifests also work with `input.layout: raw` and the original metadata.
+Use `input.format: sequence` for a manifest without a `.json` suffix.
+Set `input.sequence_view: observations` to include recorded final successors.
 
 For policy prediction, the direct and prepared paths use the same categorical
 lookup and numeric normalization. An unseen category in an ordinary vocabulary
@@ -391,8 +394,9 @@ maps to `[other]` (ID 1). When preparing a policy view explicitly, list recorded
 action columns used for lagged feedback in `passthrough_columns` to preserve
 their original values. Raw policy inference preserves named actions and the canonical
 `__executed_action` and `__previous_action` structs when feedback is used.
-For explicit preparation, list those structs in `passthrough_columns` when the
-rollout table uses them. Both forecast and policy inference treat automatic-layout
+Both routes preserve those structs automatically when reading a rollout manifest.
+For a standalone table, list the needed structs in `passthrough_columns` during
+explicit preparation. Both forecast and policy inference treat automatic-layout
 tables as prepared windows. For fresh rows, use `input.layout: raw`, integer
 `sequenceId` and `itemPosition`, and the original metadata. For an actor trained
 directly on demonstrations, `sequifier preprocess` with `operation: export_metadata`

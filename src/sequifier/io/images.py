@@ -44,6 +44,18 @@ def _civil_milliseconds(value: datetime) -> int:
     return delta.days * 86_400_000 + delta.seconds * 1000 + delta.microseconds // 1000
 
 
+def item_time_mode(value: Any) -> str:
+    if value is None:
+        raise ValueError("time_alignment_column cannot contain null")
+    if isinstance(value, (date, datetime)):
+        return "absolute"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return "absolute" if len(str(value)) == 17 else "relative"
+    if isinstance(value, str):
+        return "relative" if len(value) == 9 and value.isdigit() else "absolute"
+    raise ValueError(f"Invalid time_alignment_column value: {value!r}")
+
+
 def _time_ms(value: Any, *, absolute: bool) -> int:
     """Convert a civil timestamp or a clock duration to milliseconds.
 

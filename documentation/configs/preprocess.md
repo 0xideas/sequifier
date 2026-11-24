@@ -617,6 +617,18 @@ Use `operation: prepare_policy` for policy demonstrations. It takes the same
 `source` and `policy_binding` declarations as `import_sequences`, and adds
 named splits, per-split window lengths, `window_stride`, prediction alignment, and optional overrides
 for categorical and real feature roles. Set `indexed_output_path` for the indexed store.
+Use `selected_columns` to choose temporal features, `static_data_path` and
+the static column roles for per-sequence features, and `curriculum_column` to
+retain curriculum positions on supervised windows read from the same store.
+`column_data_types` accepts `Float32` for real policy features and integer
+dtypes for categorical IDs. Unspecified real columns are stored as `Float32`
+when fitting a new policy dataset. A supplied dtype must agree with the
+original dtype when reusing frozen preprocessing metadata.
+`depth_layouts` accepts the same repeated child rows as supervised preprocessing.
+Policy sequence tables may also provide one list and depth mask per item.
+Image configuration uses `image_sources`, `preconditioning_image`, and
+`time_alignment_column`. Prepared policy stores write aligned media with the
+items and preconditioning images with the static values.
 Set `mask_column` to the raw observation mask, for example `hide`. Either that
 column or the canonical `__observation_mask` can hide a row. Masked observations
 are excluded from feature fitting. Set `indexed_passthrough` to retain auxiliary
@@ -698,6 +710,10 @@ output_path: data/new-events-indexed
 Pass `static_data_path` and media locations when the raw layout requires them.
 Use `passthrough_columns` for auxiliary policy inputs such as a desired-return
 column that is absent from the training feature metadata.
+You can point `preprocessing_data_path` at a rollout manifest and reuse the same
+frozen metadata. Use `read_format: sequence` for a manifest without a `.json`
+suffix. The default `sequence_view: decisions` keeps its decision rows.
+`sequence_view: observations` also includes each recorded final successor.
 
 For a policy artifact created before explicit preprocessing was available,
 `operation: export_metadata` takes `model_path`, optional `model_interface`,
@@ -707,3 +723,7 @@ metadata JSON that can be used with both fresh-data inference routes.
 ## Rollout inputs
 
 Set `preprocessing_data_path` to the rollout manifest. The default `sequence_view: decisions` retains action-aligned rows. Use `sequence_view: observations` for observation histories including a recorded final successor. For `operation: prepare_policy`, use `source.manifest_path`. [Rollout configuration and examples](../rollout.md#reusing-rollout-data)
+
+Keep prediction coordinates and generated columns such as `action_log_probability`
+out of feature and action declarations. Dedicated mask, policy feedback, and
+passthrough options can refer to the recorded fields they consume.

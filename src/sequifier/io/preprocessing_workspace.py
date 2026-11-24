@@ -66,7 +66,9 @@ def preprocessing_workspace(destination, *, indexed, resume):
         shutil.rmtree(work)
 
 
-def indexed_preparation(config, destination, work, files, **ordered_fields):
+def indexed_preparation(
+    config, destination, work, files, *, exclude_settings=None, **ordered_fields
+):
     """Match both partial items and published views to the inputs that produced them."""
     if work is None:
         manifest = json.loads((destination / "dataset.json").read_text())
@@ -80,7 +82,12 @@ def indexed_preparation(config, destination, work, files, **ordered_fields):
     signature = fingerprint(
         {
             "settings": config.model_dump(
-                mode="json", exclude={"reprocess", "indexed_output_path"}
+                mode="json",
+                exclude={
+                    "reprocess": True,
+                    "indexed_output_path": True,
+                    **(exclude_settings or {}),
+                },
             ),
             "split_order": list(config.splits),
             **ordered_fields,

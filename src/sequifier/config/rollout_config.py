@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.column_names import validate_column_names
 from sequifier.config.naming import ConfigModel
 
 
@@ -13,6 +14,14 @@ class InputBinding(ConfigModel):
     input: str = Field(min_length=1)
     source: Literal["prediction", "environment"]
     key: str = Field(min_length=1)
+
+    @field_validator("input")
+    @classmethod
+    def validate_input(cls, value):
+        validate_column_names(
+            [value], "rollout bindings input", prefixes=("__executed_",)
+        )
+        return value
 
 
 class AdapterConfig(ConfigModel):

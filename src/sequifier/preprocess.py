@@ -59,7 +59,7 @@ from sequifier.io.feature_fitting import (
     configured_column_types,
     validate_cardinality_values,
 )
-from sequifier.io.images import _time_ms, media_files, validate_sources
+from sequifier.io.images import _time_ms, item_time_mode, media_files, validate_sources
 from sequifier.io.partitioning import (
     sequence_assignments,
     sequence_split_overrides,
@@ -1584,24 +1584,7 @@ class Preprocessor:
                     data = data.slice(0, remaining)
                 rows_read += data.height
                 for sequence_id, position, value in data.iter_rows():
-                    if value is None:
-                        raise ValueError("time_alignment_column cannot contain null")
-                    if isinstance(value, (date, datetime)):
-                        representation = "absolute"
-                    elif isinstance(value, int) and not isinstance(value, bool):
-                        representation = (
-                            "absolute" if len(str(value)) == 17 else "relative"
-                        )
-                    elif isinstance(value, str):
-                        representation = (
-                            "relative"
-                            if len(value) == 9 and value.isdigit()
-                            else "absolute"
-                        )
-                    else:
-                        raise ValueError(
-                            f"Invalid time_alignment_column value: {value!r}"
-                        )
+                    representation = item_time_mode(value)
                     if time_mode is not None and time_mode != representation:
                         raise ValueError(
                             "time_alignment_column must use one time representation"
