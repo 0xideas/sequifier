@@ -404,7 +404,6 @@ class PhaseSession:
         training,
         evaluate,
         checkpoint=None,
-        evaluation_record: dict | Callable[[], dict] | None = None,
     ):
         """Commit an offline update after all participating optimizers have stepped."""
         self.transaction += 1
@@ -415,12 +414,7 @@ class PhaseSession:
         )
         schedule = self.transaction_schedule(final)
         if schedule.evaluate:
-            extra = (
-                evaluation_record()
-                if callable(evaluation_record)
-                else evaluation_record
-            )
-            evaluate(**training, **(extra or {}))
+            evaluate()
         self.checkpoint(schedule, checkpoint)
         self.iteration_started = time.monotonic()
 

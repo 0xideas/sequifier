@@ -482,15 +482,18 @@ def table_episode(
             raise ValueError(f"{label} must remain constant within an episode")
         return entries[0]
 
-    raw_mask = getattr(policy, "raw_mask_column", None)
-    if OBSERVATION_MASK not in data.columns and raw_mask and raw_mask in data.columns:
+    raw_mask = policy.raw_mask_column
+    if raw_mask and raw_mask in data.columns:
         from sequifier.io.feature_fitting import mask_expression
 
-        data = data.with_columns(
-            mask_expression(data[raw_mask], data.schema[raw_mask], raw_mask).alias(
-                OBSERVATION_MASK
-            )
-        )
+        if data[raw_mask].null_count():
+            raise ValueError(f"Mask column {raw_mask} contains null values")
+        masked = mask_expression(data[raw_mask], data.schema[raw_mask], raw_mask)
+        if raw_mask != OBSERVATION_MASK and OBSERVATION_MASK in data.columns:
+            masked = masked | pl.col(OBSERVATION_MASK)
+        data = data.with_columns(masked.alias(OBSERVATION_MASK))
+    elif raw_mask and OBSERVATION_MASK not in data.columns:
+        raise ValueError(f"Missing observation mask column {raw_mask!r}")
     positions = tuple(data["itemPosition"])
     actions = tuple(action_at(row) for row in data.iter_rows(named=True))
     preceding = action_at(preceding_row) if preceding_row is not None else None

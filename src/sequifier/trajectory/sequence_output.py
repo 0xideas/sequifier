@@ -425,6 +425,14 @@ def supervised_manifest_input(
                 (pl.col("itemPosition") + 1).alias("itemPosition"),
                 *[pl.col("__next_" + c).alias(c) for c in observations],
             )
+            if (
+                mask_column
+                and mask_column not in columns
+                and mask_column in scan.collect_schema()
+            ):
+                # An auxiliary decision mask has no value on the appended successor.
+                columns.append(mask_column)
+                final = final.with_columns(pl.lit(False).alias(mask_column))
             scan = pl.concat(
                 [scan.select(columns), final.select(columns)], how="vertical_relaxed"
             )

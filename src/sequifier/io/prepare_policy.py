@@ -77,6 +77,8 @@ def _prepare_policy(config, writer):
     )
     resolved = config.resolved_source()
     policy = config.resolved_policy(resolved)
+    if frozen is not None:
+        policy = policy.model_copy(update={"raw_inputs": frozen})
     if config.initialize_from is None:
         policy = policy.model_copy(
             update={"context_length": max(config.window_lengths)}
@@ -414,7 +416,7 @@ def _prepare_policy(config, writer):
         if frozen
         else config.normalize_on_all_data,
         cardinality_config=cardinality,
-        raw_mask_column=frozen.raw_mask_column if frozen else None,
+        raw_mask_column=policy.raw_mask_column,
         static_columns=static,
         static_features_path="static.parquet" if static_rows else None,
         indexed_derived_features=derived,
