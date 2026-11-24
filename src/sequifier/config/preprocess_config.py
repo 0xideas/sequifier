@@ -47,11 +47,12 @@ def load_preprocessor_config(
     config_values, args_config = apply_run_overrides(config_values, args_config)
     config_values = merge_config_fragments((config_values, args_config))
 
-    if config_values.get("operation") == "import_sequences":
-        return SequenceImportConfig.model_validate(config_values)
-    if config_values.get("operation") == "prepare_policy":
+    operation = config_values.get("operation")
+    if operation in ("import_sequences", "prepare_policy"):
         if "preprocessing_data_path" in args_config:
             select_policy_input(config_values, config_values["preprocessing_data_path"])
+        if operation == "import_sequences":
+            return SequenceImportConfig.model_validate(config_values)
         return try_catch_excess_keys(config_path, PreparePolicyConfig, config_values)
     if config_values.get("operation") == "export_metadata":
         return try_catch_excess_keys(config_path, ExportMetadataConfig, config_values)

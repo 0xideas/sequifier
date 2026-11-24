@@ -15,7 +15,7 @@ Values passed on the command line override the YAML before validation.
 | Flag | Overrides / Action |
 | :--- | :--- |
 | `--seed` | Integer run seed, or `random` to resolve a fresh seed once. Affects `between_sequence` split assignment. |
-| `--preprocessing-data-path` | Overrides `preprocessing_data_path`. |
+| `--preprocessing-data-path` | Overrides `preprocessing_data_path`. For `import_sequences` and `prepare_policy`, replaces the configured source location while preserving feature bindings. A committed sequence manifest supplies its own encoding and episode boundaries. |
 | `--selected-columns` | Overrides `selected_columns` with a space-separated list. Use `None` to process all columns. |
 
 ## Composable Configuration Files
