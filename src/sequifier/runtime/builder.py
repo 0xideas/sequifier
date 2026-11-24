@@ -297,6 +297,8 @@ class RunBuilder:
             state = RunState(
                 CommittedPhases(plan.phases, phase_offset), phase_offset=phase_offset
             )
+        if loaded is None or "global_step_offset" not in loaded.checkpoint.run_state:
+            state.global_step_offset = publication.global_step_offset
         if state.phase_offset != phase_offset:
             raise ValueError("Supervised recovery has a different phase offset")
         if identity is None:

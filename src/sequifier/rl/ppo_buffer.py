@@ -111,7 +111,7 @@ class PPORolloutBuffer:
                 ),
             )
 
-    def archive(self, path, *, include_scores):
+    def archive(self, path, *, include_scores, sequence_namespace=None):
         """A separate versioned collection record, never an offline update source."""
         decisions = []
         for index, step in enumerate(self.decisions):
@@ -146,6 +146,8 @@ class PPORolloutBuffer:
         }
         from sequifier.trajectory.archives import collection_archive
 
+        if sequence_namespace is not None:
+            payload["sequence_namespace"] = sequence_namespace
         write_json_atomic(path, collection_archive("ppo", payload))
 
 

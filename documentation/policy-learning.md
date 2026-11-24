@@ -49,7 +49,7 @@ manifests and prepared histories. An authored manifest that lists trajectory
 files declares `format: sequifier.trajectory-source` and an `episodes`
 list with a `path` per entry. At row `t`, observations and lagged actions form
 inputs; the recorded current action is the label, and reward/successor describe
-its resulting transition. Tables use integer `sequenceId` and `itemPosition` coordinates. Use `episodeId` for a string episode label.
+its resulting transition. Tables use integer `sequenceId` and `itemPosition` coordinates. Use `sequenceName` for a string episode label.
 Observations and static inputs use the same names in the table, metadata and model.
 When importing without a model, declare those names in the
 `source.columns.observations` and `source.columns.static_inputs` lists.
@@ -58,7 +58,7 @@ Current actions use their policy field names or a structured `__executed_action`
 column. Previous actions use `__previous_action_<action>` scalar columns or a
 structured `__previous_action` column. Optional transition columns are `reward`,
 `terminated`, `truncated`, and `bootstrap_allowed`. When successors are present,
-provide `__next_<observation>` for every observation. Use `episodeId` for a
+provide `__next_<observation>` for every observation. Use `sequenceName` for a
 stable episode ID and `__group` for a collection group.
 Rename external table columns to these names before importing or training.
 Fragments require an explicit preceding action; file boundaries alone imply no

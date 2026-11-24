@@ -82,7 +82,7 @@ class PolicyMetrics:
             epoch=session.epoch,
             iteration=session.transaction,
             batches_total=session.iteration_budget,
-            global_step=sum(session.steps.values()),
+            global_step=session.global_step,
             values=scalars,
             primary=primary,
             learning_rate=float(session.optimization["actor"][0].param_groups[0]["lr"]),

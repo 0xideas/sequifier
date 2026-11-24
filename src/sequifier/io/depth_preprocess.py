@@ -865,7 +865,12 @@ def preprocess_depth(owner, selected_columns):
     _validate_cardinality_columns(owner.cardinality_config, columns, precomputed)
     sequence_counts = dict(sequence_counts)
     assignments = (
-        _between_sequence_assignments(sequence_counts, owner.window_plan, config.seed)
+        _between_sequence_assignments(
+            sequence_counts,
+            owner.window_plan,
+            config.seed,
+            owner._sequence_assignments(sequence_counts),
+        )
         if config.split_method == "between_sequence"
         else {}
     )

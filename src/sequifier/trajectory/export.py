@@ -12,14 +12,19 @@ from sequifier.fingerprints import file_checksum
 from sequifier.io.action_record import action_record_layout
 from sequifier.io.atomic import atomic_path
 from sequifier.io.preprocessing_workspace import preprocessing_workspace
-from sequifier.io.sequence import CONTEXT_COLUMN, CONTEXT_RECORDS, TransitionColumns
+from sequifier.io.sequence import (
+    CONTEXT_COLUMN,
+    CONTEXT_RECORDS,
+    TransitionColumns,
+    register_sequence_name,
+)
 from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
-    EPISODE_ID_COLUMN,
     GROUP_COLUMN,
     PREVIOUS_ACTION_RECORD,
     REWARD_COLUMN,
+    SEQUENCE_NAME_COLUMN,
     SUCCESSOR_PREFIX,
     TRANSITION_FLAGS,
 )
@@ -106,7 +111,7 @@ class EpisodeTableEncoder:
         reserved = {
             "sequenceId",
             "itemPosition",
-            EPISODE_ID_COLUMN,
+            SEQUENCE_NAME_COLUMN,
             ACTION_RECORD,
             PREVIOUS_ACTION_RECORD,
             GROUP_COLUMN,
@@ -152,7 +157,7 @@ class EpisodeTableEncoder:
             ]
             * length,
             "itemPosition": episode.item_positions,
-            EPISODE_ID_COLUMN: [episode.episode_id] * length,
+            SEQUENCE_NAME_COLUMN: [episode.episode_id] * length,
             ACTION_RECORD: episode.actions,
             PREVIOUS_ACTION_RECORD: (
                 episode.previous_action,
@@ -217,6 +222,8 @@ def _write_import(config, destination, work):
     stage.mkdir()
     tables, shards, seen, schema = [], [], set(), None
 
+    names_by_id = {}
+
     def record_shard(path):
         nonlocal schema
         with pq.ParquetFile(path) as file:
@@ -229,13 +236,15 @@ def _write_import(config, destination, work):
         )
 
     for path in sorted(work.glob("part-*.parquet")):
-        ids = (
-            pq.read_table(path, columns=[EPISODE_ID_COLUMN])
-            .column(0)
-            .unique()
+        coordinates = pq.read_table(path, columns=["sequenceId", SEQUENCE_NAME_COLUMN])
+        for row in (
+            coordinates.group_by(["sequenceId", SEQUENCE_NAME_COLUMN])
+            .aggregate([])
             .to_pylist()
-        )
-        seen.update(ids)
+        ):
+            name = row[SEQUENCE_NAME_COLUMN]
+            register_sequence_name(names_by_id, row["sequenceId"], name)
+            seen.add(name)
         record_shard(path)
 
     def flush():
@@ -257,6 +266,8 @@ def _write_import(config, destination, work):
         if episode.episode_id in seen:
             raise ValueError("duplicate episode IDs in sequence import")
         seen.add(episode.episode_id)
+        seq = episode.sequence_id if episode.sequence_id is not None else index
+        register_sequence_name(names_by_id, seq, episode.episode_id)
         tables.append(encoder.table(index, episode))
         if len(tables) == config.episodes_per_shard:
             flush()

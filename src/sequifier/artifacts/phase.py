@@ -213,6 +213,7 @@ class PhasePublication:
     """Publish once the checkpoint that owns a phase boundary is durable."""
 
     save_parent: Callable[[Path, PhaseCommit | None], None] | None = None
+    global_step_offset: int = 0
 
     @property
     def standalone(self) -> bool:

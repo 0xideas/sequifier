@@ -85,7 +85,7 @@ and GRPO, use the same `output` mapping under the phase's `collection`. The phas
 report records the manifest path and checksum. The optional collection archive
 retains algorithm-specific scores and optimizer inputs.
 
-Each decision has an integer `sequenceId` and an `itemPosition`. `episodeId`
+Each decision has an integer `sequenceId` and an `itemPosition`. `sequenceName`
 carries the external episode identity and `__group` associates related samples,
 such as GRPO siblings. A PPO update boundary can split a sequence across shards.
 Rows carry the current observation, static fields, raw reward, recorded successor

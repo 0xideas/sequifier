@@ -136,7 +136,7 @@ class TrainingEngine:
             epoch=epoch,
             training_batch=batch,
             training_batches_total=batches_total,
-            global_step=run.state.global_batch_step,
+            global_step=run.state.global_step,
             device=run.distributed.device,
             rank=run.distributed.rank,
             world_size=run.distributed.world_size,
@@ -277,6 +277,7 @@ class TrainingEngine:
             selection=selected,
             clocks={
                 "epochs": run.state.phase_epoch,
+                "global_step": state.global_step,
                 "optimizer_steps": run.state.optimizer_step,
             },
             provenance={
@@ -317,6 +318,7 @@ class TrainingEngine:
         last_identity: StepIdentity | None = None
         stop_requested = False
         completion_reason = "normal_completion"
+        pending_metric_positions = {}
         metric_windows: dict[str, dict[str, Any]] = {}
         last_latest = time.monotonic()
         last_snapshot = time.monotonic()
@@ -355,6 +357,7 @@ class TrainingEngine:
                 stop_requested = stop_requested or result.stop_requested
                 boundary = capture_runtime_boundary(run)
                 boundary_identity = last_identity
+                pending_metric_positions.clear()
             except BaseException:
                 update_failed = True
                 raise
@@ -369,6 +372,13 @@ class TrainingEngine:
             total, targets = run.loss.finalize_accounting(
                 window["sums"], window["count"], dataset, allow_empty=True
             )
+            # These batches can still roll back if accumulation is interrupted.
+            if pending is not None and dataset_name not in pending_metric_positions:
+                writer = run.metrics.writers.get(dataset_name)
+                if writer is not None:
+                    pending_metric_positions[dataset_name] = (
+                        writer.checkpoint_positions()
+                    )
             run.metrics.record_training(
                 TrainingMetrics(
                     dataset=dataset_name,
@@ -376,7 +386,7 @@ class TrainingEngine:
                     epoch=epoch,
                     batch=batch,
                     batches_total=batches_total,
-                    global_step=state.global_batch_step,
+                    global_step=state.global_step,
                     window_batches=window["batches"],
                     total_loss=float(total.item()),
                     target_losses={
@@ -843,6 +853,8 @@ class TrainingEngine:
                 pending = None
             else:
                 flush()
+            for name, positions in pending_metric_positions.items():
+                run.metrics.writers[name].restore_positions(state.run_id, positions)
             restore_runtime_boundary(run, boundary)
             run.optimization.optimizer.zero_grad(set_to_none=True)
             if run.distributed.world_size == 1:

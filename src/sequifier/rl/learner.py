@@ -53,6 +53,7 @@ from sequifier.runtime.plan import (
     validate_continuation,
 )
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
+from sequifier.training.metrics import progress_after
 
 if TYPE_CHECKING:
     from sequifier.config.train_config import ResolvedSequifierConfig, SequifierConfig
@@ -330,6 +331,25 @@ def execute_policy(
         phase_index = phase_identity.index
         logger.info(f"Starting phase {phase.name} ({phase.algorithm})")
         current_state = recovery.phase_state
+        step_offset = progress_after(
+            recovery.completed,
+            publication.global_step_offset,
+            config.project_root,
+            config.model_name,
+            identity.run_id,
+        )
+        if current_state:
+            if "global_step_offset" in current_state:
+                step_offset = current_state["global_step_offset"]
+            else:
+                # Earlier metric tables used the sum of this phase's role updates.
+                legacy_step = sum(
+                    role["steps"] for role in current_state["optimization"].values()
+                )
+                step_offset = max(
+                    step_offset, legacy_step - current_state["transaction"]
+                )
+
         dependencies.revalidate()
         incoming_weight_hash = weight_fingerprint(actor.network.state_dict())
         initialization = {}
@@ -351,7 +371,13 @@ def execute_policy(
 
         def commit(state):
             representation.validate_actor(actor, f"phases.{phase.name}.actor")
-            save_checkpoint({**state, "telemetry_path": str(artifacts.telemetry)})
+            save_checkpoint(
+                {
+                    **state,
+                    "telemetry_path": str(artifacts.telemetry),
+                    "global_step_offset": step_offset,
+                }
+            )
 
         artifacts = PhaseArtifacts.for_phase(
             config.outputs.phase_directory, phase_index, phase.name
@@ -376,6 +402,7 @@ def execute_policy(
                 telemetry,
                 adapter_contract,
                 metrics=metrics,
+                global_step_offset=step_offset,
                 continuation=recovery.continuation
                 if transition.continues_optimizer
                 else None,

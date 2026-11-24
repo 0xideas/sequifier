@@ -86,6 +86,13 @@ observations use `metric`, `target`, `value` and `is_primary`; policy observatio
 use `target: __total__`. Policy rows name the dataset and view in `dataset` and
 `part` when the observation can be attributed to each. Online observations leave
 both empty. The phase report records the policy interface in `provenance.model_interface`. Imitation rows record the sampler epoch (zero at initial evaluation, then one-based).
+Within a `run_id`, `global_step` advances once per supervised training batch or
+completed policy iteration. It carries across phase transitions, optimizer resets,
+and checkpoint recovery. Metrics from the same training position share a step,
+including an evaluation before the next update. Sparse logging can skip step
+numbers. Phase reports record the final value in `clocks.global_step`, alongside
+the algorithm's own training counters.
+
 Iteration-budgeted policy phases leave `epoch` empty. Policy plots use the
 committed iteration for progress. Nested diagnostic records remain in phase reports.
 

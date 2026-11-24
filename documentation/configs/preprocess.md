@@ -570,7 +570,11 @@ generated `metadata.json` as the original preprocessing metadata for that model.
 For a store shared with policy phases, use `indexed_passthrough` to keep auxiliary
 columns such as `reward`, `terminated`, `truncated`, and `bootstrap_allowed` in
 their original representation. Training and evaluation phases can reference
-the recorded split views directly.
+the recorded split views directly. Both pathways retain the integer `sequenceId` for joins.
+Use a distinct signed 64-bit integer for each sequence across sources you combine.
+Rows for the same sequence share its ID. IDs may have gaps and arrive in any order.
+An optional `sequenceName` labels that sequence across its rows and must be unique
+across sequences. Its default is the string representation of `sequenceId`.
 
 ```yaml
 preprocessing_data_path: data/events.csv
@@ -594,7 +598,9 @@ Omitting `window_stride` or setting it to `null` uses the training split’s win
 for every split. Policy preparation writes the same indexed format and
 uses `split_method: between_sequence` by default, keeping each episode, collection group,
 and identical demonstration in one partition. Use `within_sequence` for fractional temporal
-ranges or `value_cutoff` with a monotonic recorded observation as `split_column`.
+ranges or `value_cutoff` with a monotonic source column as `split_column`.
+For example, set `split_column: tick` and declare only `obs` as a policy
+observation to split by time while fitting only `obs`.
 Offline policy training requires independent training and evaluation episodes. Temporal
 ranges are also available for inference or for training with independently sourced evaluation data.
 When a split starts mid-episode, earlier observations and lagged actions can fill

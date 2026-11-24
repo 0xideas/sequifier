@@ -33,9 +33,11 @@ def collection_episodes(source, policy):
     from sequifier.config.policy_config import ResolvedPolicyBinding
 
     episodes = {}
-    namespace = source.declaration.episode_namespace
     for path in source.paths:
         archive = read_collection_archive(path)
+        namespace = source.declaration.episode_namespace
+        if recorded := archive.get("sequence_namespace"):
+            namespace += recorded + "/"
         if archive["format"] == "sequifier.ppo-collection":
             recording = ResolvedPolicyBinding.model_validate(archive["policy"])
             for step in archive["decisions"]:

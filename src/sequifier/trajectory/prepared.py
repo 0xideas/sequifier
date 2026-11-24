@@ -83,7 +83,7 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
                 }
                 if identity := identities.get(str(key[0])):
                     for column, field in (
-                        ("episodeId", "episode_id"),
+                        ("sequenceName", "episode_id"),
                         ("__group", "group_id"),
                     ):
                         if identity.get(field) is not None:

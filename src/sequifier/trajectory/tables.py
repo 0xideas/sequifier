@@ -22,6 +22,7 @@ from sequifier.io.sequence import (
     PreparedEpisode,
     SequenceEpisode,
     TransitionColumns,
+    episode_identity,
     ordered_sequence_rows,
 )
 from sequifier.io.values import domain_scalar, numeric_scalar
@@ -37,7 +38,7 @@ PREVIOUS_ACTION_PREFIX = "__previous_action_"
 SUCCESSOR_PREFIX = "__next_"
 BOOTSTRAP_COLUMN = "bootstrap_allowed"
 GROUP_COLUMN = "__group"
-EPISODE_ID_COLUMN = "episodeId"
+SEQUENCE_NAME_COLUMN = "sequenceName"
 REWARD_COLUMN = "reward"
 TRANSITION_FLAGS = ("terminated", "truncated", BOOTSTRAP_COLUMN)
 
@@ -129,7 +130,7 @@ class IndexedEpisodeTable:
         rows = self.view.read(identity, start - self.context_length, end)
         record = self.view.dataset["sequences"][str(identity)]
         for field, column in (
-            ("episode_id", EPISODE_ID_COLUMN),
+            ("episode_id", SEQUENCE_NAME_COLUMN),
             ("group_id", GROUP_COLUMN),
         ):
             if record.get(field) is not None and column not in rows.columns:
@@ -432,10 +433,10 @@ def table_episode(
     }
     groups = optional_values(GROUP_COLUMN, domain_scalar)
     identity = (
-        constant(values(EPISODE_ID_COLUMN, domain_scalar), "episode ID")
-        if EPISODE_ID_COLUMN in data.columns
-        and data[EPISODE_ID_COLUMN].null_count() < len(data)
-        else sequence_id
+        constant(data[SEQUENCE_NAME_COLUMN], "episode ID")
+        if SEQUENCE_NAME_COLUMN in data.columns
+        and data[SEQUENCE_NAME_COLUMN].null_count() < len(data)
+        else None
     )
 
     def reward_value(value, column):
@@ -524,7 +525,7 @@ def table_episode(
             )
     episode = SequenceEpisode(
         sequence_id=int(sequence_id),
-        episode_id=episode_namespace + str(identity),
+        episode_id=episode_namespace + episode_identity(sequence_id, identity),
         item_positions=positions,
         observations={name: values(name, feature_value) for name in observations},
         actions=actions,

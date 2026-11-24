@@ -115,6 +115,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                             Path(phase.collection.archive_directory)
                             / f"collection-{session.transaction + 1:08d}.json",
                             include_scores=phase.collection.archive_scores,
+                            sequence_namespace=sequences.namespace,
                         )
                 sequences.ppo(buffer)
                 record = update_ppo(session, value, buffer)

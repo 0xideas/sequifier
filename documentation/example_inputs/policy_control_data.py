@@ -20,7 +20,7 @@ def generate(directory):
     ) as handle:
         fields = [
             "sequenceId",
-            "episodeId",
+            "sequenceName",
             "__group",
             "itemPosition",
             "cue",
@@ -49,7 +49,7 @@ def generate(directory):
                     writer.writerow(
                         {
                             "sequenceId": 2 * context + int(kind == "rejected"),
-                            "episodeId": identity,
+                            "sequenceName": identity,
                             "__group": f"context-{context}",
                             "itemPosition": step,
                             "cue": cue,

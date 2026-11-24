@@ -263,9 +263,8 @@ class IndexedOutput:
                     assignments,
                 )
             )
-            episode, group = run.sequence_identities.get(
-                int(arrays.sequence_ids[start]), (None, None)
-            )
+            seq = int(arrays.sequence_ids[start])
+            episode, group = run.sequence_identities.get(seq, (str(seq), None))
             self.writer.add(
                 data.slice(start, stop - start).drop(SPLIT_VALUE_COLUMN, strict=False),
                 views,

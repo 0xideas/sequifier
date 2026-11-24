@@ -16,7 +16,24 @@ from pydantic import (
     model_validator,
 )
 
-from sequifier.io.values import DomainValue
+from sequifier.io.values import DomainValue, domain_scalar
+
+
+def episode_identity(sequence_id, label=None):
+    """Use a recorded domain label or the sequence coordinate as its external ID."""
+    identity = str(sequence_id if label is None else domain_scalar(label, "episode ID"))
+    if not identity:
+        raise ValueError("episode ID must be nonempty")
+    return identity
+
+
+def register_sequence_name(names, sequence_id, name):
+    """Check that one integer coordinate denotes one sequence across sources."""
+    previous = names.setdefault(sequence_id, name)
+    if previous != name:
+        raise ValueError(
+            f"sequenceId {sequence_id} refers to both {previous!r} and {name!r}"
+        )
 
 
 def validate_sequence_ids(frame, column="sequenceId"):
@@ -66,7 +83,7 @@ class TransitionColumns(BaseModel):
 class SequenceEpisode(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    sequence_id: StrictInt | None = None
+    sequence_id: StrictInt | None = Field(default=None, ge=-(2**63), lt=2**63)
     episode_id: str = Field(min_length=1)
     item_positions: tuple[StrictInt, ...] = Field(min_length=1)
     observations: dict[str, tuple[JsonValue, ...]] = Field(min_length=1)

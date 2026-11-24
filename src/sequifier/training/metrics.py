@@ -16,7 +16,7 @@ from torch import Tensor
 
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.atomic import atomic_path
-from sequifier.logging_paths import dataset_artifact_prefix
+from sequifier.logging_paths import dataset_artifact_prefix, model_log_directory
 from sequifier.typechecking import beartype
 
 TOTAL_TARGET = "__total__"
@@ -144,6 +144,73 @@ def validate_metrics_csv_row(row, path):
     value = row.get("schema_version")
     if value != str(ContractVersions.METRICS_SCHEMA):
         raise ValueError(f"Unsupported metrics schema in {path}")
+
+
+def progress_after(commits, offset, project_root, model_name, run_id):
+    """Continue the committed run timeline, including pre-global-clock checkpoints."""
+    if not commits:
+        return offset
+    clocks = commits[-1].result["clocks"]
+    if "global_step" in clocks:
+        return clocks["global_step"]
+
+    names = {commit.result["name"] for commit in commits}
+    directory = model_log_directory(project_root, model_name)
+    for path in directory.glob("*-full.csv"):
+        with path.open(encoding="utf-8", newline="") as stream:
+            for row in csv.DictReader(stream):
+                if row.get("run_id") == run_id and row.get("phase") in names:
+                    offset = max(offset, int(row["global_step"]))
+    return offset
+
+
+METRIC_SCHEMAS = {
+    "-training.csv": TRAINING_CONDENSED_FIELDS,
+    "-training-full.csv": TRAINING_FIELDS,
+    "-validation.csv": VALIDATION_CONDENSED_FIELDS,
+    "-validation-full.csv": VALIDATION_FIELDS,
+    "-validation-class-shares.csv": CLASS_SHARE_FIELDS,
+}
+
+
+def model_metric_tables(project_root, model_name):
+    directory = model_log_directory(project_root, model_name)
+    for path in directory.glob("*.csv"):
+        for suffix, fields in METRIC_SCHEMAS.items():
+            if path.name.endswith(suffix):
+                yield path, fields
+                break
+
+
+def restore_metric_positions(tables, run_id, positions, missing_offset=None):
+    for path, fields in tables:
+        offset = positions.get(path.name, missing_offset)
+        if offset is not None and (
+            not isinstance(offset, int) or isinstance(offset, bool) or offset < 0
+        ):
+            raise ValueError(f"Invalid metric checkpoint position for {path}")
+        if offset is None or not path.is_file() or path.stat().st_size <= offset:
+            continue
+        with atomic_path(path, durable=True) as temporary:
+            with path.open("rb") as source, temporary.open("wb") as target:
+                # Copy only the prefix committed with the checkpoint.
+                left = offset
+                while left:
+                    chunk = source.read(min(left, 1024 * 1024))
+                    if not chunk:
+                        raise ValueError(
+                            f"Metric table shortened during recovery: {path}"
+                        )
+                    target.write(chunk)
+                    left -= len(chunk)
+            with temporary.open("a", encoding="utf-8", newline="") as target:
+                writer = csv.DictWriter(target, fieldnames=fields)
+                if offset == 0:
+                    writer.writeheader()
+                with path.open(encoding="utf-8", newline="") as source:
+                    source.seek(offset)
+                    rows = csv.DictReader(source, fieldnames=fields if offset else None)
+                    writer.writerows(row for row in rows if row["run_id"] != run_id)
 
 
 class _CsvAppender:
@@ -276,36 +343,7 @@ class StructuredMetricWriters:
 
     def restore_positions(self, run_id, positions):
         """Remove this run's uncommitted suffix, preserving other runs' rows."""
-        for path, fields in self._tables():
-            offset = positions.get(path.name)
-            if offset is not None and (
-                not isinstance(offset, int) or isinstance(offset, bool) or offset < 0
-            ):
-                raise ValueError(f"Invalid metric checkpoint position for {path}")
-            if offset is None or not path.is_file() or path.stat().st_size <= offset:
-                continue
-            with atomic_path(path, durable=True) as temporary:
-                with path.open("rb") as source, temporary.open("wb") as target:
-                    # Copy only the prefix committed with the checkpoint.
-                    left = offset
-                    while left:
-                        chunk = source.read(min(left, 1024 * 1024))
-                        if not chunk:
-                            raise ValueError(
-                                f"Metric table shortened during recovery: {path}"
-                            )
-                        target.write(chunk)
-                        left -= len(chunk)
-                with temporary.open("a", encoding="utf-8", newline="") as target:
-                    writer = csv.DictWriter(target, fieldnames=fields)
-                    if offset == 0:
-                        writer.writeheader()
-                    with path.open(encoding="utf-8", newline="") as source:
-                        source.seek(offset)
-                        rows = csv.DictReader(
-                            source, fieldnames=fields if offset else None
-                        )
-                        writer.writerows(row for row in rows if row["run_id"] != run_id)
+        restore_metric_positions(self._tables(), run_id, positions)
 
     @beartype
     def _common(

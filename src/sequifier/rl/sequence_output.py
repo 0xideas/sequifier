@@ -3,8 +3,11 @@
 from pathlib import Path
 from uuid import uuid4
 
+import polars as pl
+
 from sequifier.fingerprints import file_checksum, fingerprint
 from sequifier.io.atomic import write_json_atomic
+from sequifier.io.sequence import register_sequence_name
 from sequifier.trajectory.sequence_output import (
     action_record,
     decision_row,
@@ -20,6 +23,7 @@ class CollectedSequences:
         self.phase = context.phase.name
         self.algorithm = context.phase.algorithm
         self.parts = list(state.get("sequence_parts", ()))
+        self.names_by_id = {}
         self.namespace = state.get("sequence_namespace") or (
             f"{context.metrics.run_id}/{context.index}"
             if context.metrics
@@ -30,6 +34,15 @@ class CollectedSequences:
                 path = Path(self.output.manifest_path).parent / part["path"]
                 if file_checksum(path) != part["sha256"]:
                     raise ValueError(f"Committed sequence shard changed: {path}")
+                # Old checkpoints may own immutable shards from before the column rename.
+                label = (
+                    "sequenceName"
+                    if "sequenceName" in pl.read_parquet_schema(path)
+                    else "episodeId"
+                )
+                names = pl.read_parquet(path, columns=["sequenceId", label])
+                for seq, name in names.unique().iter_rows():
+                    register_sequence_name(self.names_by_id, seq, name)
 
     def checkpoint(self):
         return (
@@ -41,7 +54,7 @@ class CollectedSequences:
     def row(self, frame, action, reward, successor, terminated, truncated, group):
         record = action_record(action, self.policy)
         assert record is not None
-        return decision_row(
+        row = decision_row(
             f"{self.namespace}/{frame.episode_id}",
             frame.step_id,
             dict(frame.observation),
@@ -55,6 +68,8 @@ class CollectedSequences:
             truncated=truncated,
             group=group,
         )
+        register_sequence_name(self.names_by_id, row["sequenceId"], row["sequenceName"])
+        return row
 
     def ppo(self, buffer):
         if self.output:

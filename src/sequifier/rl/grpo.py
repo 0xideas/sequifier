@@ -154,6 +154,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                                 {
                                     "format": "sequifier.grpo-archive",
                                     "version": ContractVersions.GRPO_ARCHIVE,
+                                    "sequence_namespace": sequences.namespace,
                                     "reference_identity": context.reference_identity,
                                     "generation": buffer.generation,
                                     "trajectories": [

@@ -60,6 +60,11 @@ from sequifier.runtime.plan import (
     new_run_id,
     run_phases,
 )
+from sequifier.training.metrics import (
+    model_metric_tables,
+    progress_after,
+    restore_metric_positions,
+)
 from sequifier.training.phase_runners import (
     PolicyPhaseGroup,
     SupervisedPhaseGroup,
@@ -291,6 +296,13 @@ def _run_learning_plan(config, prepared):
 
     if envelope is not None:
         require_phase_boundary(envelope, boundary())
+        if "metric_positions" in state:
+            restore_metric_positions(
+                model_metric_tables(config.project_root, config.model_name),
+                identity.run_id,
+                state["metric_positions"],
+                missing_offset=0,
+            )
 
     selected_path, selected_model = None, None
 
@@ -306,7 +318,16 @@ def _run_learning_plan(config, prepared):
             checkpoint,
             checkpoint_envelope(
                 "learning",
-                {**state, "completed": completed.records()},
+                {
+                    **state,
+                    "completed": completed.records(),
+                    "metric_positions": {
+                        path.name: path.stat().st_size
+                        for path, _ in model_metric_tables(
+                            config.project_root, config.model_name
+                        )
+                    },
+                },
                 selected_model,
                 boundary=boundary(),
             ),
@@ -386,11 +407,18 @@ def _run_learning_plan(config, prepared):
             if previous is not None:
                 Path(previous["path"]).unlink(missing_ok=True)
 
+        group_offset = progress_after(
+            completed[:index],
+            0,
+            config.project_root,
+            config.model_name,
+            identity.run_id,
+        )
         group.run(
             artifact_before(index),
             prior is not None,
             identity,
-            PhasePublication(save_progress),
+            PhasePublication(save_progress, global_step_offset=group_offset),
             revision or {},
         )
         group.release()

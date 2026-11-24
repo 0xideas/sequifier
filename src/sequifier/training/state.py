@@ -38,10 +38,15 @@ class RunState:
     epoch: int = 0
     batch: int = 0
     last_snapshot_batch_step: int = 0
+    global_step_offset: int = 0
     global_batch_step: int = 0
     optimizer_step: int = 0
     accumulation_index: int = 0
     backbone_parent_revision_id: str | None = None
+
+    @property
+    def global_step(self) -> int:
+        return self.global_step_offset + self.global_batch_step
 
     def snapshot(self) -> RunStateSnapshot:
         values = {

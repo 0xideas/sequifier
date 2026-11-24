@@ -50,7 +50,7 @@ def decision_row(
 ):
     row = {
         "sequenceId": sequence_coordinate(identity),
-        "episodeId": identity,
+        "sequenceName": identity,
         "itemPosition": step,
         "reward": reward,
         "terminated": terminated,
@@ -309,7 +309,7 @@ def supervised_manifest_input(path, sequence_view="decisions", *, dependencies=N
                     [pl.col("__next_" + c).is_not_null() for c in observations]
                 )
             )
-            coordinates = ["sequenceId", "itemPosition", "episodeId", "__group"]
+            coordinates = ["sequenceId", "itemPosition", "sequenceName", "__group"]
             static = manifest.get(
                 "static_columns",
                 manifest.get("policy_schema", {}).get("static_columns", []),

@@ -959,6 +959,9 @@ class Preprocessor:
         }
 
     def _read_sequence_identities(self):
+        from sequifier.io.sequence import episode_identity
+        from sequifier.io.values import domain_scalar
+
         config = self.config
         path = Path(config.preprocessing_data_path)
         files = (
@@ -968,24 +971,45 @@ class Preprocessor:
                 str(path), config.read_format, config.static_data_path
             )
         )
+        reader = pl.scan_parquet if config.read_format == "parquet" else pl.scan_csv
+        sources = []
         for file in files:
-            scan = (
-                pl.scan_parquet(file)
-                if config.read_format == "parquet"
-                else pl.scan_csv(file)
-            )
+            scan = reader(file)
             schema = scan.collect_schema()
-            identity = [name for name in ("episodeId", "__group") if name in schema]
-            if not identity:
-                continue
-            records = scan.select("sequenceId", *identity).unique().collect()
-            for row in records.iter_rows(named=True):
+            fields = [name for name in ("sequenceName", "__group") if name in schema]
+            if fields and config.read_format == "csv":
+                scan = pl.scan_csv(file, infer_schema_length=None)
+            sources.append((scan, fields))
+        if not any(fields for _, fields in sources):
+            return
+        owners = {}
+        for scan, fields in sources:
+            for row in (
+                scan.select("sequenceId", *fields)
+                .unique()
+                .collect()
+                .iter_rows(named=True)
+            ):
                 key = row["sequenceId"]
-                value = (row.get("episodeId"), row.get("__group"))
+                label = row.get("sequenceName")
+                group = row.get("__group")
+                identity = episode_identity(key, label)
+                if owners.setdefault(identity, key) != key:
+                    raise ValueError(f"duplicate episode ID {identity!r}")
+                value = (
+                    identity if label is not None else None,
+                    str(domain_scalar(group, "collection group"))
+                    if group is not None
+                    else None,
+                )
                 if self.sequence_identities.setdefault(key, value) != value:
                     raise ValueError(
                         f"Episode identity or group changes within sequence {key}"
                     )
+
+        for key, (label, group) in self.sequence_identities.items():
+            if label is None:
+                self.sequence_identities[key] = (episode_identity(key), group)
 
     def _sequence_assignments(self, sequences):
         from sequifier.io.partitioning import partition_components
@@ -1107,7 +1131,7 @@ class Preprocessor:
                     if column
                     not in {
                         *INPUT_METADATA_COLUMNS,
-                        "episodeId",
+                        "sequenceName",
                         "__group",
                         config.time_alignment_column,
                         config.mask_column,

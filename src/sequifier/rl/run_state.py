@@ -129,6 +129,7 @@ class PhaseContext(Generic[PhaseType, DataType]):
     metrics: "PolicyMetrics | None" = None
     continuation: OptimizerContinuation | None = None
     preserve_optimizer: bool = False
+    global_step_offset: int = 0
 
     @property
     def index(self):
@@ -277,6 +278,10 @@ class PhaseSession:
                 saved = state["optimization"][role]
                 optimizer.load_state_dict(saved["optimizer"])
                 scheduler.load_state_dict(saved["scheduler"])
+
+    @property
+    def global_step(self):
+        return self.context.global_step_offset + self.transaction
 
     def restore_random(self):
         if self.state:
@@ -528,6 +533,7 @@ class PhaseSession:
     def finish(self, clocks, provenance):
         if self.context.metrics is not None:
             self.context.metrics.flush(self)
+        clocks = {**clocks, "global_step": self.global_step}
         scope = stop_scope(self.context.phase.stopping, self.stopping.triggered)
         actor, weights, result = self.selection.finish(
             self.context,

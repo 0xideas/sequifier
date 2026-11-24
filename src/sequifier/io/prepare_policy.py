@@ -1,6 +1,7 @@
 """Prepare indexed training views from canonical policy demonstrations."""
 
 import json
+from functools import cache
 from pathlib import Path
 
 import polars as pl
@@ -172,6 +173,7 @@ def _prepare_policy(config, writer):
 
     cutoffs = _normalized_split_cutoffs(config.split_values)
 
+    @cache
     def episode_bounds(index):
         if cutoffs is None:
             return None

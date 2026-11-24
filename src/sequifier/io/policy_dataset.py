@@ -196,11 +196,13 @@ class PolicyDataCatalog:
         *,
         preference_manifests=None,
         episode_records=None,
+        sequence_names=None,
         cache_owner=None,
     ):
         self.sources, self.config, self.cache_size = sources, config, cache_size
         self.cache_owner = cache_owner
         self.corpora = {}
+        self.sequence_names = {} if sequence_names is None else sequence_names
         self.episode_records = episode_records if episode_records is not None else {}
         self.datasets = {}
         self.preference_manifests = (
@@ -225,6 +227,7 @@ class PolicyDataCatalog:
                         self.cache_size,
                         cache_owner=self.cache_owner,
                         records=self.episode_records.get(name),
+                        sequence_names=self.sequence_names,
                     )
                     self.corpora[name] = corpus
                     self.episode_records[name] = corpus.records

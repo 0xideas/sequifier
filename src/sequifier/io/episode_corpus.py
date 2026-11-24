@@ -9,7 +9,7 @@ from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.fingerprints import fingerprint
 from sequifier.io.episode_cache import EpisodeCache
 from sequifier.io.policy_window import action_index
-from sequifier.io.sequence import SequenceEpisode
+from sequifier.io.sequence import SequenceEpisode, register_sequence_name
 from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.sources import ResolvedSequenceSource
 from sequifier.trajectory.tables import TableEpisodeReference
@@ -24,6 +24,7 @@ def _load(source) -> SequenceEpisode:
 @dataclass(frozen=True)
 class EpisodeMetadata:
     episode_id: str
+    sequence_id: int | None
     group_id: str | None
     length: int
     content_key: str
@@ -42,7 +43,14 @@ class EpisodeCorpus:
     """Own one bounded decoded cache over immutable source records."""
 
     def __init__(
-        self, sources, config, cache_size=8, *, cache_owner=None, records=None
+        self,
+        sources,
+        config,
+        cache_size=8,
+        *,
+        cache_owner=None,
+        records=None,
+        sequence_names=None,
     ):
         if cache_size < 1:
             raise ValueError("episode_cache_size must be positive")
@@ -52,6 +60,10 @@ class EpisodeCorpus:
             else EpisodeCache(cache_size)
         )
         self.records = records if records is not None else self._index(sources, config)
+        names = {} if sequence_names is None else sequence_names
+        for record in self.records.metadata:
+            if record.sequence_id is not None:
+                register_sequence_name(names, record.sequence_id, record.episode_id)
 
     def _index(self, sources, config):
         sources = tuple(
@@ -83,6 +95,7 @@ class EpisodeCorpus:
             metadata.append(
                 EpisodeMetadata(
                     episode.episode_id,
+                    episode.sequence_id,
                     episode.group_id,
                     len(episode.actions),
                     getattr(sources[index], "content_key", None)
