@@ -17,6 +17,7 @@ from sequifier.fingerprints import file_checksum, fingerprint
 from sequifier.io.action_record import action_record_layout
 from sequifier.io.actions import decode_action
 from sequifier.io.atomic import atomic_path, write_json_atomic
+from sequifier.io.feature_fitting import mask_expression
 from sequifier.io.sequence import (
     CONTEXT_COLUMN,
     CONTEXT_RECORDS,
@@ -308,6 +309,16 @@ def publish_inference_rollout(trajectory, config):
             )
 
 
+def _validated_mask(scan, column, path):
+    schema = scan.collect_schema()
+    if column not in schema:
+        raise ValueError(f"mask_column '{column}' not found in {path}")
+    values = scan.select(pl.col(column).unique()).collect().to_series()
+    if values.null_count():
+        raise ValueError(f"Mask column {column} contains null values")
+    return mask_expression(values, schema[column], column)
+
+
 @contextmanager
 def supervised_manifest_input(
     path, sequence_view="decisions", *, dependencies=None, mask_column=None
@@ -367,7 +378,11 @@ def supervised_manifest_input(
             if dependencies is not None:
                 dependencies.merge(resolved.dependencies)
             scan = scan_tables(resolved.paths)
-        if OBSERVATION_MASK not in scan.collect_schema():
+        if OBSERVATION_MASK in scan.collect_schema() or mask_column == OBSERVATION_MASK:
+            scan = scan.with_columns(
+                _validated_mask(scan, OBSERVATION_MASK, path).alias(OBSERVATION_MASK)
+            )
+        else:
             scan = scan.with_columns(pl.lit(False).alias(OBSERVATION_MASK))
         if ACTION_RECORD in scan.collect_schema() and sequence_view == "decisions":
             dtype = scan.collect_schema()[ACTION_RECORD]
@@ -419,16 +434,12 @@ def supervised_manifest_input(
             static_path = table.with_suffix(".static.parquet")
             scan.select("sequenceId", *static).unique().sink_parquet(static_path)
             scan = scan.drop(static)
-        if mask_column and mask_column != OBSERVATION_MASK:
-            if mask_column in scan.collect_schema():
-                scan = scan.with_columns(
-                    (
-                        pl.col(mask_column).cast(pl.Boolean) | pl.col(OBSERVATION_MASK)
-                    ).alias(mask_column)
-                ).drop(OBSERVATION_MASK)
-            else:
-                scan = scan.rename({OBSERVATION_MASK: mask_column})
-        elif not mask_column:
+        if mask_column is not None and mask_column != OBSERVATION_MASK:
+            configured_mask = _validated_mask(scan, mask_column, path)
+            scan = scan.with_columns(
+                (configured_mask | pl.col(OBSERVATION_MASK)).alias(mask_column)
+            ).drop(OBSERVATION_MASK)
+        elif mask_column is None:
             manifest = {
                 **manifest,
                 "masked_observations": scan.select(pl.col(OBSERVATION_MASK).any())
