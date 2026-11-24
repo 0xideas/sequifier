@@ -29,7 +29,11 @@ from sequifier.helpers import (
     subset_to_input_columns,
     validate_stored_window_width,
 )
-from sequifier.io.inference_workspace import bind_inference_inputs, rollout_journal
+from sequifier.io.inference_workspace import (
+    bind_inference_inputs,
+    probability_table,
+    rollout_journal,
+)
 from sequifier.io.inference_workspace import write_inference_data as write_data
 from sequifier.io.output_paths import require_file_destinations, unique_paths
 from sequifier.io.preprocessing import denormalize_values
@@ -1151,18 +1155,12 @@ def infer_generative(
                         config=config,
                     )
                     logger.info(f"Writing probabilities to '{probabilities_path}'")
-                    # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
+                    decoder_ids = inferer.target_decoder_ids.get(
+                        target_column, range(probs[target_column].shape[1])
+                    )
+                    labels = [inferer.index_map[target_column][i] for i in decoder_ids]
                     write_data(
-                        pl.DataFrame(
-                            probs[target_column],
-                            schema=[
-                                str(inferer.index_map[target_column][global_id])
-                                for global_id in inferer.target_decoder_ids.get(
-                                    target_column,
-                                    range(probs[target_column].shape[1]),
-                                )
-                            ],
-                        ),
+                        probability_table(labels, probs[target_column]),
                         probabilities_path,
                         config.write_format,
                     )

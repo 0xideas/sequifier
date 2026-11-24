@@ -176,6 +176,8 @@ def inference_workspace(request, *, random_seed, skip_metadata):
     if request.task == "policy" and not request.rollout:
         # Invalidate cached tables when policy prediction semantics change.
         identity["prediction_table_version"] = ContractVersions.POLICY_PREDICTION_TABLE
+    if getattr(request.output, "output_probabilities", False):
+        identity["probability_table_version"] = ContractVersions.PROBABILITY_TABLE
     identity["skip_metadata"] = skip_metadata
     with _lock(directory / "run.lock"):
         record = _read(directory / "run.json")
@@ -256,6 +258,14 @@ def bind_inference_inputs(config):
     work = _active.get()
     if work is not None:
         work.begin(config.input_paths())
+
+
+def probability_table(columns, probabilities):
+    """Build the public class-probability table in decision and decoder order."""
+    import polars as pl
+
+    schema = [(str(label), pl.Float64) for label in columns]
+    return pl.DataFrame(probabilities, schema=schema, orient="row")
 
 
 def write_inference_data(data, path, write_format):

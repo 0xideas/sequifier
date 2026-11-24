@@ -216,7 +216,7 @@ class IndexedOutput:
 
     def write_static(self, static, fields):
         self.writer.write_static(static)
-        columns = [name for name in static.columns if name != "sequenceId"]
+        columns = list(fields["column_data_types"])
         _add_static_metadata(self.metadata, "static.parquet", columns, fields)
 
     def write_metadata(self, metadata, columns):

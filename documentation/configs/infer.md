@@ -223,7 +223,7 @@ available for forecast and embedding requests.
 
 `<model>` is the model artifact filename without its extension. Prediction and
 embedding outputs contain sequence and window identifiers. Probability files
-contain only the class-probability columns for their target. Categorical
+contain one column per class in decoder order. Forecast and policy Parquet probability files store these columns as Float64. Categorical
 predictions are decoded when `output.decode_categories` is enabled, and normalized
 real predictions are restored to their original scale. Every input writes one
 or more numbered parts.

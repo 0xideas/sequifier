@@ -60,7 +60,11 @@ from sequifier.io.feature_fitting import (
     validate_cardinality_values,
 )
 from sequifier.io.images import _time_ms, validate_sources
-from sequifier.io.partitioning import sequence_split_overrides
+from sequifier.io.partitioning import (
+    sequence_assignments,
+    sequence_split_overrides,
+    table_content_keys,
+)
 from sequifier.io.preprocessing_workspace import WORKSPACE_DIR, preprocessing_workspace
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
@@ -70,6 +74,7 @@ from sequifier.io.sample_order import (
     curriculum_storage_columns,
     source_curriculum_column,
 )
+from sequifier.io.sequence import DOMAIN_OBSERVATIONS, DOMAIN_STATIC, with_domain_record
 from sequifier.io.window_placement import (
     PredictionAlignment,
     SplitWindowPlan,
@@ -963,16 +968,48 @@ class Preprocessor:
                 self.sequence_identities[key] = (episode_identity(key), group)
 
     def _sequence_assignments(self, sequences):
-        groups = {
-            seq: (group,)
-            for seq, (_, group) in self.sequence_identities.items()
-            if group is not None
-        }
-        return sequence_split_overrides(
+        config = self.config
+        fractions = _require_split_ratios(config.split_ratios)
+        content = {}
+        if len(fractions) > 1:
+            path = Path(config.preprocessing_data_path)
+            files = (
+                [str(path)]
+                if path.is_file()
+                else _folder_input_files(
+                    str(path), config.read_format, config.static_data_path
+                )
+            )
+            scans = [
+                pl.scan_parquet(name)
+                if config.read_format == "parquet"
+                else pl.scan_csv(name, infer_schema_length=None)
+                for name in files
+            ]
+            table = pl.concat(scans, how="diagonal_relaxed")
+            if config.max_rows is not None:
+                if config.depth_layouts:
+                    coords = ["sequenceId", "itemPosition"]
+                    selected = (
+                        table.select(coords).unique().sort(coords).head(config.max_rows)
+                    )
+                    table = table.join(selected, on=coords, how="semi")
+                else:
+                    table = table.head(config.max_rows)
+            content = table_content_keys(table)
+            if self._static_source is not None:
+                static = table_content_keys(self._static_source.lazy())
+                content = {seq: (key, static[seq]) for seq, key in content.items()}
+        return sequence_assignments(
             sequences,
-            groups,
-            _require_split_ratios(self.config.split_ratios),
-            self.config.seed,
+            {
+                seq: group
+                for seq, (_, group) in self.sequence_identities.items()
+                if seq in sequences
+            },
+            {seq: content[seq] for seq in sequences if seq in content},
+            fractions,
+            config.seed,
         )
 
     def _process(self, indexed_writer, indexed_prediction) -> None:
@@ -1205,6 +1242,10 @@ class Preprocessor:
                 data.schema,
                 types=configured_col_types,
             )
+        if self.indexed_prediction:
+            data = with_domain_record(
+                data, fitted.data_columns, DOMAIN_OBSERVATIONS, config.mask_column
+            )
         data = fitted.transform(
             data,
             self.normalize_real_columns,
@@ -1288,6 +1329,8 @@ class Preprocessor:
             lengths = {
                 sid: summary[2] for sid, summary in fit.sequence_summaries.items()
             }
+            if sequence_split_assignments is None:
+                sequence_split_assignments = self._sequence_assignments(lengths)
             sequence_split_assignments = _between_sequence_assignments(
                 lengths, self.window_plan, config.seed, sequence_split_assignments
             )
@@ -1609,6 +1652,8 @@ class Preprocessor:
             features.observe(fitting, columns, rules)
             maps, stats = features.finish(rules)
             fitted = FittedColumns.resolve(columns, maps, stats, static.schema)
+        if self.indexed_prediction:
+            static = with_domain_record(static, columns, DOMAIN_STATIC)
         static = fitted.transform(static, self.normalize_real_columns, {})
         self.output.write_static(static, fitted.metadata())
 
@@ -1888,6 +1933,13 @@ class Preprocessor:
                 self.config.split_column,
                 self.config.split_values,
             )
+            if self.indexed_prediction:
+                data = with_domain_record(
+                    data,
+                    fit.features.data_columns,
+                    DOMAIN_OBSERVATIONS,
+                    self.config.mask_column,
+                )
             data = fit.features.transform(
                 data,
                 self.normalize_real_columns,

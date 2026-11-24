@@ -14,12 +14,14 @@ from sequifier.config.policy_infer_config import ResolvedPolicyInferenceConfig
 from sequifier.helpers import configure_determinism
 from sequifier.io.actions import encode_action
 from sequifier.io.batch import SequifierInputs, collate_model_inputs
-from sequifier.io.inference_workspace import rollout_journal
+from sequifier.io.inference_workspace import probability_table, rollout_journal
 from sequifier.io.inference_workspace import write_inference_data as write_data
 from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.sequence import (
     CONTEXT_COLUMN,
     CONTEXT_RECORDS,
+    DOMAIN_OBSERVATIONS,
+    DOMAIN_STATIC,
     ordered_sequence_rows,
     validate_sequence_ids,
 )
@@ -320,9 +322,19 @@ def _prepared_frame(
     )
     if config.rollout is not None and spec.input_encoding == "raw":
         domain_columns.update(spec.observation_columns + spec.static_columns)
+        if spec.raw_mask_column:
+            domain_columns.add(spec.raw_mask_column)
     encoded_columns = set(metadata.column_data_types) - set(
         metadata.indexed_passthrough
     )
+    # Prediction views retain exact source values alongside model encodings.
+    for record in (DOMAIN_OBSERVATIONS, DOMAIN_STATIC):
+        if domain_columns and isinstance(dtype := rows.schema.get(record), pl.Struct):
+            names = domain_columns.intersection(dtype.to_schema())
+            rows = rows.with_columns(
+                pl.col(record).struct.field(name).alias(name) for name in names
+            )
+            domain_columns.difference_update(names)
     for column in domain_columns.intersection(rows.columns, encoded_columns):
         rows = rows.with_columns(
             pl.Series(
@@ -401,6 +413,10 @@ def infer_rollout(policy, history, config, identity):
         rollout,
         rollout.max_steps,
         desired_return=budget,
+        seed_observation_masks=[
+            bool(dict(frame.observation).get(spec.raw_mask_column, False))
+            for frame in history
+        ],
         seed_previous_actions=[
             {name: frame.previous_action[name] for name in spec.actions}
             if frame.previous_action is not None
@@ -479,15 +495,7 @@ def predict_policy(policy, frames, config, row_key, *, prepared=False):
             if scores is not None:
                 output["action_log_probability"] = float(scores[index])
             for name, values in probabilities.items():
-                probability_rows[name].append(
-                    {
-                        row_key: row_index,
-                        **{
-                            str(label): float(values[index][action_id])
-                            for action_id, label in enumerate(spec.actions[name].values)
-                        },
-                    }
-                )
+                probability_rows[name].append((row_index, values[index].tolist()))
             outputs.append(output)
     predictions = pl.DataFrame(outputs).sort(row_key).drop(row_key)
     if config.output_probabilities:
@@ -506,7 +514,9 @@ def predict_policy(policy, frames, config, row_key, *, prepared=False):
                 config=config,
             )
             write_data(
-                pl.DataFrame(records).sort(row_key).drop(row_key),
+                probability_table(
+                    spec.actions[name].values, [row for _, row in sorted(records)]
+                ),
                 destination,
                 config.write_format,
             )
@@ -619,7 +629,9 @@ def _decision_histories(frames, spec, config, row_key, *, prepared, seed_index=N
                             )
                         history.clear()
                 observation = {name: row[name] for name in spec.observation_columns}
-                if not prepared and spec.raw_mask_column in row:
+                if (
+                    not prepared or seed_index is not None
+                ) and spec.raw_mask_column in row:
                     observation[spec.raw_mask_column] = row[spec.raw_mask_column]
                 sequence = row[config.sequence_id_column]
                 if row.get(CONTEXT_COLUMN) and (

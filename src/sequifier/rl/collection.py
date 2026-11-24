@@ -92,6 +92,7 @@ class PolicyCursor:
         desired_return=None,
         *,
         earlier=(),
+        observation_masks=None,
         previous_action=None,
     ):
         result = validate_reset(result, self.units, compact_images=True)
@@ -107,6 +108,7 @@ class PolicyCursor:
             episode_id,
             desired_return,
             earlier=earlier,
+            observation_masks=observation_masks,
             previous_action=previous_action,
         )
         self.desired_return = desired_return

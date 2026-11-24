@@ -70,6 +70,12 @@ def _prepare_inference(
     scan = pl.scan_csv if read_format == "csv" else pl.scan_parquet
     schemas = [scan(file).collect_schema() for file in files]
     available = set.intersection(*(set(schema.names()) for schema in schemas))
+    from sequifier.io.sequence import DOMAIN_OBSERVATIONS, DOMAIN_STATIC
+
+    if any(
+        {DOMAIN_OBSERVATIONS, DOMAIN_STATIC}.intersection(schema) for schema in schemas
+    ):
+        raise ValueError("Fresh data uses reserved rollout seed column names")
     required_columns = set(required_columns)
     missing = required_columns - available
     missing |= {"sequenceId", "itemPosition"} - available

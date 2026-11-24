@@ -960,6 +960,7 @@ def preprocess_depth(owner, selected_columns):
 
         from sequifier.config.depth_layout import depth_mask_metadata_key
         from sequifier.io.sample_order import curriculum_storage_column
+        from sequifier.io.sequence import DOMAIN_OBSERVATIONS
 
         owner._export_metadata(fitted)
         for sid, items in groupby(selected_items(), key=lambda item: item.sequence_id):
@@ -977,6 +978,16 @@ def preprocess_depth(owner, selected_columns):
                         for column, value in values.items()
                     },
                 }
+                if owner.indexed_prediction:
+                    domain = {column: item.rows[0][column] for column in shallow}
+                    for column in layout.columns:
+                        dense = [None] * layout.max_depth_length
+                        for row in item.rows:
+                            dense[
+                                row[layout.position_column] - layout.position_base
+                            ] = row[column]
+                        domain[column] = dense
+                    record[DOMAIN_OBSERVATIONS] = domain
                 for column in config.indexed_passthrough:
                     value = item.rows[0][column]
                     if any(row[column] != value for row in item.rows[1:]):

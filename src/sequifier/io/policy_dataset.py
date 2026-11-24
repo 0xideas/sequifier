@@ -7,7 +7,6 @@ import torch
 from torch.utils.data import Dataset, Sampler
 
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
-from sequifier.helpers import assign_sequence_to_split
 from sequifier.io.batch import (
     ModelEncodedPolicyBatch,
     ModelEncodedPolicyInputs,
@@ -16,7 +15,7 @@ from sequifier.io.batch import (
 from sequifier.io.episode_cache import EpisodeCache
 from sequifier.io.episode_corpus import EpisodeCorpus, EpisodeView, episode_content_key
 from sequifier.io.episode_features import EpisodeFeatures, return_labels
-from sequifier.io.partitioning import sequence_split_overrides
+from sequifier.io.partitioning import sequence_assignments
 from sequifier.io.policy_window import PolicyWindowView, action_index
 
 
@@ -158,33 +157,33 @@ class EpisodeWindowSampler(Sampler):
 
 def episode_split_assignments(dataset, fractions, seed, *, group_identical):
     """Return one supervised split index per eligible policy episode."""
-    groups = {
-        seq: [("group", group)]
-        for seq, group in zip(dataset.sequence_ids, dataset.group_ids, strict=True)
-        if group is not None
-    }
-    overrides = sequence_split_overrides(dataset.sequence_ids, groups, fractions, seed)
-    assignments = [
-        overrides[seq]
-        if seq in overrides
-        else assign_sequence_to_split(seq, fractions, seed)
-        for seq in dataset.sequence_ids
-    ]
+    sequences = dataset.sequence_ids
+    content = {}
+    if group_identical and len(fractions) > 1:
+        for index, seq in enumerate(sequences):
+            reference = dataset.episodes.source(index)
+            content[seq] = (
+                getattr(reference, "split_content_key", None)
+                or dataset.demonstration_keys[index]
+            )
+    assignments = sequence_assignments(
+        sequences,
+        dict(zip(sequences, dataset.group_ids, strict=True)),
+        content,
+        fractions,
+        seed,
+    )
     if group_identical:
-        content_splits = {}
-        for content, split in zip(dataset.demonstration_keys, assignments, strict=True):
-            if content_splits.setdefault(content, split) != split:
-                # A duplicate actually crosses the supervised boundary. Keep whole
-                # connected components, including any linked collection groups.
-                for seq, key in zip(
-                    dataset.sequence_ids, dataset.demonstration_keys, strict=True
-                ):
-                    groups.setdefault(seq, []).append(("content", key))
-                constrained = sequence_split_overrides(
-                    dataset.sequence_ids, groups, fractions, seed
+        # Distinct source records can become the same demonstration after selecting
+        # model features. Keep the physical partition authoritative and catch leakage.
+        owners = {}
+        for seq, key in zip(sequences, dataset.demonstration_keys, strict=True):
+            if owners.setdefault(key, assignments[seq]) != assignments[seq]:
+                raise ValueError(
+                    "Identical policy demonstrations cross recorded splits. "
+                    "Give these sequences the same __group in the source."
                 )
-                return [constrained[seq] for seq in dataset.sequence_ids]
-    return assignments
+    return [assignments[seq] for seq in sequences]
 
 
 def episode_partition_indices(

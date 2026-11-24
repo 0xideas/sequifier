@@ -610,11 +610,13 @@ for categorical and real feature roles. Set `indexed_output_path` for the indexe
 List `train` first in both modes. It owns fitting by default. Set `normalize_on_all_data: true` to fit on all splits.
 Omitting `window_stride` or setting it to `null` uses the training split’s window length
 for every split. Policy preparation writes the same indexed format and
-uses `split_method: between_sequence` by default, keeping each episode, collection group,
-and identical demonstration in one partition. Given the same eligible sequence IDs,
-seed, fractions, and collection groups, policy preparation uses the supervised split
-assignment. If that would put identical demonstrations in different splits, policy
-preparation partitions their connected groups together to prevent leakage. Use `within_sequence` for fractional temporal
+uses the same between-sequence assignment as supervised preprocessing and direct
+policy training. For table inputs, assignment compares recorded rows by item position
+and includes static data. Sequence IDs, episode names, collection groups and collection
+diagnostics are excluded from the content comparison. Matching records and explicit
+collection groups stay together, including when a group links several duplicates.
+Given the same records, eligible IDs, fractions and seed, each mode fits its features
+on the same training sequences. Give differently annotated copies of the same policy demonstration a common `__group` to keep them together after policy feature selection. Use `within_sequence` for fractional temporal
 ranges or `value_cutoff` with a monotonic source column as `split_column`.
 For example, set `split_column: tick` and declare only `obs` as a policy
 observation to split by time while fitting only `obs`.

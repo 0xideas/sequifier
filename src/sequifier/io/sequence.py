@@ -4,7 +4,7 @@ These records describe data, independently of the simulator, collection context
 length, prediction bindings, preprocessing or the algorithm that will consume it.
 """
 
-from polars import Int64
+import polars as pl
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -17,6 +17,18 @@ from pydantic import (
 )
 
 from sequifier.io.values import DomainValue, domain_scalar
+
+# Prediction views keep the source values used to initialize an environment.
+DOMAIN_OBSERVATIONS = "__sequifier_domain_observations"
+DOMAIN_STATIC = "__sequifier_domain_static"
+
+
+def with_domain_record(frame, columns, name, mask_column=None):
+    if name in frame.columns:
+        raise ValueError(f"{name} is reserved for rollout seed values")
+    if mask_column:
+        columns = [*columns, mask_column]
+    return frame.with_columns(pl.struct(columns).alias(name)) if columns else frame
 
 
 def episode_identity(sequence_id, label=None):
@@ -41,7 +53,7 @@ def validate_sequence_ids(frame, column="sequenceId"):
     if not ids.dtype.is_integer() or ids.null_count():
         raise ValueError(f"{column} must contain non-null integers")
     # Match the signed tensor coordinates used by prepared and supervised data.
-    ids.cast(Int64, strict=True)
+    ids.cast(pl.Int64, strict=True)
 
 
 def ordered_sequence_rows(frame, position_column="itemPosition"):

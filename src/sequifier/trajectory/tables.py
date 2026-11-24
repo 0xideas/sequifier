@@ -5,8 +5,9 @@ from __future__ import annotations
 import tempfile
 from bisect import bisect_right
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import polars as pl
 
@@ -102,6 +103,12 @@ class IndexedTable:
                 offset += 1
         table.close()
 
+    @cached_property
+    def split_content_keys(self):
+        from sequifier.io.partitioning import table_content_keys
+
+        return table_content_keys(pl.scan_parquet(self.path))
+
     def load(self, identity):
         import pyarrow.parquet as pq
 
@@ -110,7 +117,10 @@ class IndexedTable:
         last = bisect_right(self.offsets, end - 1) - 1
         with pq.ParquetFile(self.path) as table:
             rows = table.read_row_groups(list(range(first, last + 1)))
-        return pl.from_arrow(rows.slice(start - self.offsets[first], end - start))
+        return cast(
+            pl.DataFrame,
+            pl.from_arrow(rows.slice(start - self.offsets[first], end - start)),
+        )
 
 
 class IndexedEpisodeTable:
@@ -222,6 +232,15 @@ class TableEpisodeReference:
                 "content_key"
             )
         return None
+
+    @property
+    def split_content_key(self):
+        if self.prepared or not isinstance(self.table, IndexedTable):
+            return None
+        key = self.table.split_content_keys[self.sequence_id]
+        if self.static_table is not None:
+            return key, self.static_table.split_content_keys[self.sequence_id]
+        return key
 
     @property
     def used_for_fitting(self) -> bool:

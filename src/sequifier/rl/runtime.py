@@ -33,6 +33,7 @@ def collect_policy_rollout(
     *,
     desired_return: float | None = None,
     seed_previous_actions: list | None = None,
+    seed_observation_masks: list[bool] | None = None,
     seed_returns: list | None = None,
     action_selection: Literal["deterministic", "stochastic"] = "deterministic",
     random_seed: int = 1010,
@@ -87,7 +88,12 @@ def collect_policy_rollout(
         if seed_returns is None:
             seed_returns = [desired_return] if spec.return_conditioned else []
         validate_policy_seed(
-            spec, seed_previous_actions, seed_returns, count, desired_return
+            spec,
+            seed_previous_actions,
+            seed_returns,
+            count,
+            desired_return,
+            seed_observation_masks,
         )
         earlier = [
             (
@@ -102,6 +108,7 @@ def collect_policy_rollout(
             episode_id,
             desired_return,
             earlier=earlier,
+            observation_masks=seed_observation_masks,
             previous_action=seed_previous_actions[-1],
         )
 
@@ -202,6 +209,7 @@ def collect_policy_rollout(
                     "initial_desired_return": desired_return,
                     "seed_previous_action_ids": seed_previous_actions,
                     "seed_returns": seed_returns if spec.return_conditioned else [],
+                    "seed_observation_masks": seed_observation_masks or [False] * count,
                     "remaining_returns": returns,
                     "previous_action_ids": previous_actions,
                     "action_log_probabilities": log_probabilities,

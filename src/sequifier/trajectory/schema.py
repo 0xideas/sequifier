@@ -186,9 +186,16 @@ def validate_trajectory(value: Trajectory | dict) -> Trajectory:
     )
 
 
-def validate_policy_seed(spec, actions, budgets, count, desired_return):
+def validate_policy_seed(spec, actions, budgets, count, desired_return, masks=None):
     from sequifier.io.actions import decode_action, encode_action
 
+    if masks is not None and (
+        not isinstance(masks, list)
+        or len(masks) != count
+        or any(not isinstance(mask, bool) for mask in masks)
+        or (any(masks) and not spec.raw_mask_column)
+    ):
+        raise ValueError("Observation masks must match the policy seed history")
     if not isinstance(actions, list) or len(actions) != count:
         raise ValueError("Seed actions must align with valid observations")
     for index, action in enumerate(actions):
@@ -242,7 +249,14 @@ def _validate_joint_execution(trajectory):
     seed_returns = execution.get(
         "seed_returns", [initial_budget] if spec.return_conditioned else []
     )
-    validate_policy_seed(spec, seed_actions, seed_returns, count, initial_budget)
+    validate_policy_seed(
+        spec,
+        seed_actions,
+        seed_returns,
+        count,
+        initial_budget,
+        execution.get("seed_observation_masks"),
+    )
     expected = seed_actions[-1]
     for index, step in enumerate(trajectory.transitions):
         real_fields = {

@@ -5,6 +5,8 @@ import heapq
 import random
 from collections import Counter
 
+import polars as pl
+
 from sequifier.helpers import assign_sequence_to_split
 
 
@@ -53,6 +55,56 @@ def partition_components(records, leakage_keys, fractions, seed):
     return tuple(
         [item for group in groups for item in group] for groups in reversed(partitions)
     )
+
+
+def table_content_keys(table):
+    """Identify equal recorded sequences independently of their IDs and shard order."""
+    fields = sorted(
+        set(table.collect_schema().names())
+        - {"sequenceId", "sequenceName", "__group", "__collection"}
+    )
+    # itemPosition (and any depth coordinate) is part of each row. Summing
+    # independent row hashes makes this a bounded, order-independent reduction.
+    if not fields:
+        return {
+            seq: () for seq in table.select("sequenceId").unique().collect().to_series()
+        }
+    row = pl.struct(fields)
+    summaries = (
+        table.group_by("sequenceId")
+        .agg(
+            pl.len().alias("length"),
+            row.hash(seed=0).sum().alias("first"),
+            row.hash(seed=1).sum().alias("second"),
+        )
+        .collect(engine="streaming")
+    )
+    schema_key = tuple(fields)
+    return {
+        seq: (schema_key, length, first, second)
+        for seq, length, first, second in summaries.iter_rows()
+    }
+
+
+def sequence_assignments(sequence_ids, group_ids, content_keys, fractions, seed):
+    """Assign the same population before fitting features in any learning mode."""
+    groups = {
+        seq: [("group", group)] for seq, group in group_ids.items() if group is not None
+    }
+    overrides = sequence_split_overrides(sequence_ids, groups, fractions, seed)
+    assignments = {
+        seq: overrides[seq]
+        if seq in overrides
+        else assign_sequence_to_split(seq, fractions, seed)
+        for seq in sequence_ids
+    }
+    owners = {}
+    for seq, content in content_keys.items():
+        if owners.setdefault(content, assignments[seq]) != assignments[seq]:
+            for member, key in content_keys.items():
+                groups.setdefault(member, []).append(("content", key))
+            return sequence_split_overrides(sequence_ids, groups, fractions, seed)
+    return assignments
 
 
 def sequence_split_overrides(sequence_ids, leakage_keys, fractions, seed):
