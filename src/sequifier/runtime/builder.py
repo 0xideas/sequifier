@@ -283,7 +283,7 @@ class RunBuilder:
                     done = (
                         strategy.rank == 0
                         and completed_run_report(
-                            config.outputs,
+                            config,
                             destination,
                             state.run_id,
                             state.phase_commits,

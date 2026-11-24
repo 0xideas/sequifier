@@ -63,8 +63,8 @@ checkpoint contains in-phase progress.
 ## Reports and discovery
 
 Sequifier writes a run manifest at the configured report path and at
-`manifest.json` beside
-the rolling checkpoint. Common fields identify the logical run, current session,
+`checkpoints/<model_name>.json` under the project root, including when the rolling
+checkpoint uses a custom path. Common fields identify the logical run, current session,
 status, completion reason, final model, checkpoint, exports and completed phases.
 Ordinary budget completion uses `completion_reason: normal_completion` for all
 runners and phase reports. Earlier reports can also contain `completed` for this outcome.

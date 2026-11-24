@@ -255,7 +255,7 @@ class TrainingEngine:
                 backbone_parent_revision_id=run.state.backbone_parent_revision_id,
                 backbone_publication=result.publication,
             ),
-            run.config.outputs.report_path,
+            run.config,
         )
 
     def _stage_phase(self, run, index, phase, outcome):

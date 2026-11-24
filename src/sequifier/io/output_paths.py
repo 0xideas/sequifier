@@ -61,6 +61,12 @@ def require_directory_destinations(paths):
             raise ValueError(f"output requires a directory: {path}")
 
 
+def run_manifest_path(config):
+    return (
+        Path(config.project_root) / "checkpoints" / f"{config.model_name}.json"
+    ).resolve()
+
+
 def validate_training_destinations(
     config, checkpoint, protected, *, phase_offset=0, group=False
 ):
@@ -69,7 +75,7 @@ def validate_training_destinations(
     phase_root = Path(config.outputs.phase_directory).resolve()
     directories = []
     files = [checkpoint]
-    manifest = checkpoint.parent / "manifest.json"
+    manifest = run_manifest_path(config)
     if not group:
         directories.append(phase_root)
         files.extend([config.outputs.model_path, config.outputs.report_path])
@@ -174,19 +180,18 @@ def validate_training_destinations(
         and checkpoint.is_file()
         and snapshot_name
         and checkpoint.suffix == ".pt"
-        and manifest != Path(config.outputs.report_path).resolve()
     )
     if group:
         validate_path_conflicts(
             [*sequence_manifests, *directories], protected, label="phase group output"
         )
     elif snapshot_resume:
-        external_files = [path for path in files if path not in {checkpoint, manifest}]
+        external_files = [path for path in files if path != checkpoint]
         validate_path_conflicts(
             [*external_files, *directories], protected, label="training output"
         )
         validate_path_conflicts(
-            [checkpoint, manifest],
+            [checkpoint],
             protected | set(external_files) | set(directories[1:]),
             label="training output",
         )

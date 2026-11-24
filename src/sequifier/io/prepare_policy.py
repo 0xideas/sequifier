@@ -303,6 +303,10 @@ def _prepare_policy(config, writer, resolved, original, identity):
         column = config.split_column
         if column in episode.observations:
             frame = pl.DataFrame({column: episode.observations[column]})
+        elif column in episode.static_inputs:
+            frame = pl.DataFrame(
+                {column: [episode.static_inputs[column]] * len(episode.item_positions)}
+            )
         else:
             reference = episodes.source(index)
             if not isinstance(reference, TableEpisodeReference):

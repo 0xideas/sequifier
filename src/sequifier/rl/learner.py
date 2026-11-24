@@ -273,7 +273,7 @@ def execute_policy(
         require_equal(data_contract, recovery.data_contract, "resume.partitions")
         if publication.standalone and terminal:
             report = completed_run_report(
-                config.outputs, checkpoint, recovery.run_id, recovery.completed
+                config, checkpoint, recovery.run_id, recovery.completed
             )
             if report is not None:
                 return PolicyRunResult(
@@ -493,7 +493,7 @@ def execute_policy(
         )
         results = tuple(PhaseResult.model_validate(phase) for phase in report["phases"])
         save_policy(actor.eval(), config.outputs.model_path, metadata=report)
-        publish_run_report(report, config.outputs.report_path)
+        publish_run_report(report, config)
     logger.info(f"Training complete ({completion_reason})")
     return PolicyRunResult(
         actor,

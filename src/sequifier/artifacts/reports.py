@@ -12,6 +12,7 @@ from sequifier.artifacts.state_dict import weight_fingerprint
 from sequifier.contract_versions import ContractVersions
 from sequifier.fingerprints import file_checksum
 from sequifier.io.atomic import write_json_atomic
+from sequifier.io.output_paths import run_manifest_path
 from sequifier.runtime.plan import NORMAL_COMPLETION
 
 
@@ -131,12 +132,15 @@ def run_report(
     }
 
 
-def completed_run_report(outputs, checkpoint, run_id, commits):
+def completed_run_report(config, checkpoint, run_id, commits):
     """Reuse a completed publication only for its validated recovery boundary."""
+    outputs = config.outputs
     path = Path(outputs.report_path)
-    manifest = Path(checkpoint).resolve().parent / "manifest.json"
+    manifest = run_manifest_path(config)
     try:
         source = path if path.is_file() else manifest
+        if not source.is_file():
+            source = Path(checkpoint).resolve().parent / "manifest.json"
         content = source.read_bytes()
         report = json.loads(content)
     except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
@@ -168,20 +172,20 @@ def completed_run_report(outputs, checkpoint, run_id, commits):
             return None
     # A crash can separate the two atomic manifest publications. Repair the
     # discovery copy without issuing a new session or publishing the model.
-    other = manifest if source == path else path
-    if other.resolve() != source.resolve() and (
-        not other.is_file() or other.read_bytes() != content
-    ):
-        write_json_atomic(other, report)
+    for destination in {path, manifest}:
+        if destination != source and (
+            not destination.is_file() or destination.read_bytes() != content
+        ):
+            write_json_atomic(destination, report)
     for commit in commits:
         commit.publish()
     return report
 
 
-def publish_run_report(report, path):
-    """Keep the supervised manifest discovery location on every route."""
-    destination = Path(path).resolve()
-    manifest = Path(report["checkpoint_path"]).resolve().parent / "manifest.json"
+def publish_run_report(report, config):
+    """Publish the configured report and the model-scoped discovery copy."""
+    destination = Path(config.outputs.report_path).resolve()
+    manifest = run_manifest_path(config)
     report = {
         **report,
         "export_checksums": {path: file_checksum(path) for path in report["exports"]},

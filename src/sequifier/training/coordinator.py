@@ -440,9 +440,7 @@ def _run_learning_plan(config, prepared):
     if start == len(groups) and next_index != len(phases) and not stopped:
         raise ValueError("learning run checkpoint is between inconsistent phase groups")
     if resuming and state["active"] is None and (start == len(groups) or stopped):
-        report = completed_run_report(
-            config.outputs, checkpoint, identity.run_id, completed
-        )
+        report = completed_run_report(config, checkpoint, identity.run_id, completed)
         if report is not None:
             return _learning_result(config, checkpoint, report)
     completion_reason = run_phases(
@@ -488,7 +486,7 @@ def _run_learning_plan(config, prepared):
         plan_fingerprint=plan_identity,
         resource_accounting=prepared.accounting.snapshot(),
     )
-    publish_run_report(manifest_report, config.outputs.report_path)
+    publish_run_report(manifest_report, config)
     return _learning_result(config, checkpoint, manifest_report)
 
 
