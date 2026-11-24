@@ -1425,6 +1425,12 @@ class DatasetTrainingSpecModel(ConfigModel):
     partition: SplitSettings | None = None
     views: dict[str, DatasetView] = Field(default_factory=dict)
 
+    def validate_policy_units(self, binding):
+        if binding is not None:
+            for source in self.sources.values():
+                if isinstance(source, SequencePartSpecModel):
+                    binding.validate_source_units(source.units)
+
     @property
     def uses_metadata_views(self):
         return not self.views and all(
@@ -1597,8 +1603,12 @@ class SequifierConfig(ConfigModel):
             self.model is None or self.model.backbone is None
         ) and self.initialize_from is None:
             raise ValueError("a run requires a complete model or initialize_from")
-        for name in self.datasets:
+        for name, dataset in self.datasets.items():
             _identifier(name, "Dataset name")
+            if dataset.model_interface is not None:
+                dataset.validate_policy_units(
+                    self.policy_bindings.get(dataset.model_interface)
+                )
         for phase in self.phases.values():
             refs = phase.data_sources
             for ref in refs:

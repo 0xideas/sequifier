@@ -97,6 +97,13 @@ class StructuredMetricsParser:
                 primary_validation[-1].get("metric") if primary_validation else None
             )
         else:
+            supervised = {None, "", "supervised"}
+            total_training_rows = [
+                row for row in total_training_rows if row.get("algorithm") in supervised
+            ]
+            validation_rows = [
+                row for row in validation_rows if row.get("algorithm") in supervised
+            ]
             validation_metric = "loss"
         metrics = TrainingMetrics(use_iterations=policy_rows)
         if total_training_rows[-1].get("algorithm") not in {None, "", "supervised"}:
@@ -107,14 +114,18 @@ class StructuredMetricsParser:
                 continue
             epoch = 0 if policy_rows else int(row["epoch"])
             batch = int(row["iteration"] if policy_rows else row["batch"])
-            batches_total = int(row["batches_total"])
+            batches_total = int(row.get("iterations_total") or row["batches_total"])
             metrics.train_losses.setdefault(epoch, {})[batch] = (
                 batches_total,
                 float(row["value"]),
             )
             previous_batches = metrics.train_window_batches.setdefault(epoch, {})
             fallback_window_batches = batch - max(previous_batches, default=0)
-            window_batches = int(row.get("window_batches") or fallback_window_batches)
+            window_batches = (
+                1
+                if policy_rows
+                else int(row.get("window_batches") or fallback_window_batches)
+            )
             if window_batches <= 0:
                 raise DataContinuityError(
                     f"[{self.model} Epoch {epoch} Batch {batch}]: "

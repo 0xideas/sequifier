@@ -5,6 +5,7 @@ from typing import Generic, Literal, TypeVar
 
 from pydantic import Field, field_validator, model_validator
 
+from sequifier.config.cardinality import CardinalityLimitModel
 from sequifier.config.command_ownership import (
     CommandRunSettings,
     SeededPreprocessingRun,
@@ -30,6 +31,7 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
 
     @model_validator(mode="after")
     def validate_interface_source(self):
+        self.policy_binding.validate_source_units(self.source.units)
         if self.model_interface is not None and not self.initialize_from:
             raise ValueError("model_interface requires initialize_from")
         return self
@@ -104,6 +106,7 @@ class PreparePolicyConfig(
     run: SeededPreprocessingRun = Field(default_factory=SeededPreprocessingRun)
     indexed_output_path: str = Field(min_length=1)
     operation: Literal["prepare_policy"]
+    cardinality_config: dict[str, CardinalityLimitModel] = Field(default_factory=dict)
     normalize_on_all_data: bool = False
 
     normalize_real_columns: bool = True
@@ -111,6 +114,17 @@ class PreparePolicyConfig(
 
     @model_validator(mode="after")
     def validate_resources(self):
+        limited = set(self.cardinality_config)
+        if limited & (
+            set(self.policy_binding.actions) | set(self.policy_binding.feedback)
+        ):
+            raise ValueError(
+                "cardinality_config cannot change action or feedback vocabularies"
+            )
+        if limited & set(self.real_columns or ()) or (
+            self.categorical_columns and limited - set(self.categorical_columns)
+        ):
+            raise ValueError("cardinality_config must select categorical features")
         self.validate_split_method()
         self.validate_window_placement()
         return self

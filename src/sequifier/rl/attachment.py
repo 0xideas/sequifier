@@ -31,11 +31,12 @@ def bind_policy(execution, interface_name, binding=None) -> ResolvedPolicyBindin
             raise ValueError(f"{name}: action type differs from the model")
         if field.type == "categorical" and not field.values:
             inverse = {v: k for k, v in interface.id_maps.get(name, {}).items()}
-            actions[name] = field.model_copy(
-                update={
+            actions[name] = type(field).model_validate(
+                {
+                    **field.model_dump(),
                     "values": [
                         inverse.get(i, i) for i in interface.target_decoder_ids[name]
-                    ]
+                    ],
                 }
             )
     static = [

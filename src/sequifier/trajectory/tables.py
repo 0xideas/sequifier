@@ -677,6 +677,9 @@ def table_episodes(resolved: ResolvedSequenceSource, policy: PolicyEpisodeSpec):
         raise ValueError("table columns must name declared policy features")
     static_path, image_store = resolved.static_path, None
     if view is not None:
+        provenance = view.dataset.get("provenance", {})
+        policy.validate_source_units(provenance.get("policy_binding", {}).get("units"))
+        policy.validate_source_units(provenance.get("source", {}).get("units"))
         table, metadata = (
             IndexedEpisodeTable(view, policy.context_length),
             view.metadata(),

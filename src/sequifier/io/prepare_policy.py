@@ -59,7 +59,9 @@ def _prepare_policy(config, writer):
     from sequifier.preprocess import (
         SPLIT_VALUE_COLUMN,
         _add_normalized_split_column,
+        _normalize_cardinality_config,
         _normalized_split_cutoffs,
+        _validate_cardinality_columns,
         _validate_declared_column_roles,
     )
 
@@ -69,7 +71,13 @@ def _prepare_policy(config, writer):
         else None
     )
     frozen = load_dataset_metadata(str(original)) if original is not None else None
-    cardinality = frozen.cardinality_config if frozen is not None else {}
+    authored_cardinality = _normalize_cardinality_config(config.cardinality_config)
+    cardinality = authored_cardinality
+    if frozen is not None:
+        persisted = _normalize_cardinality_config(frozen.cardinality_config)
+        if cardinality and cardinality != persisted:
+            raise ValueError("cardinality_config must match metadata_config_path")
+        cardinality = persisted
     normalize = (
         frozen.normalize_real_columns
         if frozen is not None
@@ -153,6 +161,8 @@ def _prepare_policy(config, writer):
     categorical, real = list(dict.fromkeys(categorical)), list(dict.fromkeys(real))
     validate_disjoint_roles(categorical, real)
     _validate_declared_column_roles(columns, categorical, real)
+
+    _validate_cardinality_columns(authored_cardinality, features + static, {})
 
     encoder = EpisodeTableEncoder(policy)
     episodes = decisions.episodes
@@ -238,6 +248,7 @@ def _prepare_policy(config, writer):
                 for name, mapping in policy.categorical_id_maps().items()
                 if name in actions + feedback
             },
+            cardinality=cardinality,
             categorical=categorical,
             real=real,
         )
@@ -425,7 +436,10 @@ def _prepare_policy(config, writer):
         metadata,
         feature_columns=columns + derived,
         original_metadata=original,
-        provenance=resolved.provenance(),
+        provenance={
+            **resolved.provenance(),
+            "policy_binding": policy.task_binding.model_dump(mode="json"),
+        },
     )
 
 

@@ -113,6 +113,16 @@ a still-present changed reference is rejected.
 
 ## Online adapters
 
+For direct training from raw sequences, declare bounded categorical observation or
+static inputs under `model.interfaces.<name>.input_contract.cardinality_config`.
+For example, `{place: {min_count: 3, hashing: {num_buckets: 16}}}` keeps frequent
+labels and hashes the rest. The first offline fitting phase owns the vocabulary.
+Prepared sources carry their fitted rules in metadata.
+
+Every label in a categorical action's `values` must have the same scalar type.
+An explicit sequence source `units` mapping must match the policy binding, including
+an explicitly empty mapping. Rollout data carries the producing policy's units.
+
 Declare each training adapter in `environments.<name>` with `factory`, `config` and `units`. PPO and GRPO select an adapter by name in `collection.environment` and `evaluation.environment`. A standalone inference rollout supplies the adapter declaration in `rollout.environment`.
 Factories receive `config` as keyword arguments. Adapter-reported units must match
 the configuration. Custom adapters subclass `OnlineEnvironmentAdapterBase` from

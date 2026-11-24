@@ -296,6 +296,11 @@ def publish_inference_rollout(trajectory, config):
                 trajectory.seed.observations,
                 {
                     "task": config.task,
+                    **(
+                        {"policy_binding": policy.task_binding.model_dump(mode="json")}
+                        if policy
+                        else {}
+                    ),
                     "bindings": [b.model_dump() for b in trajectory.bindings],
                     "seed_origin": trajectory.metadata["seed_origin"],
                     "model_path": config.model_paths[0],

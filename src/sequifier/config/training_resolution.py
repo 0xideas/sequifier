@@ -470,7 +470,15 @@ def _inferred_metadata(config, name, binding, settings):
     columns = inputs | set(interface.target_columns)
     types = dict.fromkeys(columns, "Float32")
     maps = binding.categorical_id_maps()
-    types.update(dict.fromkeys(maps, "Int64"))
+    cardinality = interface.input_contract.cardinality_rules
+    eligible = inputs - set(binding.actions) - set(binding.feedback)
+    if binding.return_conditioned:
+        eligible.discard("__policy_return")
+    if invalid := cardinality.keys() - eligible:
+        raise ValueError(
+            f"{name}: cardinality_config requires observation or static features: {sorted(invalid)}"
+        )
+    types.update(dict.fromkeys(maps.keys() | cardinality.keys(), "Int64"))
     counts = {column: max(mapping.values()) + 1 for column, mapping in maps.items()}
     normalization = _normalization(config, name)
     statistics = (
@@ -482,6 +490,7 @@ def _inferred_metadata(config, name, binding, settings):
         dict(
             window_length=settings.context_length + max(1, settings.target_offset),
             column_data_types=types,
+            cardinality_config=cardinality,
             static_columns=static,
             n_classes=counts,
             id_maps=maps,
@@ -489,6 +498,7 @@ def _inferred_metadata(config, name, binding, settings):
                 column: statistics.get(column, {"mean": 0.0, "std": 1.0})
                 for column in columns
                 if column not in counts
+                and column not in cardinality
                 and (normalization is not None or column not in inputs)
             },
         )
@@ -569,6 +579,12 @@ def _fit_input_metadata(
         None,
     )
     if phase is None or phase.source_kind == "none":
+        missing = metadata.cardinality_config.keys() - metadata.id_maps.keys()
+        if missing:
+            raise ValueError(
+                f"{name}: fitting cardinality_config for {sorted(missing)} requires "
+                "an offline first phase or a frozen input vocabulary"
+            )
         return metadata
     interface = config.model.interfaces[name]
     normalization = _normalization(config, name)
@@ -841,6 +857,11 @@ def resolve_training_run(
                 f"Dataset {dataset_name!r} references unknown model interface "
                 f"{dataset.model_interface!r}."
             )
+        interface_name = dataset.model_interface
+        binding = config.policy_bindings.get(interface_name)
+        if binding is None and source is not None and not history_only:
+            binding = source.interface(interface_name).policy
+        dataset.validate_policy_units(binding)
 
     sources = TrainingSources(config, root, metadata_by_part)
     metadata_paths = {

@@ -615,6 +615,11 @@ Use `operation: prepare_policy` for policy demonstrations. It takes the same
 `source` and `policy_binding` declarations as `import_sequences`, and adds
 named splits, per-split window lengths, `window_stride`, prediction alignment, and optional overrides
 for categorical and real feature roles. Set `indexed_output_path` for the indexed store.
+Use `cardinality_config` to fit bounded observation or static-feature vocabularies,
+for example `{place: {max_categories: 100, hashing: {num_buckets: 16, seed: 7}}}`.
+Policy preparation uses the same count thresholds, ranking and hashing as supervised
+preprocessing. A supplied rule must agree with reused preprocessing metadata.
+The policy binding defines the action and feedback vocabularies.
 List `train` first in both modes. It owns fitting by default. Set `normalize_on_all_data: true` to fit on all splits.
 Omitting `window_stride` or setting it to `null` uses the training split’s window length
 for every split. Policy preparation writes the same indexed format and

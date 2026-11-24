@@ -4,6 +4,7 @@ from typing import Annotated, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.cardinality import CardinalityLimitModel
 from sequifier.config.components import ResumeConfig
 from sequifier.config.naming import ConfigModel, RunSeed, SeedInteger
 from sequifier.config.normalization_config import FrozenNormalizationConfig
@@ -214,6 +215,14 @@ class ModelExecutionSettings(Settings):
 class InputContract(Settings):
     metadata_config_path: str | None = None
     normalization: FrozenNormalizationConfig | None = None
+    cardinality_config: dict[str, CardinalityLimitModel] | None = None
+
+    @property
+    def cardinality_rules(self):
+        return {
+            name: rule.model_dump(exclude_none=True)
+            for name, rule in (self.cardinality_config or {}).items()
+        }
 
 
 class SplitSettings(Settings):

@@ -44,6 +44,7 @@ def sequence_from_trajectory(
         if execution.get("seed_previous_action_ids") is not None
         else policy
     )
+    policy.validate_source_units(execution.get("config", {}).get("units"))
     seed_actions = execution.get("seed_previous_action_ids")
     if seed_actions is None:
         count = (
@@ -127,6 +128,9 @@ def source_episodes(
         resolve_source(source) if isinstance(source, SequenceSourceConfig) else source
     )
     source_config = resolved.declaration
+    policy.validate_source_units(source_config.units)
+    provenance = (resolved.manifest or {}).get("provenance", {})
+    policy.validate_source_units(provenance.get("policy_binding", {}).get("units"))
     if resolved.kind == "trajectory":
         return [
             TrajectoryReference(

@@ -104,8 +104,12 @@ committed iteration for progress. Nested diagnostic records remain in phase repo
 defaults to 10. Mixed plans may configure both. Evaluations are written whenever
 the phase evaluation schedule runs, and final policy training progress is always
 written. Each policy training observation describes one sampled iteration.
-Its `seconds_per_batch` measures that iteration’s collection and optimization
-work (offline phases only optimize). Validation `elapsed_seconds` measures the
+New tables use `seconds_per_iteration` for the elapsed policy iteration, including
+collection and optimization. Policy rows use `iteration` and `iterations_total`
+for progress. Their batch fields are empty. Supervised training rows use
+`seconds_per_batch`, `batch`, `batches_total` and `window_batches`.
+Resuming an existing table with the previous header preserves its original columns
+and timing convention so checkpoint byte offsets remain valid. Validation `elapsed_seconds` measures the
 evaluation itself. Condensed policy tables contain the primary training metric
 or available evaluation monitor. Full tables include secondary metrics, numeric
 status flags and non-actor optimizer learning rates. An unavailable evaluation

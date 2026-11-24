@@ -44,6 +44,7 @@ FULL_COMMON_FIELDS = [
 ]
 
 TRAINING_FIELDS = FULL_COMMON_FIELDS + [
+    "iterations_total",
     "metric",
     "is_primary",
     "window_batches",
@@ -51,6 +52,7 @@ TRAINING_FIELDS = FULL_COMMON_FIELDS + [
     "value",
     "learning_rate",
     "seconds_per_batch",
+    "seconds_per_iteration",
 ]
 
 CONDENSED_PROGRESS = [
@@ -66,13 +68,16 @@ CONDENSED_PROGRESS = [
 TRAINING_CONDENSED_FIELDS = [
     "schema_version",
     *CONDENSED_PROGRESS,
+    "iterations_total",
     "metric",
     "value",
     "learning_rate",
     "seconds_per_batch",
+    "seconds_per_iteration",
 ]
 
 VALIDATION_FIELDS = FULL_COMMON_FIELDS + [
+    "iterations_total",
     "is_primary",
     "evaluation_id",
     "evaluation_kind",
@@ -86,6 +91,7 @@ VALIDATION_FIELDS = FULL_COMMON_FIELDS + [
 VALIDATION_CONDENSED_FIELDS = [
     "schema_version",
     *CONDENSED_PROGRESS,
+    "iterations_total",
     "metric",
     "value",
 ]
@@ -147,7 +153,12 @@ def validate_metrics_csv_header(fields, path):
 
 
 def _metric_version(fields):
-    if list(fields) in (TRAINING_CONDENSED_FIELDS, VALIDATION_CONDENSED_FIELDS):
+    if "seconds_per_iteration" in fields or "iterations_total" in fields:
+        return ContractVersions.ITERATION_METRICS_SCHEMA
+    if list(fields) in (
+        _batch_schema(TRAINING_CONDENSED_FIELDS),
+        _batch_schema(VALIDATION_CONDENSED_FIELDS),
+    ):
         return ContractVersions.CONDENSED_METRICS_SCHEMA
     return ContractVersions.METRICS_SCHEMA
 
@@ -185,6 +196,19 @@ METRIC_SCHEMAS = {
 }
 
 
+def _batch_schema(fields):
+    return [f for f in fields if f not in {"seconds_per_iteration", "iterations_total"}]
+
+
+def _existing_fields(path, fields):
+    if path.is_file():
+        with path.open(encoding="utf-8", newline="") as stream:
+            existing = next(csv.reader(stream), [])
+        if existing == _batch_schema(fields):
+            return existing
+    return fields
+
+
 def _legacy_condensed_fields(path, fields):
     if (
         fields in (TRAINING_CONDENSED_FIELDS, VALIDATION_CONDENSED_FIELDS)
@@ -192,7 +216,7 @@ def _legacy_condensed_fields(path, fields):
     ):
         legacy = [
             f
-            for f in fields
+            for f in _batch_schema(fields)
             if f not in {"phase", "algorithm", "iteration", "global_step"}
         ]
         with path.open(encoding="utf-8", newline="") as stream:
@@ -206,7 +230,11 @@ def model_metric_tables(project_root, model_name):
     for path in directory.glob("*.csv"):
         for suffix, fields in METRIC_SCHEMAS.items():
             if path.name.endswith(suffix):
-                yield path, _legacy_condensed_fields(path, fields) or fields
+                yield (
+                    path,
+                    _legacy_condensed_fields(path, fields)
+                    or _existing_fields(path, fields),
+                )
                 break
 
 
@@ -247,7 +275,7 @@ class _CsvAppender:
     @beartype
     def __init__(self, path: Path, fields: list[str]) -> None:
         self.path = path
-        self.fields = fields
+        self.fields = _existing_fields(path, fields)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_header()
 
@@ -293,6 +321,21 @@ class _CsvAppender:
                         row.get("metric") == "loss"
                         and row.get("target") == TOTAL_TARGET,
                     )
+                # Existing tables retain their physical schema and checkpoint byte offsets.
+                if "iterations_total" not in self.fields and "iterations_total" in row:
+                    total = row.pop("iterations_total")
+                    if "batches_total" in self.fields:
+                        row["batches_total"] = total
+                    row["batch"] = row["iteration"]
+                if (
+                    "seconds_per_iteration" not in self.fields
+                    and "seconds_per_iteration" in row
+                ):
+                    elapsed = row.pop("seconds_per_iteration")
+                    if elapsed is not None:
+                        row["seconds_per_batch"] = elapsed
+                        if "window_batches" in self.fields:
+                            row["window_batches"] = 1
                 writer.writerow(row)
             file.flush()
             if durable:
@@ -387,7 +430,10 @@ class StructuredMetricWriters:
                 self.validation_path.name: 0,
                 **positions,
             }
-        restore_metric_positions(self._tables(), run_id, positions)
+        tables = [
+            (path, _existing_fields(path, fields)) for path, fields in self._tables()
+        ]
+        restore_metric_positions(tables, run_id, positions)
 
     @beartype
     def _common(
@@ -397,14 +443,13 @@ class StructuredMetricWriters:
         session_id: str,
         timestamp: str,
         epoch: int | None,
-        batch: int,
-        batches_total: int,
+        batch: int | None,
+        batches_total: int | None,
         global_step: int,
         dataset: str | None = None,
         part: str | None = None,
     ) -> dict[str, Any]:
         return {
-            "schema_version": ContractVersions.METRICS_SCHEMA,
             "phase": self.phase,
             "algorithm": self.algorithm,
             "iteration": self.iteration,
@@ -666,13 +711,14 @@ class StructuredMetricWriters:
             epoch=epoch,
             dataset=dataset,
             part=part,
-            batch=iteration,
-            batches_total=max(1, batches_total),
+            batch=None,
+            batches_total=None,
             global_step=global_step,
         )
         common = {
             key: value for key, value in common.items() if key in FULL_COMMON_FIELDS
         }
+        common["iterations_total"] = batches_total
         evaluation_id = uuid.uuid4().hex
         rows = []
         for name, value in values.items():
@@ -691,7 +737,7 @@ class StructuredMetricWriters:
                     elapsed_seconds=elapsed_seconds,
                 )
             else:
-                row.update(window_batches=1, seconds_per_batch=elapsed_seconds)
+                row["seconds_per_iteration"] = elapsed_seconds
             rows.append(row)
         full = self._validation_full if validation else self._training_full
         condensed = self._validation if validation else self._training
@@ -721,7 +767,7 @@ class StructuredMetricWriters:
         )
         condensed.append(
             [
-                {key: row[key] for key in fields if key != "schema_version"}
+                {key: row.get(key) for key in fields if key != "schema_version"}
                 for row in rows
                 if row["is_primary"]
             ],
