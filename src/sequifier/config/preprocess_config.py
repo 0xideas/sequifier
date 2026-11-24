@@ -13,7 +13,6 @@ from sequifier.config.composition import (
     merge_config_fragments,
 )
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
-from sequifier.config.identifiers import identifier
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.config.naming import ConfigModel
 from sequifier.config.sequence_import_config import (
@@ -464,10 +463,6 @@ class PreprocessorModel(WindowStrideSettings):
                     f"Invalid: {real_with_non_float_types}"
                 )
 
-        for name in self.splits:
-            identifier(name, "Split")
-        if next(iter(self.splits)) != "train":
-            raise ValueError("The first split must be train (used for feature fitting)")
         self.validate_split_method()
         if self.split_method == "value_cutoff":
             if self.split_column == self.mask_column:

@@ -30,14 +30,11 @@ class ContractVersions:
     SERIAL_DEPTH_LEDGER = 101
     PARALLEL_DEPTH_LEDGER = 101
 
-    # Rollout records, algorithm archives, and offline source manifests.
+    # Rollout records and offline source manifests.
     FORECAST_TRAJECTORY = 100
     SINGLE_SEED_JOINT_POLICY_TRAJECTORY = 101
     JOINT_POLICY_TRAJECTORY = 102
-    COLLECTION_ARCHIVE = 100
-    PPO_COLLECTION = 101
-    GRPO_ARCHIVE = 100
-    SEQUENCE_DATA_MANIFEST = 101
+    SEQUENCE_DATA_MANIFEST = 102
     SCALAR_POLICY_TRAJECTORY = 100
 
     FORECAST_ROLLOUT_ADAPTER = 100

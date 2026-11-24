@@ -161,6 +161,9 @@ def inference_workspace(request, *, random_seed, skip_metadata):
             "embedding": TableOutput,
         }
         identity["output"] = default[request.task]().model_dump(exclude_none=True)
+    if rollout := getattr(request, "rollout", None):
+        if rollout.output:
+            identity["sequence_data_version"] = ContractVersions.SEQUENCE_DATA_MANIFEST
     if random_seed:
         identity["run"]["reproducibility"]["seed"] = "random"
     if (

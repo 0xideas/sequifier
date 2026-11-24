@@ -1,17 +1,17 @@
-"""Publish committed PPO and GRPO decisions independently of optimizer archives."""
+"""Publish PPO and GRPO transitions and collection diagnostics in one decision table."""
 
+import json
 from pathlib import Path
 from uuid import uuid4
 
 import polars as pl
 
-from sequifier.fingerprints import file_checksum, fingerprint
-from sequifier.io.atomic import write_json_atomic
+from sequifier.fingerprints import file_checksum
 from sequifier.io.sequence import register_sequence_name
 from sequifier.trajectory.sequence_output import (
     action_record,
     decision_row,
-    manifest_values,
+    publish_sequences,
     write_parts,
 )
 
@@ -30,17 +30,16 @@ class CollectedSequences:
             else uuid4().hex
         )
         if self.output:
+            if "__collection" in (
+                *self.policy.observation_columns,
+                *self.policy.static_columns,
+            ):
+                raise ValueError("__collection is reserved for rollout diagnostics")
             for part in self.parts:
                 path = Path(self.output.manifest_path).parent / part["path"]
                 if file_checksum(path) != part["sha256"]:
                     raise ValueError(f"Committed sequence shard changed: {path}")
-                # Old checkpoints may own immutable shards from before the column rename.
-                label = (
-                    "sequenceName"
-                    if "sequenceName" in pl.read_parquet_schema(path)
-                    else "episodeId"
-                )
-                names = pl.read_parquet(path, columns=["sequenceId", label])
+                names = pl.read_parquet(path, columns=["sequenceId", "sequenceName"])
                 for seq, name in names.unique().iter_rows():
                     register_sequence_name(self.names_by_id, seq, name)
 
@@ -72,9 +71,12 @@ class CollectedSequences:
         return row
 
     def ppo(self, buffer):
-        if self.output:
-            rows = (
-                self.row(
+        if not self.output:
+            return
+
+        def rows():
+            for i, step in enumerate(buffer.decisions):
+                row = self.row(
                     buffer.frames[step.frame],
                     step.action,
                     step.raw_reward,
@@ -85,9 +87,24 @@ class CollectedSequences:
                     step.truncated,
                     None,
                 )
-                for step in buffer.decisions
-            )
-            self.parts.extend(write_parts(self.output.manifest_path, rows))
+                details = {
+                    "policy_version": buffer.policy_version,
+                    "scaled_reward": step.reward,
+                    "collection_end": i == len(buffer.decisions) - 1,
+                }
+                if self.output.include_scores:
+                    details.update(
+                        old_log_probability=step.old_log_probability,
+                        old_value=step.old_value,
+                        entropy=step.entropy,
+                        successor_value=step.successor_value,
+                        advantage=buffer.advantages[i],
+                        value_target=buffer.targets[i],
+                    )
+                row["__collection"] = details
+                yield row
+
+        self.parts.extend(write_parts(self.output.manifest_path, rows()))
 
     def grpo(self, buffer):
         if self.output:
@@ -101,7 +118,7 @@ class CollectedSequences:
                             if last
                             else dict(trajectory.frames[i + 1].observation)
                         )
-                        yield self.row(
+                        row = self.row(
                             frame,
                             trajectory.actions[i],
                             trajectory.raw_rewards[i],
@@ -110,13 +127,32 @@ class CollectedSequences:
                             last and trajectory.truncated,
                             f"{self.namespace}/group-{trajectory.group_index}",
                         )
+                        row["__collection"] = {
+                            "policy_version": trajectory.generation,
+                            "reference_identity": buffer.reference_identity,
+                            "group_index": trajectory.group_index,
+                            "sample_index": trajectory.sample_index,
+                            "start_token_json": json.dumps(
+                                trajectory.start_token, allow_nan=False, sort_keys=True
+                            ),
+                            "scaled_reward": trajectory.rewards[i],
+                            "old_log_probability": trajectory.old_log_probabilities[i],
+                            "reference_log_probability": trajectory.reference_log_probabilities[
+                                i
+                            ],
+                            "score": trajectory.score,
+                            "advantage": trajectory.advantage,
+                            "cutoff_reason": trajectory.cutoff_reason if last else None,
+                        }
+                        yield row
 
             self.parts.extend(write_parts(self.output.manifest_path, rows()))
 
     def publish(self):
         if not self.output:
             return {}
-        manifest = manifest_values(
+        return publish_sequences(
+            self.output.manifest_path,
             self.parts,
             self.policy.observation_columns,
             {
@@ -126,22 +162,5 @@ class CollectedSequences:
                 "policy_binding": self.policy.task_binding.model_dump(mode="json"),
             },
             static=self.policy.static_columns,
+            pin=True,
         )
-        path = Path(self.output.manifest_path)
-        pinned = {
-            **manifest,
-            "shards": [
-                {**part, "path": Path(part["path"]).name} for part in self.parts
-            ],
-        }
-        snapshot = path.with_name(path.name + ".parts") / (
-            fingerprint(pinned) + ".manifest.json"
-        )
-        write_json_atomic(snapshot, pinned)
-        write_json_atomic(path, manifest)
-        return {
-            "sequence_manifest": self.output.manifest_path,
-            "committed_sequence_manifest": str(snapshot),
-            "committed_sequence_manifest_sha256": file_checksum(snapshot),
-            "sequence_manifest_sha256": file_checksum(self.output.manifest_path),
-        }

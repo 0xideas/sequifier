@@ -79,10 +79,6 @@ class PhaseControls(ConfigModel):
         return None
 
     @property
-    def rollout_archive_directory(self) -> str | None:
-        return None
-
-    @property
     def training_environment(self) -> "OnlineEnvironmentConfig | None":
         return None
 

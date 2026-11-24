@@ -7,6 +7,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from sequifier.contract_versions import ContractVersions, require_contract_version
+
 WORKSPACE_DIR = ".sequifier-preprocessing"
 
 
@@ -32,6 +34,12 @@ def preprocessing_workspace(destination, *, indexed, resume):
                 values = json.loads(manifest.read_text())
                 if values.get("format") != expected_format:
                     raise FileExistsError(destination)
+                if not indexed:
+                    require_contract_version(
+                        expected_format,
+                        values.get("version"),
+                        ContractVersions.SEQUENCE_DATA_MANIFEST,
+                    )
                 if work.is_dir():
                     shutil.rmtree(work)
                 logger.info(f"Reusing published dataset at {destination}")

@@ -1,14 +1,11 @@
 """Atomically export canonical episodes as checksummed raw Parquet shards."""
 
-import json
 import os
 import sys
 from pathlib import Path
 
 import pyarrow as pa
 
-from sequifier.contract_versions import ContractVersions
-from sequifier.fingerprints import file_checksum
 from sequifier.io.action_record import action_record_layout
 from sequifier.io.atomic import atomic_path
 from sequifier.io.preprocessing_workspace import preprocessing_workspace
@@ -19,6 +16,7 @@ from sequifier.io.sequence import (
     register_sequence_name,
 )
 from sequifier.trajectory.importers import source_episodes
+from sequifier.trajectory.sequence_output import publish_sequences
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
     GROUP_COLUMN,
@@ -220,20 +218,20 @@ def _write_import(config, destination, work):
     encoder = EpisodeTableEncoder(policy)
     stage = work / "publication"
     stage.mkdir()
-    tables, shards, seen, schema = [], [], set(), None
+    tables, shards, seen = [], [], set()
 
     names_by_id = {}
 
     def record_shard(path):
-        nonlocal schema
         with pq.ParquetFile(path) as file:
-            current = file.schema_arrow
-            shards.append({"path": path.name, "decisions": file.metadata.num_rows})
-        schema = (
-            current
-            if schema is None
-            else pa.unify_schemas([schema, current], promote_options="permissive")
-        )
+            ids = file.read(columns=["sequenceId"]).column(0).unique().to_pylist()
+            shards.append(
+                {
+                    "path": path.name,
+                    "decisions": file.metadata.num_rows,
+                    "sequences": sorted(ids),
+                }
+            )
 
     for path in sorted(work.glob("part-*.parquet")):
         coordinates = pq.read_table(path, columns=["sequenceId", SEQUENCE_NAME_COLUMN])
@@ -272,25 +270,15 @@ def _write_import(config, destination, work):
         if len(tables) == config.episodes_per_shard:
             flush()
     flush()
-    # Keep checkpoints intact if schema promotion or publication is interrupted.
-    for shard in shards:
-        source = work / shard["path"]
-        path = stage / shard["path"]
-        if pq.read_schema(source) == schema:
-            os.link(source, path)
-        else:
-            pq.write_table(cast_episode_table(pq.read_table(source), schema), path)
-        shard["sha256"] = file_checksum(path)
-    manifest = {
-        "format": "sequifier.sequence-data",
-        "version": ContractVersions.SEQUENCE_DATA_MANIFEST,
-        "episodes": len(seen),
-        "decisions": sum(shard["decisions"] for shard in shards),
-        "policy_schema": policy.model_dump(mode="json"),
-        "shards": shards,
-        "provenance": resolved_source.provenance(),
-    }
-    (stage / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    publish_sequences(
+        stage / "manifest.json",
+        shards,
+        policy.observation_columns,
+        {
+            **resolved_source.provenance(),
+            "policy_binding": policy.task_binding.model_dump(mode="json"),
+        },
+        static=policy.static_columns,
+        source_root=work,
     )
     os.rename(stage, destination)

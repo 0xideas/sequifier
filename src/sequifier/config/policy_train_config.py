@@ -25,7 +25,7 @@ class SequenceSourceConfig(PolicyConfigBase):
     units: dict[str, str] | None = None
     paths: list[NonemptyStr] = Field(default_factory=list)
     manifest_path: NonemptyStr | None = None
-    format: Literal["auto", "trajectory", "collection", "table", "prepared"] = "auto"
+    format: Literal["auto", "trajectory", "table", "prepared"] = "auto"
     columns: PolicyTableColumns = Field(default_factory=PolicyTableColumns)
     # A file boundary alone says nothing about task completion.
     episode_end: Literal["unknown", "terminated", "truncated"] = "unknown"

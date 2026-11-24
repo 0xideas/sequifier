@@ -837,10 +837,6 @@ def resolve_training_run(
             if phase.collection.output:
                 output = phase.collection.output
                 output.manifest_path = str((root / output.manifest_path).resolve())
-            if phase.collection.archive_directory:
-                phase.collection.archive_directory = str(
-                    (root / phase.collection.archive_directory).resolve()
-                )
         reference = phase.reference_config
         if reference and reference.path:
             reference.path = str((root / reference.path).resolve())

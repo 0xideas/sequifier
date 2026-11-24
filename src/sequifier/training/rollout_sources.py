@@ -177,19 +177,17 @@ def prepare_source(manifest, config_path, root, seed, dependencies):
         {"inputs": dependencies.identity, "seed": seed, "project_root": str(root)}
     )
     output = manifest.parent / (manifest.name + ".parts") / "prepared" / key
+    values["indexed_output_path"] = str(output)
     if values.get("operation") == "prepare_policy":
         source = values.setdefault("source", {})
         for location in ("paths", "split"):
             source.pop(location, None)
         source["manifest_path"] = str(manifest)
-        values.pop("indexed_output_path", None)
-        values["output_path"] = str(output)
         prepare_policy(PreparePolicyConfig.model_validate(values))
     else:
         values.update(
             preprocessing_data_path=str(manifest),
             read_format="sequence",
-            indexed_output_path=str(output),
         )
         Preprocessor(PreprocessorModel.model_validate(values)).run()
     return output / "metadata.json"

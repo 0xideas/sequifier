@@ -34,7 +34,7 @@ from sequifier.trajectory.tables import (
 
 
 def prepare_policy(config):
-    destination = Path(config.project_root) / config.output_path
+    destination = Path(config.project_root) / config.indexed_output_path
     with preprocessing_workspace(
         destination, indexed=True, resume=not config.reprocess
     ) as work:

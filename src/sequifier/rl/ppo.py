@@ -1,7 +1,6 @@
 """Phase-local PPO lifecycle over the shared collector and clipped actor/V update."""
 
 from copy import deepcopy
-from pathlib import Path
 
 from sequifier.config.policy_plan import PPOPhaseConfig
 from sequifier.rl.environment import (
@@ -108,15 +107,6 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                 buffer, episodes = collector.collect(
                     horizon, session.transaction, storage=storage
                 )
-                if phase.collection.archive_directory:
-                    with allocation("rollout_archive") as archive:
-                        archive.resize(buffer.estimated_bytes)
-                        buffer.archive(
-                            Path(phase.collection.archive_directory)
-                            / f"collection-{session.transaction + 1:08d}.json",
-                            include_scores=phase.collection.archive_scores,
-                            sequence_namespace=sequences.namespace,
-                        )
                 sequences.ppo(buffer)
                 record = update_ppo(session, value, buffer)
                 del buffer

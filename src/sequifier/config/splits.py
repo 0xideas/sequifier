@@ -6,6 +6,7 @@ from typing import Literal
 import numpy as np
 from pydantic import Field, StrictInt
 
+from sequifier.config.identifiers import identifier
 from sequifier.config.naming import ConfigModel
 
 
@@ -100,6 +101,10 @@ class WindowStrideSettings(ConfigModel):
         return [split.cutoff for split in list(self.splits.values())[:-1]]
 
     def validate_split_method(self):
+        for name in self.splits:
+            identifier(name, "Split")
+        if next(iter(self.splits)) != "train":
+            raise ValueError("The first split must be train (used for feature fitting)")
         entries = list(self.splits.values())
         if self.split_method == "value_cutoff":
             if (

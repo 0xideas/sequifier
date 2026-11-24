@@ -893,9 +893,7 @@ class Preprocessor:
             ):
                 columns = self.config.selected_columns
                 if columns is None:
-                    columns = manifest.get("observation_columns") or manifest.get(
-                        "policy_schema", {}
-                    ).get("observation_columns")
+                    columns = manifest.get("observation_columns")
                 config = self.config.model_copy(
                     update={
                         "preprocessing_data_path": str(table),
@@ -904,10 +902,7 @@ class Preprocessor:
                         "selected_columns": columns,
                     }
                 )
-                static = manifest.get(
-                    "static_columns",
-                    manifest.get("policy_schema", {}).get("static_columns", []),
-                )
+                static = manifest.get("static_columns", [])
                 if static and not config.static_data_path:
                     static_path = table.parent / (table.name + ".static.parquet")
                     pl.scan_parquet(table).select(

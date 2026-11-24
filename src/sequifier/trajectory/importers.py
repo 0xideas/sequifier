@@ -128,10 +128,6 @@ def source_episodes(
         resolve_source(source) if isinstance(source, SequenceSourceConfig) else source
     )
     source_config = resolved.declaration
-    if resolved.kind == "collection":
-        from sequifier.trajectory.collection_inputs import collection_episodes
-
-        return collection_episodes(resolved, policy)
     if resolved.kind == "trajectory":
         return [
             TrajectoryReference(

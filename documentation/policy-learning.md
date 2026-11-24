@@ -68,8 +68,8 @@ Setting `partition.validation_fraction` generates explicit train and validation 
 together and requires at least two components. Explicit `evaluation.sources`
 undergo the same overlap checks. Codecs and moments are fitted only on training
 coverage. Indexed storage and bounded episode caches are shared across phases;
-windows are constructed on demand. `import_sequences` exports canonical raw
-Parquet shards and a checksummed manifest; see the
+windows are constructed on demand. `import_sequences` exports a canonical raw
+Parquet decision table and its checksummed manifest. See the
 [import example](example_inputs/configs/import-policy-sequences.yaml).
 
 Imitation minimizes joint action NLL. Return conditioning requires rewards and
@@ -181,8 +181,9 @@ Defaults: `optimization_epochs: 4`, `batch_size: 64`, `accumulation_batches: 1`,
 `entropy_coefficient: 0.01`, `normalize_advantages: true`, `reward_scale: 1`.
 Optional `value_clip_delta` clips V changes; `old_policy_target_kl` stops old-policy drift.
 `allow_partial_rollout: true` executes the remaining budget exactly; false requires
-divisibility. Optional `archive_directory` writes independent collection records;
-`archive_scores` defaults to false. Archives are not update sources.
+divisibility. Set `collection.output.manifest_path` to publish the decision table.
+Set `collection.output.include_scores: true` to include PPO scores in its
+`__collection` column.
 
 GRPO seals complete same-start groups before updating an actor-only model.
 Scores sum scaled rewards through termination, truncation or `max_steps`.

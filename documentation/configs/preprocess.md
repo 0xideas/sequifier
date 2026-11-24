@@ -549,14 +549,14 @@ features from it. See [the training guide](train.md#depth-encoders-and-nested-co
 ## Import sequence demonstrations
 
 `operation: import_sequences` selects the explicit policy-data import operation.
-It accepts a `source`, a model-independent `policy` data schema, an `output_path`
-(dataset directory) and optional `episodes_per_shard` (default 64). Sources
+It accepts a `source`, a model-independent `policy_binding`, an `output_path`
+(dataset directory) and optional `episodes_per_shard` (episodes per intermediate checkpoint, default 64). Sources
 can be raw CSV/Parquet tables, existing scalar prepared histories with their
 metadata, or JSON rollout recordings. Import preserves domain values and missing
 transition information; it does not fit vocabularies/statistics or create padded
 windows. Raw tables can also be used directly by policy training without this step.
 
-The operation atomically publishes Parquet shards and a checksummed manifest.
+The operation atomically publishes one Parquet decision table and its checksummed manifest.
 See [policy learning](../policy-learning.md#optional-committed-import) and
 [import-policy-sequences.yaml](../example_inputs/configs/import-policy-sequences.yaml).
 
@@ -592,8 +592,8 @@ splits:
 Use `operation: prepare_policy` for policy demonstrations. It takes the same
 `source` and `policy_binding` declarations as `import_sequences`, and adds
 named splits, per-split window lengths, `window_stride`, prediction alignment, and optional overrides
-for categorical and real feature roles. Use `indexed_output_path` or `output_path` for the indexed store.
-The `train` split owns fitting by default. Set `normalize_on_all_data: true` to fit on all splits.
+for categorical and real feature roles. Set `indexed_output_path` for the indexed store.
+List `train` first in both modes. It owns fitting by default. Set `normalize_on_all_data: true` to fit on all splits.
 Omitting `window_stride` or setting it to `null` uses the training split’s window length
 for every split. Policy preparation writes the same indexed format and
 uses `split_method: between_sequence` by default, keeping each episode, collection group,

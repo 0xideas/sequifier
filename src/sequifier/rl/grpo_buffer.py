@@ -61,21 +61,6 @@ class GRPOTrajectory:
                 )
                 del inputs
 
-    def as_dict(self):
-        return {
-            **{
-                name: value
-                for name, value in self.__dict__.items()
-                if name
-                not in {"raw_rewards", "final_observation", "terminated", "truncated"}
-            },
-            "frames": [frame.state_dict() for frame in self.frames],
-            "decision_mask": [True] * len(self.actions),
-            "history_lengths": [
-                min(i + 1, self.context_length) for i in range(len(self.actions))
-            ],
-        }
-
 
 class SealedGroupBuffer:
     def __init__(

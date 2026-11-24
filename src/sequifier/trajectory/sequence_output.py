@@ -1,7 +1,8 @@
 """Publish domain-valued rollout decisions for sequence preprocessing."""
 
 import json
-from contextlib import contextmanager, nullcontext
+from collections.abc import Callable
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from itertools import islice
 from pathlib import Path
 from shutil import copyfile
@@ -17,6 +18,8 @@ from sequifier.io.atomic import atomic_path, write_json_atomic
 from sequifier.io.sequence import CONTEXT_COLUMN, CONTEXT_RECORDS, ContextObservation
 from sequifier.io.values import portable_value
 from sequifier.trajectory.tables import ACTION_RECORD, PREVIOUS_ACTION_RECORD
+
+DestinationScope = Callable[[Path], AbstractContextManager[str | Path]]
 
 
 def sequence_coordinate(identity):
@@ -134,36 +137,97 @@ def trajectory_rows(trajectory):
         yield row
 
 
-def write_part(manifest, rows, *, inference=False):
-    """Immutable shards let a checkpoint retain an exact prefix across retries."""
-    from sequifier.io.inference_workspace import inference_output
-
-    path = Path(manifest)
-    parts = path.with_name(path.name + ".parts")
-    parts.mkdir(parents=True, exist_ok=True)
-    table = pl.from_dicts(list(rows), infer_schema_length=None)
-    with TemporaryDirectory(dir=parts) as temp:
-        shard = Path(temp) / "part.parquet"
-        table.write_parquet(shard)
-        checksum = file_checksum(shard)
-        destination = parts / (checksum + ".parquet")
-        with inference_output(destination) if inference else nullcontext(
-            destination
-        ) as staged:
-            with atomic_path(staged, durable=True) as temporary:
-                copyfile(shard, temporary)
-    return {
-        "path": str(destination.relative_to(path.parent)),
-        "sha256": checksum,
-        "decisions": len(table),
-        "sequences": table["sequenceId"].unique().sort().to_list(),
-    }
+def _store_parquet(source, manifest, destination_scope: DestinationScope = nullcontext):
+    checksum = file_checksum(source)
+    parts = manifest.with_name(manifest.name + ".parts")
+    destination = parts / (checksum + ".parquet")
+    with destination_scope(destination) as staged:
+        with atomic_path(staged, durable=True) as temporary:
+            copyfile(source, temporary)
+    return {"path": str(destination.relative_to(manifest.parent)), "sha256": checksum}
 
 
-def write_parts(manifest, rows, *, inference=False):
+def write_parts(manifest, rows):
+    """Bound memory per batch and retain immutable training checkpoint prefixes."""
+    manifest = Path(manifest)
     rows = iter(rows)
-    while batch := list(islice(rows, 64)):
-        yield write_part(manifest, batch, inference=inference)
+    with TemporaryDirectory() as work:
+        shard = Path(work) / "batch.parquet"
+        while batch := list(islice(rows, 64)):
+            table = pl.from_dicts(batch, infer_schema_length=None)
+            table.write_parquet(shard)
+            yield {
+                **_store_parquet(shard, manifest),
+                "decisions": len(table),
+                "sequences": table["sequenceId"].unique().sort().to_list(),
+            }
+
+
+def publish_sequences(
+    manifest,
+    parts,
+    observations,
+    provenance,
+    *,
+    static=(),
+    pin=False,
+    source_root=None,
+    destination_scope: DestinationScope = nullcontext,
+):
+    """Publish the same single decision table and manifest for every rollout producer."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from sequifier.trajectory.export import cast_episode_table
+
+    manifest = Path(manifest)
+    root = manifest.parent if source_root is None else Path(source_root)
+    if not parts:
+        raise ValueError("A rollout dataset requires at least one decision")
+    if len(parts) == 1 and root == manifest.parent and destination_scope is nullcontext:
+        shard = parts[0]
+    else:
+        paths = [root / part["path"] for part in parts]
+        with TemporaryDirectory() as work:
+            compact = Path(work) / "decisions.parquet"
+            if len(paths) == 1:
+                compact = paths[0]
+            else:
+                schema = pa.unify_schemas(
+                    [pq.read_schema(path) for path in paths],
+                    promote_options="permissive",
+                )
+                with pq.ParquetWriter(compact, schema, compression="zstd") as writer:
+                    for path in paths:
+                        with pq.ParquetFile(path) as source:
+                            writer.write_table(
+                                cast_episode_table(source.read(), schema)
+                            )
+            shard = {
+                **_store_parquet(compact, manifest, destination_scope),
+                "decisions": sum(part["decisions"] for part in parts),
+                "sequences": sorted(
+                    {seq for part in parts for seq in part["sequences"]}
+                ),
+            }
+    values = manifest_values([shard], observations, provenance, static=static)
+    reports = {}
+    if pin:
+        data_file = manifest.parent / shard["path"]
+        pinned = {**values, "shards": [{**shard, "path": data_file.name}]}
+        snapshot = data_file.parent / (fingerprint(pinned) + ".manifest.json")
+        write_json_atomic(snapshot, pinned)
+        reports = {
+            "committed_sequence_manifest": str(snapshot),
+            "committed_sequence_manifest_sha256": file_checksum(snapshot),
+        }
+    with destination_scope(manifest) as staged:
+        write_json_atomic(staged, values)
+        return {
+            **reports,
+            "sequence_manifest": str(manifest),
+            "sequence_manifest_sha256": file_checksum(staged),
+        }
 
 
 def manifest_values(parts, observations, provenance, *, static=()):
@@ -195,26 +259,26 @@ def publish_inference_rollout(trajectory, config):
         manifest = normalize_path(rollout.output.manifest_path, config.project_root)
         config.validate_output_destination(manifest, label="sequence manifest")
         config.validate_output_destination(manifest + ".parts", label="sequence shards")
-        shards = list(
-            write_parts(manifest, trajectory_rows(trajectory), inference=True)
-        )
-        with inference_output(manifest) as staged:
-            write_json_atomic(
-                staged,
-                manifest_values(
-                    shards,
-                    trajectory.seed.observations,
-                    {
-                        "task": config.task,
-                        "bindings": [b.model_dump() for b in trajectory.bindings],
-                        "seed_origin": trajectory.metadata["seed_origin"],
-                        "model_path": config.model_paths[0],
-                        "prediction_columns": trajectory.prediction_columns,
-                        "collection_cutoff": trajectory.collection_cutoff,
-                        "seed_history": trajectory.seed.model_dump(),
-                    },
-                    static=trajectory.seed.static_inputs,
-                ),
+        with TemporaryDirectory() as work:
+            parts = list(
+                write_parts(Path(work) / "manifest.json", trajectory_rows(trajectory))
+            )
+            publish_sequences(
+                manifest,
+                parts,
+                trajectory.seed.observations,
+                {
+                    "task": config.task,
+                    "bindings": [b.model_dump() for b in trajectory.bindings],
+                    "seed_origin": trajectory.metadata["seed_origin"],
+                    "model_path": config.model_paths[0],
+                    "prediction_columns": trajectory.prediction_columns,
+                    "collection_cutoff": trajectory.collection_cutoff,
+                    "seed_history": trajectory.seed.model_dump(),
+                },
+                static=trajectory.seed.static_inputs,
+                source_root=work,
+                destination_scope=inference_output,
             )
 
 
@@ -287,9 +351,7 @@ def supervised_manifest_input(path, sequence_view="decisions", *, dependencies=N
                     )
                 scan = scan.with_columns(projected)
         if sequence_view == "observations":
-            observations = manifest.get("observation_columns") or manifest.get(
-                "policy_schema", {}
-            ).get("observation_columns")
+            observations = manifest.get("observation_columns")
             if not observations:
                 raise ValueError(
                     "Observation view requires declared observation columns"
@@ -303,10 +365,7 @@ def supervised_manifest_input(path, sequence_view="decisions", *, dependencies=N
                 )
             )
             coordinates = ["sequenceId", "itemPosition", "sequenceName", "__group"]
-            static = manifest.get(
-                "static_columns",
-                manifest.get("policy_schema", {}).get("static_columns", []),
-            )
+            static = manifest.get("static_columns", [])
             columns = coordinates + observations + list(static)
             final = final.with_columns(
                 (pl.col("itemPosition") + 1).alias("itemPosition"),

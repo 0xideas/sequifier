@@ -29,7 +29,7 @@ its own `checkpoints/` directory. Policy snapshots use `transaction-NNNNNNNN.pt`
 and supervised snapshots use model/epoch filenames. The rolling run checkpoint
 uses the configured checkpoint path.
 
-Phase trees, logging directories and collection archive directories are reserved
+Phase trees, logging directories and collection output directories are reserved
 output namespaces. Model, report, checkpoint and manifest files must be distinct
 and cannot overlap reserved namespaces or source data. Validation runs before
 publication, including generated phase destinations and symlink escapes.
@@ -133,9 +133,7 @@ prediction/embedding file; later chunks append `-part-NNN` to its stem. Probabil
 files keep their canonical target-specific destinations.
 
 Forecast and policy rollout use the shared validated trajectory record.
-Training-time PPO and GRPO archives instead use the common
-`sequifier.collection-archive` envelope with `algorithm` and
-`collection` fields. The collection payload contains algorithm-specific replay
-and diagnostic information. `read_collection_archive` reads the envelope;
-`load_collection_record` additionally validates PPO collections. These archives
-are diagnostics, not interchangeable offline training trajectories.
+Training-time PPO and GRPO publish a sequence manifest with a single Parquet
+decision table. The `__collection` struct holds algorithm-specific diagnostics.
+The manifest, supervised preprocessing and policy import share the same row
+coordinates.

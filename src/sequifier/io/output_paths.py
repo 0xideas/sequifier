@@ -58,7 +58,7 @@ def require_file_destinations(paths):
 def require_directory_destinations(paths):
     for path in paths:
         if path.exists() and not path.is_dir():
-            raise ValueError(f"archive requires a directory: {path}")
+            raise ValueError(f"output requires a directory: {path}")
 
 
 def validate_training_destinations(
@@ -141,11 +141,6 @@ def validate_training_destinations(
             generated.append(resolved)
     validate_path_conflicts(
         generated, protected, label="phase output", check_each_other=False
-    )
-    directories.extend(
-        (root / archive).resolve()
-        for phase in phases
-        if (archive := phase.rollout_archive_directory)
     )
     for phase in phases:
         output = getattr(getattr(phase, "collection", None), "output", None)

@@ -3,13 +3,12 @@
 from pathlib import Path
 from typing import Generic, Literal, TypeVar
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import Field, model_validator
 
 from sequifier.config.command_ownership import (
     CommandRunSettings,
     SeededPreprocessingRun,
 )
-from sequifier.config.identifiers import identifier
 from sequifier.config.policy_config import (
     PolicyBinding,
     PolicyConfigBase,
@@ -26,7 +25,6 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
     source: SequenceSourceConfig
     policy_binding: PolicyBinding
     initialize_from: str | None = None
-    output_path: str
     reprocess: bool = False
 
     @property
@@ -60,9 +58,8 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
         static = list(self.source.columns.static_inputs)
         if not observations and self.source.manifest_path:
             manifest = (source or self.resolved_source()).manifest or {}
-            schema = manifest.get("policy_schema", manifest)
-            observations = list(schema.get("observation_columns", ()))
-            static = static or list(schema.get("static_columns", ()))
+            observations = list(manifest.get("observation_columns", ()))
+            static = static or list(manifest.get("static_columns", ()))
         if not observations:
             raise ValueError(
                 "sequence import requires source.columns.observations or initialize_from"
@@ -80,6 +77,7 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
 
 class SequenceImportConfig(EpisodeSourceConfig[CommandRunSettings]):
     run: CommandRunSettings = Field(default_factory=CommandRunSettings)
+    output_path: str = Field(min_length=1)
     operation: Literal["import_sequences"]
     episodes_per_shard: int = Field(default=64, gt=0)
 
@@ -88,9 +86,7 @@ class PreparePolicyConfig(
     EpisodeSourceConfig[SeededPreprocessingRun], WindowStrideSettings
 ):
     run: SeededPreprocessingRun = Field(default_factory=SeededPreprocessingRun)
-    output_path: str = Field(
-        validation_alias=AliasChoices("output_path", "indexed_output_path")
-    )
+    indexed_output_path: str = Field(min_length=1)
     operation: Literal["prepare_policy"]
     split_method: Literal["between_sequence", "within_sequence", "value_cutoff"] = (
         "between_sequence"
@@ -101,18 +97,6 @@ class PreparePolicyConfig(
     real_columns: list[str] | None = None
     normalize_real_columns: bool = True
     metadata_config_path: str | None = None
-
-    @field_validator("splits")
-    @classmethod
-    def ordered_splits(cls, splits):
-        if "train" not in splits:
-            raise ValueError(
-                "Policy preparation requires a train split for feature fitting"
-            )
-        for name in splits:
-            identifier(name, "Split")
-        # Earlier policy configs accepted train and validation in either YAML order.
-        return {"train": splits["train"], **splits}
 
     @model_validator(mode="after")
     def validate_resources(self):

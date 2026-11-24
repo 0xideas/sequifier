@@ -79,11 +79,19 @@ rollout:
 
 ## Reusing rollout data
 
-Forecast and policy inference write checksummed Parquet shards beside the configured
+Forecast and policy inference publish one checksummed Parquet decision table beside the configured
 manifest. Set `trajectory_path` to also keep the single-trajectory JSON. For PPO
 and GRPO, use the same `output` mapping under the phase's `collection`. The phase
-report records the manifest path and checksum. The optional collection archive
-retains algorithm-specific scores and optimizer inputs.
+report records the manifest path and checksum. A completed PPO or GRPO phase publishes one Parquet file of decisions, referenced
+by the manifest. Each decision carries its collection diagnostics in a
+`__collection` struct at the same `sequenceId` and `itemPosition`. Preprocessing
+selects observations by default. PPO stores the policy version, scaled reward and
+collection boundary. Set `collection.output.include_scores: true` for PPO log
+probabilities, entropy, value estimates, advantages and value targets. GRPO stores
+the policy version, reference identity, group and sample indices, JSON start token,
+scaled reward, log probabilities, trajectory score, advantage and cutoff reason.
+The top-level reward is the raw environment reward. Immutable intermediate shards
+remain available to resume older checkpoints.
 
 Each decision has an integer `sequenceId` and an `itemPosition`. `sequenceName`
 carries the external episode identity and `__group` associates related samples,
@@ -106,10 +114,6 @@ interface.
 For policy learning, set the sequence source's `manifest_path` or pass it to
 `prepare_policy`. Forecast predictions used as actions require
 `action_semantics: executed_predictions` and matching policy action names.
-Historical optimizer archives can be read with `format: collection` and `paths`.
-Older GRPO archives support imitation from their recorded actions and observations.
-They lack the raw rewards and final successors needed to reconstruct a complete
-transition dataset.
 
 A later phase in the same training plan can refer to an earlier PPO or GRPO
 phase by name. The producer must have `collection.output` configured.

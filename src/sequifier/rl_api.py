@@ -54,7 +54,6 @@ from sequifier.rl.environment import (
 )
 from sequifier.rl.learner import run_policy_training
 from sequifier.rl.policy import Policy
-from sequifier.rl.ppo_buffer import load_collection_record
 from sequifier.rl.ppo_evaluation import evaluate_policy
 from sequifier.rl.run_state import ActorRepresentation, PolicyRunResult
 from sequifier.rl.runtime import collect_policy_rollout
@@ -119,7 +118,6 @@ __all__ = [
     "collect_policy_rollout",
     "evaluate_policy",
     "import_sequences",
-    "load_collection_record",
     "load_policy",
     "load_preferences",
     "masked_action_nll_loss",
