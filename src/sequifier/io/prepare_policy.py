@@ -17,7 +17,11 @@ from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_path
 from sequifier.io.episode_corpus import EpisodeCorpus
 from sequifier.io.feature_fitting import FeatureStatistics, FittedColumns, FittingRules
-from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
+from sequifier.io.indexed_sequences import (
+    PREFIX_IMAGE,
+    IndexedSequenceWriter,
+    IndexedView,
+)
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_split_assignments
 from sequifier.io.preprocessing_workspace import preprocessing_workspace
 from sequifier.io.sequence import (
@@ -39,6 +43,7 @@ from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.trajectory.export import EpisodeTableEncoder
 from sequifier.trajectory.table_schema import cast_episode_table
 from sequifier.trajectory.tables import (
+    ACTION_RECORD,
     PREVIOUS_ACTION_RECORD,
     REWARD_COLUMN,
     SUCCESSOR_PREFIX,
@@ -76,6 +81,53 @@ def _preparation_inputs(config):
     return resolved, original, signature
 
 
+def _validate_unfingerprinted_store(config, destination, provenance):
+    hint = "choose a new indexed_output_path"
+    if not provenance.get("policy_binding"):
+        raise ValueError(f"Published dataset lacks a recorded policy binding; {hint}")
+    policy = config.resolved_policy()
+    if provenance["policy_binding"] != policy.task_binding.model_dump(mode="json"):
+        raise ValueError(f"Published dataset has a different policy binding; {hint}")
+
+    view = IndexedView.load(destination / "0.split.json")
+    metadata = view.metadata()
+    layout = {**config.split_metadata(), **config.window_metadata()}
+    if any(getattr(metadata, key, None) != value for key, value in layout.items()):
+        raise ValueError(
+            f"Published dataset has a different split or window layout; {hint}"
+        )
+    if (config.mask_column and config.mask_column != metadata.raw_mask_column) or set(
+        config.indexed_passthrough
+    ) - set(metadata.indexed_passthrough):
+        raise ValueError(
+            f"Published dataset has different mask or passthrough settings; {hint}"
+        )
+    static = [name for name in policy.static_columns if name != PREFIX_IMAGE]
+    derived = ["__policy_return"] if policy.return_conditioned else []
+    if (
+        set(static) != set(metadata.static_columns)
+        or (PREFIX_IMAGE in policy.static_columns)
+        != bool(metadata.preconditioning_image)
+        or derived != metadata.indexed_derived_features
+    ):
+        raise ValueError(
+            f"Published dataset has different static or derived features; {hint}"
+        )
+
+    encoder = EpisodeTableEncoder(policy)
+    actions = executed_action_columns(policy.actions, encoder.columns)
+    view.validate_resources()
+    view.validate_item_columns(
+        (encoder.columns - set(policy.static_columns))
+        | set(actions.values())
+        | set(policy.previous_action_inputs)
+        | set(config.indexed_passthrough),
+        struct_fields={
+            name: policy.actions for name in (ACTION_RECORD, PREVIOUS_ACTION_RECORD)
+        },
+    )
+
+
 def prepare_policy(config):
     destination = Path(config.project_root) / config.indexed_output_path
     with preprocessing_workspace(
@@ -83,18 +135,10 @@ def prepare_policy(config):
     ) as work:
         if work is None:
             published = json.loads((destination / "dataset.json").read_text())
-            previous = published.get("provenance", {}).get("preparation")
+            provenance = published.get("provenance", {})
+            previous = provenance.get("preparation")
             if previous is None:
-                metadata = load_dataset_metadata(str(destination / "metadata.json"))
-                if (
-                    config.mask_column
-                    and config.mask_column != metadata.raw_mask_column
-                ) or set(config.indexed_passthrough) - set(
-                    metadata.indexed_passthrough
-                ):
-                    raise ValueError(
-                        "Published dataset has different mask or passthrough settings; choose a new indexed_output_path"
-                    )
+                _validate_unfingerprinted_store(config, destination, provenance)
                 return
         else:
             identity_path = work / "policy-preparation.json"
@@ -224,7 +268,7 @@ def _prepare_policy(config, writer, resolved, original, identity):
             raise ValueError("Policy preparation requires eligible episodes")
         with atomic_path(schema_path) as temporary:
             temporary.write_bytes(schema.serialize().to_pybytes())
-    action_columns = executed_action_columns(policy.actions, schema.names)
+    action_columns = executed_action_columns(policy.actions, encoder.columns)
     actions = list(action_columns.values())
     # A shared self-feedback/target column stores the executed action, as in
     # supervised next-step prediction. Policy windows obtain its lag from the

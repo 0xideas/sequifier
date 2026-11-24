@@ -321,6 +321,7 @@ def supervised_manifest_input(
     dependencies=None,
     mask_column=None,
     split_column=None,
+    indexed_passthrough=(),
 ):
     """Feed the verified shards to ordinary file preprocessing, including split fitting."""
     from sequifier.config.policy_train_config import SequenceSourceConfig
@@ -424,6 +425,14 @@ def supervised_manifest_input(
                 # An auxiliary decision mask has no value on the appended successor.
                 columns.append(mask_column)
                 final = final.with_columns(pl.lit(False).alias(mask_column))
+            for name in indexed_passthrough:
+                if name not in columns:
+                    if name not in schema:
+                        raise ValueError(f"Missing indexed passthrough column {name!r}")
+                    columns.append(name)
+                    final = final.with_columns(
+                        pl.lit(None, dtype=schema[name]).alias(name)
+                    )
             scan = pl.concat(
                 [scan.select(columns), final.select(columns)], how="vertical_relaxed"
             )

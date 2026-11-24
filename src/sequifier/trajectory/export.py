@@ -57,6 +57,7 @@ class EpisodeTableEncoder:
         self.policy = policy
         self.observations = policy.observation_columns
         self.successors = successor_columns
+        self.columns = reserved.union(fields)
 
     def table(self, index, episode):
         length = len(episode.actions)

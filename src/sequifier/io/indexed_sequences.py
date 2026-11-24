@@ -458,7 +458,7 @@ class IndexedView:
                 f"{self.path}: static table lacks sequence IDs: {sorted(missing)[:10]}"
             )
 
-    def validate_item_columns(self, required):
+    def validate_item_columns(self, required, *, struct_fields=None):
         required = set(required)
         metadata = self._metadata
         masks = {depth_mask_metadata_key(name) for name in metadata.depth_layouts.root}
@@ -468,6 +468,12 @@ class IndexedView:
             schema = pl.scan_parquet(self.root / record["path"]).collect_schema()
             if missing := required - set(schema.names()):
                 raise ValueError(f"{location} lacks stored features: {sorted(missing)}")
+            for name, fields in (struct_fields or {}).items():
+                dtype = schema[name]
+                if not isinstance(dtype, pl.Struct) or set(fields) - set(
+                    dtype.to_schema()
+                ):
+                    raise ValueError(f"{location}: {name} lacks required record fields")
             for column in required:
                 dtype = schema[column]
                 if column in masks or metadata.depth_layouts.is_deep_column(column):
