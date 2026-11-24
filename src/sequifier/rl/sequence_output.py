@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import polars as pl
+import pyarrow as pa
 
 from sequifier.fingerprints import file_checksum
 from sequifier.io.sequence import register_sequence_name
@@ -14,6 +15,40 @@ from sequifier.trajectory.sequence_output import (
     publish_sequences,
     write_parts,
 )
+
+
+def _collection_type(algorithm, output):
+    fields = {"policy_version": pa.int64(), "scaled_reward": pa.float64()}
+    if algorithm == "ppo":
+        fields["collection_end"] = pa.bool_()
+        scores = (
+            (
+                "old_log_probability",
+                "old_value",
+                "entropy",
+                "successor_value",
+                "advantage",
+                "value_target",
+            )
+            if output.include_scores
+            else ()
+        )
+    else:
+        fields.update(
+            reference_identity=pa.string(),
+            group_index=pa.int64(),
+            sample_index=pa.int64(),
+            start_token_json=pa.string(),
+            cutoff_reason=pa.string(),
+        )
+        scores = (
+            "old_log_probability",
+            "reference_log_probability",
+            "score",
+            "advantage",
+        )
+    fields.update(dict.fromkeys(scores, pa.float64()))
+    return pa.struct(fields)
 
 
 class CollectedSequences:
@@ -70,6 +105,17 @@ class CollectedSequences:
         register_sequence_name(self.names_by_id, row["sequenceId"], row["sequenceName"])
         return row
 
+    def _write(self, rows):
+        self.parts.extend(
+            write_parts(
+                self.output.manifest_path,
+                rows,
+                policy=self.policy,
+                observations=self.policy.observation_columns,
+                collection_type=_collection_type(self.algorithm, self.output),
+            )
+        )
+
     def ppo(self, buffer):
         if not self.output:
             return
@@ -104,7 +150,7 @@ class CollectedSequences:
                 row["__collection"] = details
                 yield row
 
-        self.parts.extend(write_parts(self.output.manifest_path, rows()))
+        self._write(rows())
 
     def grpo(self, buffer):
         if self.output:
@@ -146,7 +192,7 @@ class CollectedSequences:
                         }
                         yield row
 
-            self.parts.extend(write_parts(self.output.manifest_path, rows()))
+            self._write(rows())
 
     def publish(self):
         if not self.output:

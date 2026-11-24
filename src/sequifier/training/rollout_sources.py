@@ -87,10 +87,10 @@ class PendingGroup:
 
         authored = parent._rollout_plan.model_copy(deep=True)
         root = Path(parent.project_root)
-        names = _active_datasets(authored, self.phases, root, prepared)
+        authored.datasets = _active_datasets(authored, self.phases, root, prepared)
         dependencies = DependencyManifest()
-        for name in sorted(names):
-            for part, source in authored.datasets[name].sources.items():
+        for dataset in authored.datasets.values():
+            for part, source in dataset.sources.items():
                 if not isinstance(source, RolloutPhaseSource):
                     continue
                 try:
@@ -132,7 +132,7 @@ class PendingGroup:
                         type="sequence", manifest_path=str(path)
                     )
                 dependencies.merge(source_dependencies)
-                authored.datasets[name].sources[part] = spec
+                dataset.sources[part] = spec
         authored.plan = [phase.name for phase in self.phases]
         authored.run.reproducibility.seed = parent.seed
         authored.initialize_from = incoming
@@ -152,6 +152,7 @@ class PendingGroup:
 
 
 def prepare_source(manifest, config_path, root, seed, dependencies):
+    from sequifier.config.command_ownership import PreprocessingSeed
     from sequifier.config.preprocess_config import PreprocessorModel
     from sequifier.config.sequence_import_config import PreparePolicyConfig
     from sequifier.io.prepare_policy import prepare_policy
@@ -164,8 +165,9 @@ def prepare_source(manifest, config_path, root, seed, dependencies):
     run = values.setdefault("run", {})
     run["project_root"] = str(root)
     reproducibility = run.setdefault("reproducibility", {})
-    if reproducibility.get("seed", "random") == "random":
+    if reproducibility.get("seed") == "random":
         reproducibility["seed"] = seed
+    preprocessing_seed = PreprocessingSeed.model_validate(reproducibility).seed
     for name in ("metadata_config_path", "initialize_from", "static_data_path"):
         if values.get(name):
             dependencies.add(root / values[name])
@@ -174,7 +176,11 @@ def prepare_source(manifest, config_path, root, seed, dependencies):
             if values["source"].get(field):
                 dependencies.add(root / values["source"][field])
     key = fingerprint(
-        {"inputs": dependencies.identity, "seed": seed, "project_root": str(root)}
+        {
+            "inputs": dependencies.identity,
+            "seed": preprocessing_seed,
+            "project_root": str(root),
+        }
     )
     output = manifest.parent / (manifest.name + ".parts") / "prepared" / key
     values["indexed_output_path"] = str(output)

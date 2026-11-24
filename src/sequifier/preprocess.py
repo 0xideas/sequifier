@@ -890,6 +890,7 @@ class Preprocessor:
             ) as (
                 table,
                 manifest,
+                static_path,
             ):
                 columns = self.config.selected_columns
                 if columns is None:
@@ -902,12 +903,7 @@ class Preprocessor:
                         "selected_columns": columns,
                     }
                 )
-                static = manifest.get("static_columns", [])
-                if static and not config.static_data_path:
-                    static_path = table.parent / (table.name + ".static.parquet")
-                    pl.scan_parquet(table).select(
-                        "sequenceId", *static
-                    ).unique().sink_parquet(static_path)
+                if static_path and not config.static_data_path:
                     config.static_data_path = str(static_path)
                 run = Preprocessor(config)
                 run.sequence_view = self.config.sequence_view

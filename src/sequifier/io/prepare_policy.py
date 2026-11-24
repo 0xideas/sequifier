@@ -25,7 +25,8 @@ from sequifier.io.window_placement import (
     cutoff_intervals,
     split_intervals,
 )
-from sequifier.trajectory.export import EpisodeTableEncoder, cast_episode_table
+from sequifier.trajectory.export import EpisodeTableEncoder
+from sequifier.trajectory.table_schema import cast_episode_table
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
     PREVIOUS_ACTION_RECORD,

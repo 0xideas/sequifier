@@ -98,7 +98,8 @@ carries the external episode identity and `__group` associates related samples,
 such as GRPO siblings. For inference rollouts, both trajectory JSON and sequence
 manifests group runs seeded from the same dataset, sequence ID, and item position. A PPO update boundary can split a sequence across shards.
 Rows carry the current observation, static fields, raw reward, recorded successor
-and separate boundary flags. Predictions use `__prediction_<name>`. Policy
+and separate boundary flags. A missing successor keeps the Arrow type of its observation,
+and a missing previous action keeps the executed-action struct type. Predictions use `__prediction_<name>`. Policy
 decisions also retain the structured executed action and previous action.
 
 For supervised training, point `preprocessing_data_path` at the manifest and use
@@ -109,7 +110,8 @@ and an action share a name such as `x`, select `x` for the observation and
 `__executed_x` for the action. With
 `sequence_view: observations`, each sequence also includes its final successor
 when recorded. Existing inference trajectory JSON can be read through the same
-interface.
+interface. Supervised preprocessing extracts the declared static fields into a
+separate table with one row per sequence.
 
 For policy learning, set the sequence source's `manifest_path` or pass it to
 `prepare_policy`. Forecast predictions used as actions require
@@ -130,7 +132,12 @@ datasets:
 ```
 
 The preprocessing config supplies the feature roles and named splits. The runner
-supplies the committed manifest and indexed output location. For direct policy
+supplies the committed manifest and indexed output location. An omitted preprocessing
+seed uses the standalone preprocessing default. An explicit integer fixes the split
+assignment in both routes. In a training plan, an explicit `random` uses the resolved
+run seed so recovery can reproduce the split. Explicit views can select existing
+parts before collection and the produced part after collection. A generated
+partition uses all its source parts to assign membership. For direct policy
 consumption, omit `preprocessing_config_path` and select the whole source or use
 the dataset's `partition` settings. Supervised phases consume prepared splits.
 Use the normal phase source references, such as `simulations.train`, to select

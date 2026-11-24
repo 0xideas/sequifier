@@ -9,6 +9,7 @@ from shutil import copyfile
 from tempfile import TemporaryDirectory
 
 import polars as pl
+import pyarrow.parquet as pq
 
 from sequifier.contract_versions import ContractVersions
 from sequifier.fingerprints import file_checksum, fingerprint
@@ -17,6 +18,7 @@ from sequifier.io.actions import decode_action
 from sequifier.io.atomic import atomic_path, write_json_atomic
 from sequifier.io.sequence import CONTEXT_COLUMN, CONTEXT_RECORDS, ContextObservation
 from sequifier.io.values import portable_value
+from sequifier.trajectory.table_schema import cast_episode_table, sequence_table
 from sequifier.trajectory.tables import ACTION_RECORD, PREVIOUS_ACTION_RECORD
 
 DestinationScope = Callable[[Path], AbstractContextManager[str | Path]]
@@ -60,6 +62,7 @@ def decision_row(
         "truncated": truncated,
         "bootstrap_allowed": not terminated,
         "__group": group,
+        CONTEXT_COLUMN: None,
         **{
             "__next_" + key: None if successor is None else successor[key]
             for key in observation
@@ -82,15 +85,18 @@ def decision_row(
     return {name: portable_value(value) for name, value in row.items()}
 
 
-def trajectory_rows(trajectory):
+def trajectory_policy(trajectory):
     from sequifier.config.policy_config import ResolvedPolicyBinding
+
+    binding = trajectory.metadata.get("policy_execution", {}).get("config")
+    return ResolvedPolicyBinding.model_validate(binding) if binding else None
+
+
+def trajectory_rows(trajectory, policy=None):
     from sequifier.trajectory.importers import sequence_from_trajectory
 
-    execution = trajectory.metadata.get("policy_execution")
-    episode = None
-    if execution and execution.get("config"):
-        policy = ResolvedPolicyBinding.model_validate(execution["config"])
-        episode = sequence_from_trajectory(trajectory, policy)
+    policy = policy or trajectory_policy(trajectory)
+    episode = sequence_from_trajectory(trajectory, policy) if policy else None
     group = trajectory.seed_group
     scalar_policy = trajectory.format in {
         "sequifier.scalar-policy-trajectory",
@@ -147,19 +153,26 @@ def _store_parquet(source, manifest, destination_scope: DestinationScope = nullc
     return {"path": str(destination.relative_to(manifest.parent)), "sha256": checksum}
 
 
-def write_parts(manifest, rows):
+def _decision_table(batch, observations, policy, collection_type=None):
+    columns = {key: [row[key] for row in batch] for key in batch[0]}
+    return sequence_table(
+        columns, observations, policy=policy, collection_type=collection_type
+    )
+
+
+def write_parts(manifest, rows, *, observations, policy=None, collection_type=None):
     """Bound memory per batch and retain immutable training checkpoint prefixes."""
     manifest = Path(manifest)
     rows = iter(rows)
     with TemporaryDirectory() as work:
         shard = Path(work) / "batch.parquet"
         while batch := list(islice(rows, 64)):
-            table = pl.from_dicts(batch, infer_schema_length=None)
-            table.write_parquet(shard)
+            table = _decision_table(batch, observations, policy, collection_type)
+            pq.write_table(table, shard, compression="zstd")
             yield {
                 **_store_parquet(shard, manifest),
                 "decisions": len(table),
-                "sequences": table["sequenceId"].unique().sort().to_list(),
+                "sequences": sorted(table["sequenceId"].unique().to_pylist()),
             }
 
 
@@ -176,9 +189,6 @@ def publish_sequences(
 ):
     """Publish the same single decision table and manifest for every rollout producer."""
     import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    from sequifier.trajectory.export import cast_episode_table
 
     manifest = Path(manifest)
     root = manifest.parent if source_root is None else Path(source_root)
@@ -260,8 +270,14 @@ def publish_inference_rollout(trajectory, config):
         config.validate_output_destination(manifest, label="sequence manifest")
         config.validate_output_destination(manifest + ".parts", label="sequence shards")
         with TemporaryDirectory() as work:
+            policy = trajectory_policy(trajectory)
             parts = list(
-                write_parts(Path(work) / "manifest.json", trajectory_rows(trajectory))
+                write_parts(
+                    Path(work) / "manifest.json",
+                    trajectory_rows(trajectory, policy),
+                    policy=policy,
+                    observations=trajectory.seed.observations,
+                )
             )
             publish_sequences(
                 manifest,
@@ -306,8 +322,13 @@ def supervised_manifest_input(path, sequence_view="decisions", *, dependencies=N
             from sequifier.trajectory.store import load_trajectory
 
             trajectory = load_trajectory(path)
-            scan = pl.from_dicts(
-                list(trajectory_rows(trajectory)), infer_schema_length=None
+            policy = trajectory_policy(trajectory)
+            scan = pl.from_arrow(
+                _decision_table(
+                    list(trajectory_rows(trajectory, policy)),
+                    trajectory.seed.observations,
+                    policy,
+                )
             ).lazy()
             manifest = {
                 "observation_columns": list(trajectory.seed.observations),
@@ -374,7 +395,13 @@ def supervised_manifest_input(path, sequence_view="decisions", *, dependencies=N
             scan = pl.concat(
                 [scan.select(columns), final.select(columns)], how="vertical_relaxed"
             )
+        static = manifest.get("static_columns", [])
+        static_path = None
+        if static:
+            static_path = table.with_suffix(".static.parquet")
+            scan.select("sequenceId", *static).unique().sink_parquet(static_path)
+            scan = scan.drop(static)
         scan.sink_parquet(table)
         if resolved is not None:
             resolved.dependencies.revalidate()
-        yield table, manifest
+        yield table, manifest, static_path

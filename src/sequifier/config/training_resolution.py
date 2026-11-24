@@ -1,5 +1,6 @@
 """Resolve the common authored plan into model, dataset and task contracts."""
 
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from sequifier.config.train_config import (
     ResolvedInterfaceStorage,
     ResolvedSequifierConfig,
     ResolvedTrainingSource,
+    RolloutPhaseSource,
     SequencePartSpecModel,
     SequifierConfig,
     _assert_compatible,
@@ -110,13 +112,54 @@ class IndexedSelection:
                 )
 
 
+def _view_members(dataset, name, view):
+    parts = view.parts or list(dataset.sources)
+    for part in parts:
+        yield (name if len(parts) == 1 else f"{name}__{part}"), part
+
+
+def _scheduled_dataset(dataset, views_used, physical_parts):
+    """Project a deferred dataset onto the views and physical parts used now."""
+    if views_used and (dataset.uses_metadata_views or dataset.partition):
+        # Implicit split views and generated partitions require the whole corpus.
+        return dataset
+    if not any(isinstance(s, RolloutPhaseSource) for s in dataset.sources.values()):
+        return dataset
+    parts = set(physical_parts)
+    views = {}
+    for name, view in dataset.views.items():
+        for member, physical in _view_members(dataset, name, view):
+            if name in views_used:
+                views[name] = view
+                parts.add(physical)
+            elif member in views_used or (
+                member in physical_parts
+                and member == physical
+                and not dataset.partition
+            ):
+                views[member] = DatasetView(parts=[physical], split=view.split)
+                parts.add(physical)
+    if not parts:
+        raise ValueError(f"Unknown dataset view in {sorted(views_used)}")
+    return dataset.model_copy(
+        update={
+            "views": views,
+            "sources": {
+                key: value for key, value in dataset.sources.items() if key in parts
+            },
+        }
+    )
+
+
 def _active_datasets(config, phases, root, prepared_inputs):
     """Include scheduled views and the episode datasets addressed by DPO spans."""
-    names = {ref.dataset for phase in phases for ref in phase.data_sources}
+    references = defaultdict(set)
+    physical = defaultdict(set)
     for phase in phases:
-        if phase.source_kind != "preference":
-            continue
         for ref in phase.data_sources:
+            references[ref.dataset].add(ref.part)
+            if phase.source_kind != "preference":
+                continue
             dataset = config.datasets[ref.dataset]
             view = dataset.views.get(ref.part)
             if view is None:
@@ -131,8 +174,19 @@ def _active_datasets(config, phases, root, prepared_inputs):
                 path = str((root / source.manifest_path).resolve())
                 for pair in prepared_inputs.preference_pairs(path):
                     for span in (pair.chosen, pair.rejected):
-                        names.add(span.source.partition(".")[0])
-    return {name: dataset for name, dataset in config.datasets.items() if name in names}
+                        name, _, part = span.source.partition(".")
+                        if (
+                            name in config.datasets
+                            and part in config.datasets[name].sources
+                        ):
+                            physical[name].add(part)
+                        else:
+                            references[name].add(part)
+    return {
+        name: _scheduled_dataset(dataset, references[name], physical[name])
+        for name, dataset in config.datasets.items()
+        if name in references or name in physical
+    }
 
 
 class TrainingSources:
@@ -186,12 +240,8 @@ class TrainingSources:
                     )
             self.view_parts[name] = {}
             for view_name, view in dataset.views.items():
-                selected = view.parts or list(dataset.sources)
                 members = []
-                for key in selected:
-                    part_name = (
-                        view_name if len(selected) == 1 else f"{view_name}__{key}"
-                    )
+                for part_name, key in _view_members(dataset, view_name, view):
                     if part_name in self.view_parts[name]:
                         raise ValueError(
                             f"{name}: ambiguous expanded view name {part_name!r}"
