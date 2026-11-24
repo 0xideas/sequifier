@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Literal
 
 import numpy as np
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictInt, field_validator, model_validator
 
 from sequifier.config.identifiers import identifier
 from sequifier.config.naming import ConfigModel
@@ -141,3 +141,27 @@ class WindowStrideSettings(ConfigModel):
             raise ValueError(
                 "split_column is only valid when split_method is 'value_cutoff'"
             )
+
+
+def validate_disjoint_roles(categorical, real):
+    if overlap := set(categorical) & set(real):
+        raise ValueError(
+            f"Columns cannot be both categorical and real: {sorted(overlap)}"
+        )
+
+
+class SequencePreprocessingSettings(WindowStrideSettings):
+    categorical_columns: list[str] | None = None
+    real_columns: list[str] | None = None
+
+    @field_validator("categorical_columns", "real_columns")
+    @classmethod
+    def validate_role_names(cls, names, info):
+        if names is not None and (not all(names) or len(names) != len(set(names))):
+            raise ValueError(f"{info.field_name} must contain unique, non-empty names")
+        return names
+
+    @model_validator(mode="after")
+    def validate_roles(self):
+        validate_disjoint_roles(self.categorical_columns or (), self.real_columns or ())
+        return self

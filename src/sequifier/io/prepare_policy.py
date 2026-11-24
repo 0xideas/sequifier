@@ -12,6 +12,7 @@ from sequifier.config.depth_layout import (
     depth_mask_metadata_key,
 )
 from sequifier.config.metadata import load_dataset_metadata
+from sequifier.config.splits import validate_disjoint_roles
 from sequifier.io.atomic import atomic_path
 from sequifier.io.episode_corpus import EpisodeCorpus
 from sequifier.io.feature_fitting import FeatureStatistics, FittedColumns, FittingRules
@@ -136,6 +137,7 @@ def _prepare_policy(config, writer):
         action = policy.actions[source_action]
         (categorical if action.type == "categorical" else real).append(name)
     categorical, real = list(dict.fromkeys(categorical)), list(dict.fromkeys(real))
+    validate_disjoint_roles(categorical, real)
     _validate_declared_column_roles(columns, categorical, real)
 
     encoder = EpisodeTableEncoder(policy)
@@ -179,20 +181,27 @@ def _prepare_policy(config, writer):
 
             if not isinstance(reference, TableEpisodeReference):
                 raise ValueError(f"Missing recorded split_column {column!r}")
-            rows = reference.table.load(reference.sequence_id)
-            if column not in rows.columns:
-                raise ValueError(f"Missing recorded split_column {column!r}")
-            frame = (
-                rows.filter(pl.col("itemPosition").is_in(episode.item_positions))
-                .sort("itemPosition")
-                .select(column)
-            )
+            frame = reference.decision_columns(episode.item_positions, [column])
         values = _add_normalized_split_column(
             frame, column, config.split_values, episode.episode_id
         )[SPLIT_VALUE_COLUMN]
         if values.null_count():
             raise ValueError("split_column must contain a value for every observation")
         return cutoff_intervals(values.to_numpy(), cutoffs)
+
+    if config.split_method == "within_sequence":
+        plan.validate_training_share(fractions)
+    else:
+        counts = [0] * split_count
+        for index in range(len(episodes)):
+            if config.split_method == "between_sequence":
+                counts[assigned[index]] += episodes.metadata(index).length
+            else:
+                bounds = episode_bounds(index)
+                assert bounds is not None
+                for split, (low, high) in enumerate(bounds):
+                    counts[split] += high - low
+        plan.validate_training_share(counts)
 
     def episode_rows(index):
         episode = episodes[index]
@@ -252,7 +261,9 @@ def _prepare_policy(config, writer):
             for name in derived
             if name in frozen.column_data_types and name not in columns
         ]
-        fitted = FittedColumns.from_metadata(stored, dict(frozen))
+        fitted = FittedColumns.from_metadata(
+            stored, dict(frozen), categorical=categorical, real=real
+        )
 
     transforms = {}
     for name in columns:

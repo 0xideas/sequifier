@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Generic, Literal, TypeVar
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from sequifier.config.command_ownership import (
     CommandRunSettings,
@@ -15,7 +15,7 @@ from sequifier.config.policy_config import (
     ResolvedPolicyBinding,
 )
 from sequifier.config.policy_train_config import SequenceSourceConfig
-from sequifier.config.splits import WindowStrideSettings
+from sequifier.config.splits import SequencePreprocessingSettings
 
 CommandRun = TypeVar("CommandRun", bound=CommandRunSettings)
 
@@ -87,19 +87,25 @@ class SequenceImportConfig(EpisodeSourceConfig[CommandRunSettings]):
     run: CommandRunSettings = Field(default_factory=CommandRunSettings)
     output_path: str = Field(min_length=1)
     operation: Literal["import_sequences"]
+    passthrough_columns: list[str] = Field(default_factory=list)
     episodes_per_shard: int = Field(default=64, gt=0)
+
+    @field_validator("passthrough_columns")
+    @classmethod
+    def validate_passthrough_columns(cls, names):
+        if not all(names) or len(names) != len(set(names)):
+            raise ValueError("passthrough_columns must contain unique, non-empty names")
+        return names
 
 
 class PreparePolicyConfig(
-    EpisodeSourceConfig[SeededPreprocessingRun], WindowStrideSettings
+    EpisodeSourceConfig[SeededPreprocessingRun], SequencePreprocessingSettings
 ):
     run: SeededPreprocessingRun = Field(default_factory=SeededPreprocessingRun)
     indexed_output_path: str = Field(min_length=1)
     operation: Literal["prepare_policy"]
     normalize_on_all_data: bool = False
 
-    categorical_columns: list[str] | None = None
-    real_columns: list[str] | None = None
     normalize_real_columns: bool = True
     metadata_config_path: str | None = None
 

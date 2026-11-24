@@ -19,8 +19,8 @@ from sequifier.config.sequence_import_config import (
     PreparePolicyConfig,
     SequenceImportConfig,
 )
+from sequifier.config.splits import SequencePreprocessingSettings
 from sequifier.config.splits import WindowSplit as WindowSplit
-from sequifier.config.splits import WindowStrideSettings
 from sequifier.helpers import (
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
@@ -122,7 +122,7 @@ class CardinalityLimitModel(ConfigModel):
         return self
 
 
-class PreprocessorModel(WindowStrideSettings):
+class PreprocessorModel(SequencePreprocessingSettings):
     """Top-level preprocessing config."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -147,8 +147,6 @@ class PreprocessorModel(WindowStrideSettings):
     merge_output: bool = True
     allow_sequence_splitting: bool = False
     selected_columns: Optional[list[str]] = None
-    categorical_columns: Optional[list[str]] = None
-    real_columns: Optional[list[str]] = None
     column_data_types: Optional[dict[str, str]] = None
     normalize_real_columns: bool = True
     normalize_on_all_data: bool = False
@@ -378,29 +376,11 @@ class PreprocessorModel(WindowStrideSettings):
 
         return normalized
 
-    @field_validator("categorical_columns", "real_columns")
-    @classmethod
-    @beartype
-    def validate_column_roles(
-        cls, value: Optional[list[str]], info: Any
-    ) -> Optional[list[str]]:
-        if value is None:
-            return None
-        if any(not column for column in value) or len(value) != len(set(value)):
-            raise ValueError(f"{info.field_name} must contain unique, non-empty names")
-        return value
-
     @model_validator(mode="after")
     @beartype
     def validate_mask_column_requires_metadata(self) -> "PreprocessorModel":
         categorical = set(self.categorical_columns or [])
         real = set(self.real_columns or [])
-        overlap = categorical & real
-        if overlap:
-            raise ValueError(
-                f"Columns cannot be both categorical and real: {sorted(overlap)}"
-            )
-
         declared = categorical | real
         cardinality_columns = set(self.cardinality_config)
         if cardinality_columns & real:

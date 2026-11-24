@@ -230,6 +230,17 @@ class TableEpisodeReference:
             and self.sequence_id in self.table.view.fitted_sequences
         )
 
+    def decision_columns(self, positions, columns):
+        """Read source columns in decision order, excluding any preceding context."""
+        rows = self.table.load(self.sequence_id)
+        if missing := set(columns) - set(rows.columns):
+            raise ValueError(f"Missing recorded columns: {sorted(missing)}")
+        return (
+            rows.filter(pl.col("itemPosition").is_between(positions[0], positions[-1]))
+            .sort("itemPosition")
+            .select(columns)
+        )
+
     def load(self) -> SequenceEpisode:
         data = ordered_sequence_rows(self.table.load(self.sequence_id))
         decode = model_decoder(

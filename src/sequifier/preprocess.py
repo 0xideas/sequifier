@@ -5,9 +5,8 @@ import os
 import re
 import shutil
 import subprocess
-import warnings
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
@@ -226,42 +225,6 @@ def _split_count(
     return len(split_values) + 1
 
 
-def _check_split_window_proportions(proportions: list[float]) -> None:
-    """Reject an estimated training-window share smaller than one half."""
-    if not proportions or proportions[0] >= 0.5:
-        return
-    details = ", ".join(
-        f"split{i}: {proportion:.1%}" for i, proportion in enumerate(proportions)
-    )
-    message = (
-        "Split 0 is estimated to have less than 50% of the windows written to disk: "
-        f"{details}. Set ALLOW_LARGE_SPLITS=1 to allow this."
-    )
-    if os.environ.get("ALLOW_LARGE_SPLITS") == "1":
-        warnings.warn(message, UserWarning, stacklevel=2)
-    else:
-        raise ValueError(message)
-
-
-def _estimate_window_proportions(
-    row_counts: Sequence[float],
-    window_stride: int,
-    alignment: Optional["PredictionAlignment"],
-) -> list[float]:
-    """Use each split's row share and window spacing as a cheap estimate."""
-    weights = [
-        count
-        / (
-            alignment.prediction_length * alignment.steps
-            if alignment is not None and i in alignment.splits
-            else window_stride
-        )
-        for i, count in enumerate(row_counts)
-    ]
-    total = sum(weights)
-    return [weight / total for weight in weights] if total else []
-
-
 def _between_sequence_assignments(lengths, plan, seed, assignments=None):
     ratios = list(plan.ratios)
     if assignments is None:
@@ -272,9 +235,7 @@ def _between_sequence_assignments(lengths, plan, seed, assignments=None):
         if split is None:
             split = assign_sequence_to_split(sequence, ratios, seed)
         counts[split] += length
-    _check_split_window_proportions(
-        _estimate_window_proportions(counts, plan.stride, plan.alignment)
-    )
+    plan.validate_training_share(counts)
     return assignments
 
 
@@ -1050,13 +1011,7 @@ class Preprocessor:
             alignment,
         )
         if config.split_method == "within_sequence" and config.split_ratios is not None:
-            _check_split_window_proportions(
-                _estimate_window_proportions(
-                    config.split_ratios,
-                    config.resolved_window_stride,
-                    self.window_plan.alignment,
-                )
-            )
+            self.window_plan.validate_training_share(config.split_ratios)
         self.column_data_types = _normalize_column_types(config.column_data_types)
         self.output = (
             WindowOutput(self)
@@ -1204,12 +1159,8 @@ class Preprocessor:
         if config.split_method == "value_cutoff":
             cutoffs = _normalized_split_cutoffs(config.split_values)
             assert cutoffs is not None
-            _check_split_window_proportions(
-                _estimate_window_proportions(
-                    _cutoff_row_counts(data.get_column(SPLIT_VALUE_COLUMN), cutoffs),
-                    config.resolved_window_stride,
-                    self.window_plan.alignment,
-                )
+            self.window_plan.validate_training_share(
+                _cutoff_row_counts(data.get_column(SPLIT_VALUE_COLUMN), cutoffs)
             )
         if self._frozen_metadata is not None:
             fitted = self._frozen_temporal_features(
@@ -1342,13 +1293,7 @@ class Preprocessor:
             )
         if config.split_method == "value_cutoff":
             assert fit.cutoff_counts is not None
-            _check_split_window_proportions(
-                _estimate_window_proportions(
-                    fit.cutoff_counts,
-                    config.resolved_window_stride,
-                    self.window_plan.alignment,
-                )
-            )
+            self.window_plan.validate_training_share(fit.cutoff_counts)
 
         self._write_feature_metadata(selected_columns, fit.features)
         if self.output.indexed is True or fit.spans_files:

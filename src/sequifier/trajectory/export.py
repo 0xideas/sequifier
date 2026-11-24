@@ -24,6 +24,7 @@ from sequifier.trajectory.tables import (
     SEQUENCE_NAME_COLUMN,
     SUCCESSOR_PREFIX,
     TRANSITION_FLAGS,
+    TableEpisodeReference,
 )
 
 
@@ -170,7 +171,29 @@ def _write_import(config, destination, work):
         seen.add(episode.episode_id)
         seq = episode.sequence_id if episode.sequence_id is not None else index
         register_sequence_name(names_by_id, seq, episode.episode_id)
-        tables.append(encoder.table(index, episode))
+        table = encoder.table(index, episode)
+        if config.passthrough_columns:
+            reference = references[index]
+            if not isinstance(reference, TableEpisodeReference):
+                raise ValueError(
+                    "passthrough_columns requires a tabular sequence source"
+                )
+            reserved = (
+                set(table.column_names)
+                | set(policy.actions)
+                | set(policy.feedback)
+                | {"__decision"}
+            )
+            if overlap := reserved.intersection(config.passthrough_columns):
+                raise ValueError(
+                    f"Passthrough columns overlap sequence fields: {sorted(overlap)}"
+                )
+            auxiliary = reference.decision_columns(
+                episode.item_positions, config.passthrough_columns
+            ).to_arrow()
+            for name in auxiliary.column_names:
+                table = table.append_column(name, auxiliary[name])
+        tables.append(table)
         if len(tables) == config.episodes_per_shard:
             flush()
     flush()

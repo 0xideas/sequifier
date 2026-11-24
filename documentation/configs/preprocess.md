@@ -556,6 +556,10 @@ metadata, or JSON rollout recordings. Import preserves domain values and missing
 transition information; it does not fit vocabularies/statistics or create padded
 windows. Raw tables can also be used directly by policy training without this step.
 
+For table sources, set `passthrough_columns: [tick]` on `import_sequences` to
+retain an auxiliary column in the published decision table. A later preprocessing
+step can then use `split_column: tick` without treating it as a model feature.
+
 Both `import_sequences` and `prepare_policy` accept `initialize_from` to resolve
 the authored `policy_binding` against a model artifact. When the artifact has
 multiple interfaces, set `model_interface` to the actor's interface name. A
@@ -614,6 +618,9 @@ preparation partitions their connected groups together to prevent leakage. Use `
 ranges or `value_cutoff` with a monotonic source column as `split_column`.
 For example, set `split_column: tick` and declare only `obs` as a policy
 observation to split by time while fitting only `obs`.
+Both preprocessors require an estimated training-window share of at least 50%.
+Set `ALLOW_LARGE_SPLITS=1` to allow a smaller share with a warning.
+Declared categorical and real roles must agree with the frozen metadata in both modes.
 Offline policy training requires independent training and evaluation episodes. Temporal
 ranges are also available for inference or for training with independently sourced evaluation data.
 When a split starts mid-episode, earlier observations and lagged actions can fill
