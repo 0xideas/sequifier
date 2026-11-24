@@ -38,7 +38,7 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
 
         return resolve_source(self.source, self.project_root)
 
-    def resolved_policy(self) -> ResolvedPolicyBinding:
+    def resolved_policy(self, source=None) -> ResolvedPolicyBinding:
         if self.initialize_from:
             from sequifier.artifacts.model_artifact import read_execution_artifact
             from sequifier.artifacts.model_config import (
@@ -58,6 +58,11 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
             return bind_policy(execution, name, self.policy_binding)
         observations = list(self.source.columns.observations)
         static = list(self.source.columns.static_inputs)
+        if not observations and self.source.manifest_path:
+            manifest = (source or self.resolved_source()).manifest or {}
+            schema = manifest.get("policy_schema", manifest)
+            observations = list(schema.get("observation_columns", ()))
+            static = static or list(schema.get("static_columns", ()))
         if not observations:
             raise ValueError(
                 "sequence import requires source.columns.observations or initialize_from"

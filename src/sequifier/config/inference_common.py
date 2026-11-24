@@ -99,10 +99,16 @@ class InferenceExecutionConfig(ConfigModel):
             raise ValueError("output_path requires exactly one model path")
         rollout = self.rollout
         if rollout is not None:
-            self.validate_output_destination(
-                normalize_path(rollout.trajectory_path, self.project_root),
-                label="trajectory_path",
-            )
+            paths = [rollout.trajectory_path]
+            if rollout.output:
+                manifest = rollout.output.manifest_path
+                paths.extend([manifest, manifest + ".parts"])
+            from sequifier.io.output_paths import validate_path_conflicts
+
+            destinations = [normalize_path(p, self.project_root) for p in paths if p]
+            validate_path_conflicts(destinations, (), label="rollout output")
+            for destination in destinations:
+                self.validate_output_destination(destination, label="rollout output")
         elif self.output_path is not None:
             destination = (
                 normalize_path(self.output_path, self.project_root)

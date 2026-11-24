@@ -16,7 +16,6 @@ from sequifier.io.actions import encode_action
 from sequifier.io.batch import SequifierInputs, collate_model_inputs
 from sequifier.io.inference_workspace import rollout_journal
 from sequifier.io.inference_workspace import write_inference_data as write_data
-from sequifier.io.inference_workspace import write_inference_trajectory
 from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.sequence import (
     CONTEXT_COLUMN,
@@ -68,10 +67,26 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
         if config.rollout is not None:
             offset = config.rollout.seed_row_index
             for rows, context in frames:
+                coordinate = config.rollout.seed
+                if coordinate is not None:
+                    if {config.sequence_id_column, config.item_position_column} - set(
+                        rows.columns
+                    ):
+                        raise ValueError(
+                            "Coordinate seeds require explicit sequence and position columns"
+                        )
+                    matches = (
+                        (rows[config.sequence_id_column] == coordinate.sequenceId)
+                        & (rows[config.item_position_column] == coordinate.itemPosition)
+                    ).arg_true()
+                    if not len(matches):
+                        continue
+                    if len(matches) != 1:
+                        raise ValueError("Ambiguous rollout seed coordinate")
+                    offset = int(matches[0])
+                assert offset is not None
                 if offset < len(rows):
                     key = policy_row_key(rows, spec, config)
-                    if config.rollout.seed_history == "current":
-                        rows, context, offset = rows.slice(offset, 1), None, 0
                     histories = _decision_histories(
                         [(rows, context)],
                         spec,
@@ -80,11 +95,13 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
                         prepared=prepared,
                         seed_index=offset,
                     )
-                    for _, history, _ in histories:
-                        infer_rollout(policy, history, config)
+                    for _, history, identity in histories:
+                        infer_rollout(policy, history, config, identity)
                         return
                 offset -= len(rows)
-            raise ValueError("policy rollout seed_row_index is outside the input rows")
+            raise ValueError(
+                "policy rollout seed coordinate or seed_row_index is outside the input rows"
+            )
         predictions = predict_policy(
             policy,
             frames,
@@ -191,6 +208,27 @@ def _indexed_policy_frames(view, spec, config):
     media = None if metadata.indexed_inline_media else view.image_store()
     bounds = view.split_bounds()
     predict = view.view["view"] == "predict"
+    coordinate = getattr(config.rollout, "seed", None)
+    if (
+        coordinate
+        and config.sequence_id_column == "sequenceId"
+        and config.item_position_column == "itemPosition"
+    ):
+        from sequifier.rollout.seeds import indexed_history
+
+        rows = indexed_history(view, coordinate, spec.context_length + 1)
+        yield _prepared_frame(
+            rows,
+            coordinate.sequenceId,
+            coordinate.itemPosition,
+            static,
+            media,
+            metadata,
+            decode,
+            spec,
+            config,
+        )
+        return
     for key in sorted(view.dataset["sequences"], key=int):
         sequence = int(key)
         if not predict and sequence not in bounds:
@@ -347,7 +385,9 @@ def desired_return(config, spec, row):
     )
 
 
-def infer_rollout(policy, history, config):
+def infer_rollout(policy, history, config, identity):
+    from sequifier.rollout.seeds import seed_origin
+
     spec = policy.config
     rollout = config.rollout
     pad = spec.context_length - len(history)
@@ -385,16 +425,16 @@ def infer_rollout(policy, history, config):
             "model_path": config.model_paths[0],
             "model_interface": config.model_interface,
             "seed_row_index": rollout.seed_row_index,
+            "seed_origin": seed_origin(
+                config, identity["sequenceId"], identity["itemPosition"]
+            ),
             "enforce_determinism": config.enforce_determinism,
             "seed": config.seed,
         }
     )
-    destination = normalize_path(rollout.trajectory_path, config.project_root)
-    config.validate_output_destination(destination, label="trajectory_path")
-    write_inference_trajectory(trajectory, destination)
-    logger.info(
-        f"Wrote {len(trajectory.transitions)} policy transitions to '{destination}'"
-    )
+    from sequifier.trajectory.sequence_output import publish_inference_rollout
+
+    publish_inference_rollout(trajectory, config)
 
 
 @torch.no_grad()
@@ -530,10 +570,10 @@ def _lagged_action(row, prior, spec, config, position, prepared):
         }
         if any(value is not None for value in lagged.values()):
             return encode_action(lagged, spec)
-    if prepared and row.get(PREVIOUS_ACTION_RECORD):
+    if row.get(PREVIOUS_ACTION_RECORD):
         return encode_action(row[PREVIOUS_ACTION_RECORD], spec)
     if prior is not None:
-        recorded = prior.get(ACTION_RECORD, prior) if prepared else prior
+        recorded = prior.get(ACTION_RECORD, prior)
         if recorded and all(recorded.get(name) is not None for name in spec.actions):
             return encode_action({name: recorded[name] for name in spec.actions}, spec)
     return None
@@ -559,10 +599,14 @@ def _decision_histories(frames, spec, config, row_key, *, prepared, seed_index=N
                 selected = group.filter(pl.col(row_key) == seed_index)
                 if selected.is_empty():
                     continue
-                group = group.filter(
-                    pl.col(config.item_position_column)
-                    <= selected[config.item_position_column][0]
-                ).tail(spec.context_length + 1)
+                group = (
+                    selected
+                    if config.rollout.seed_history == "current"
+                    else group.filter(
+                        pl.col(config.item_position_column)
+                        <= selected[config.item_position_column][0]
+                    ).tail(spec.context_length + 1)
+                )
             history = deque(maxlen=spec.context_length)
             prior = None
             index = 0

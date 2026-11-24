@@ -87,7 +87,9 @@ class EpisodeCorpus:
                     len(episode.actions),
                     getattr(sources[index], "content_key", None)
                     or episode_content_key(episode),
-                    fingerprint(episode.model_dump(mode="json")),
+                    fingerprint(
+                        episode.model_dump(mode="json", exclude={"sequence_id"})
+                    ),
                 )
             )
         return EpisodeRecords(sources, tuple(metadata))
@@ -124,6 +126,10 @@ class EpisodeView:
     def metadata(self, index):
         corpus, position = self.entries[index]
         return corpus.records.metadata[position]
+
+    def source(self, index):
+        corpus, position = self.entries[index]
+        return corpus.records.sources[position]
 
     def used_for_fitting(self, index):
         corpus, position = self.entries[index]

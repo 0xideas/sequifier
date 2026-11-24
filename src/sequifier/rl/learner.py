@@ -147,7 +147,12 @@ def run_policy_training(
     if isinstance(config, SequifierConfig):
         config = resolve_training_run(config)
     if not isinstance(config, ResolvedSequifierConfig) or any(
-        phase.algorithm == "supervised" for phase in config.training_plan
+        phase.algorithm == "supervised"
+        for phase in (
+            config._rollout_plan.ordered_phases
+            if config._rollout_plan
+            else config.training_plan
+        )
     ):
         raise TypeError("policy training requires a resolved policy-only training plan")
     return run_policy_plan(config)

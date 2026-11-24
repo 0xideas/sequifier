@@ -51,7 +51,9 @@ def _primary(request):
     root = request.run.project_root
     rollout = getattr(request, "rollout", None)
     if rollout:
-        return normalize_path(rollout.trajectory_path, root)
+        return normalize_path(
+            rollout.trajectory_path or rollout.output.manifest_path, root
+        )
     from sequifier.infer import _inference_destination
 
     output = request.output

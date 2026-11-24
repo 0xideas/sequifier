@@ -90,6 +90,31 @@ def validate_training_destinations(
         dataset_names = tuple(config.dataset_training)
     from sequifier.artifacts.phase import PhaseArtifacts
 
+    root = Path(config.project_root)
+    deferred = getattr(config, "_rollout_plan", None)
+    if deferred is not None and not group:
+        phases = deferred.ordered_phases
+        protected = set(protected)
+        for dataset in deferred.datasets.values():
+            for source in dataset.sources.values():
+                for field in (
+                    "metadata_config_path",
+                    "manifest_path",
+                    "preprocessing_config_path",
+                    "static_data_path",
+                    "path",
+                ):
+                    if value := getattr(source, field, None):
+                        protected.add((root / value).resolve())
+                protected.update(
+                    (root / path).resolve() for path in getattr(source, "paths", ())
+                )
+        for phase in phases:
+            reference = getattr(phase, "reference", None)
+            if path := getattr(reference, "path", None):
+                protected.add((root / path).resolve())
+
+    sequence_manifests = []
     phase_files = []
     snapshot_phases = {}
     generated = []
@@ -118,10 +143,19 @@ def validate_training_destinations(
         generated, protected, label="phase output", check_each_other=False
     )
     directories.extend(
-        Path(archive).resolve()
+        (root / archive).resolve()
         for phase in phases
         if (archive := phase.rollout_archive_directory)
     )
+    for phase in phases:
+        output = getattr(getattr(phase, "collection", None), "output", None)
+        if output:
+            manifest_path = (root / output.manifest_path).resolve()
+            sequence_manifests.append(manifest_path)
+            files.append(manifest_path)
+            directories.append(
+                manifest_path.with_name(manifest_path.name + ".parts").resolve()
+            )
     directories = unique_paths(
         directories, "training output directories must be distinct"
     )
@@ -148,7 +182,9 @@ def validate_training_destinations(
         and manifest != Path(config.outputs.report_path).resolve()
     )
     if group:
-        validate_path_conflicts(directories, protected, label="phase group output")
+        validate_path_conflicts(
+            [*sequence_manifests, *directories], protected, label="phase group output"
+        )
     elif snapshot_resume:
         external_files = [path for path in files if path not in {checkpoint, manifest}]
         validate_path_conflicts(

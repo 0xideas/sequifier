@@ -84,6 +84,13 @@ class WindowOutput:
 
     def write_metadata(self, metadata, columns):
         self.feature_columns = columns
+        if self.run.sequence_identities:
+            metadata["sequence_identities"] = {
+                str(seq): {"episode_id": episode, "group_id": group}
+                for seq, (episode, group) in self.run.sequence_identities.items()
+            }
+        if self.run.sequence_manifest_path:
+            metadata["provenance"] = self.run.sequence_manifest_provenance()
         self.metadata_path.parent.mkdir(parents=True, exist_ok=True)
         self.metadata_path.write_text(json.dumps(metadata))
 
@@ -256,9 +263,14 @@ class IndexedOutput:
                     assignments,
                 )
             )
+            episode, group = run.sequence_identities.get(
+                int(arrays.sequence_ids[start]), (None, None)
+            )
             self.writer.add(
                 data.slice(start, stop - start).drop(SPLIT_VALUE_COLUMN, strict=False),
                 views,
+                episode_id=episode,
+                group_id=group,
             )
 
     def finish(self):
@@ -289,7 +301,9 @@ class IndexedOutput:
             self.metadata,
             feature_columns=self.feature_columns,
             original_metadata=original,
-            provenance={
+            provenance=run.sequence_manifest_provenance()
+            if run.sequence_manifest_path
+            else {
                 "source": {
                     "preprocessing_data_path": str(input_path.absolute()),
                     "static_data_path": str(

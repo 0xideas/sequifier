@@ -126,9 +126,15 @@ class IndexedEpisodeTable:
 
     def load(self, identity):
         start, end = self.ranges[identity]
-        return self.view.read(identity, start - self.context_length, end).with_columns(
-            (pl.col("itemPosition") >= start).alias("__decision")
-        )
+        rows = self.view.read(identity, start - self.context_length, end)
+        record = self.view.dataset["sequences"][str(identity)]
+        for field, column in (
+            ("episode_id", EPISODE_ID_COLUMN),
+            ("group_id", GROUP_COLUMN),
+        ):
+            if record.get(field) is not None and column not in rows.columns:
+                rows = rows.with_columns(pl.lit(record[field]).alias(column))
+        return rows.with_columns((pl.col("itemPosition") >= start).alias("__decision"))
 
 
 def model_decoder(metadata, actions):
@@ -428,6 +434,7 @@ def table_episode(
     identity = (
         constant(values(EPISODE_ID_COLUMN, domain_scalar), "episode ID")
         if EPISODE_ID_COLUMN in data.columns
+        and data[EPISODE_ID_COLUMN].null_count() < len(data)
         else sequence_id
     )
 
@@ -516,6 +523,7 @@ def table_episode(
                 else None
             )
     episode = SequenceEpisode(
+        sequence_id=int(sequence_id),
         episode_id=episode_namespace + str(identity),
         item_positions=positions,
         observations={name: values(name, feature_value) for name in observations},
@@ -572,6 +580,27 @@ def table_episodes(resolved: ResolvedSequenceSource, policy: PolicyEpisodeSpec):
             image_store = view.image_store()
     else:
         data = prepared_table(resolved).lazy() if prepared else scan_tables(paths)
+        manifest = resolved.manifest or {}
+        provenance = manifest.get("provenance", {})
+        if provenance.get("task") == "forecast":
+            if source.action_semantics != "executed_predictions":
+                raise ValueError(
+                    "forecast sources require explicit action_semantics='executed_predictions'"
+                )
+            if provenance["prediction_columns"] != policy.action_columns:
+                raise ValueError("Recorded predictions differ from policy actions")
+            if (
+                policy.previous_action_inputs or policy.return_conditioned
+            ) and CONTEXT_COLUMN in data.collect_schema():
+                data = data.drop(CONTEXT_COLUMN)
+            data = data.with_columns(
+                pl.struct(
+                    [
+                        pl.col("__prediction_" + name).alias(name)
+                        for name in policy.action_columns
+                    ]
+                ).alias(ACTION_RECORD)
+            )
         if {"sequenceId", "itemPosition"} - set(data.collect_schema().names()):
             raise ValueError("policy tables require sequenceId and itemPosition")
         table = IndexedTable(data, "sequenceId")

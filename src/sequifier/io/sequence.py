@@ -66,6 +66,7 @@ class TransitionColumns(BaseModel):
 class SequenceEpisode(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
+    sequence_id: StrictInt | None = None
     episode_id: str = Field(min_length=1)
     item_positions: tuple[StrictInt, ...] = Field(min_length=1)
     observations: dict[str, tuple[JsonValue, ...]] = Field(min_length=1)

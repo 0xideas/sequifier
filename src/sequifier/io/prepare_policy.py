@@ -63,12 +63,12 @@ def _prepare_policy(config, writer):
         if frozen is not None
         else config.normalize_real_columns
     )
-    policy = config.resolved_policy()
+    resolved = config.resolved_source()
+    policy = config.resolved_policy(resolved)
     if config.initialize_from is None:
         policy = policy.model_copy(
             update={"context_length": max(config.window_lengths)}
         )
-    resolved = config.resolved_source()
     source_episodes = EpisodeCorpus([resolved], policy).view()
     decisions = EpisodeDecisions(source_episodes, policy)
     fractions = tuple(config.split_ratios or ())
@@ -177,11 +177,22 @@ def _prepare_policy(config, writer):
             return None
         episode = episodes[index]
         column = config.split_column
-        if column not in episode.observations:
-            raise ValueError(
-                "Policy split_column must name a recorded temporal observation"
+        if column in episode.observations:
+            frame = pl.DataFrame({column: episode.observations[column]})
+        else:
+            reference = episodes.source(index)
+            from sequifier.trajectory.tables import TableEpisodeReference
+
+            if not isinstance(reference, TableEpisodeReference):
+                raise ValueError(f"Missing recorded split_column {column!r}")
+            rows = reference.table.load(reference.sequence_id)
+            if column not in rows.columns:
+                raise ValueError(f"Missing recorded split_column {column!r}")
+            frame = (
+                rows.filter(pl.col("itemPosition").is_in(episode.item_positions))
+                .sort("itemPosition")
+                .select(column)
             )
-        frame = pl.DataFrame({column: episode.observations[column]})
         values = _add_normalized_split_column(
             frame, column, config.split_values, episode.episode_id
         )[SPLIT_VALUE_COLUMN]
@@ -262,7 +273,9 @@ def _prepare_policy(config, writer):
     for index in range(len(episodes)):
         record = episodes.metadata(index)
         episode_id = record.episode_id
-        sequence_id = sequence_ids[episode_id]
+        sequence_id = episodes[index].sequence_id
+        if sequence_id is None:
+            sequence_id = sequence_ids[episode_id]
         checkpoint = writer.item_checkpoint(sequence_id)
         static_path = writer.workspace / f"static-{sequence_id}.parquet"
         if checkpoint.is_file():

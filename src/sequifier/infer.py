@@ -31,7 +31,6 @@ from sequifier.helpers import (
 )
 from sequifier.io.inference_workspace import bind_inference_inputs, rollout_journal
 from sequifier.io.inference_workspace import write_inference_data as write_data
-from sequifier.io.inference_workspace import write_inference_trajectory
 from sequifier.io.output_paths import require_file_destinations, unique_paths
 from sequifier.io.preprocessing import denormalize_values
 from sequifier.model.execution_schema import ExecutionSchema
@@ -1211,21 +1210,6 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
     from sequifier.rollout.preprocessing import FixedNumericPreprocessing
 
     rollout = config.rollout
-    remaining = rollout.seed_window_index
-    selected = None
-    for data_id, data in enumerate(dataset):
-        windowed = _windowed_inference_batch(config, data, column_data_types)
-        count = windowed.sequence_ids.numel()
-        if remaining >= count:
-            remaining -= count
-            continue
-        selected = (data_id, windowed, remaining)
-        break
-    if selected is None:
-        raise ValueError(
-            f"rollout seed_window_index {rollout.seed_window_index} is outside the prepared dataset windows"
-        )
-    data_id, windowed, row = selected
     metadata = config.dataset_metadata
     columns = list(
         dict.fromkeys(
@@ -1241,13 +1225,47 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
             for column in columns
         },
     )
-    seed_inputs = {
-        key: value[row : row + 1].numpy() for key, value in windowed.inputs.items()
-    }
-    seed_mask = windowed.metadata["attention_valid_mask"][row : row + 1].numpy()
-    seed = codec.seed_from_model(
-        seed_inputs, seed_mask, config.input_columns, config.static_columns
-    )
+    from sequifier.rollout.seeds import forecast_coordinate_seed, seed_origin
+
+    if rollout.seed is not None:
+        seed = forecast_coordinate_seed(config, dataset, column_data_types, codec)
+        origin = seed_origin(config, rollout.seed.sequenceId, rollout.seed.itemPosition)
+    else:
+        remaining = rollout.seed_window_index
+        selected = None
+        for data_id, data in enumerate(dataset):
+            windowed = _windowed_inference_batch(config, data, column_data_types)
+            count = windowed.sequence_ids.numel()
+            if remaining >= count:
+                remaining -= count
+                continue
+            selected = (data_id, windowed, remaining)
+            break
+        if selected is None:
+            raise ValueError(
+                f"rollout seed_window_index {rollout.seed_window_index} is outside the prepared dataset windows"
+            )
+        data_id, windowed, row = selected
+        seed_inputs = {
+            key: value[row : row + 1].numpy() for key, value in windowed.inputs.items()
+        }
+        seed_mask = windowed.metadata["attention_valid_mask"][row : row + 1].numpy()
+        seed = codec.seed_from_model(
+            seed_inputs, seed_mask, config.input_columns, config.static_columns
+        )
+        start = int(windowed.model_start_positions[row])
+        sequence = int(windowed.sequence_ids[row])
+        origin = {
+            **seed_origin(
+                config, sequence, start + config.window_view.context_length - 1
+            ),
+            "data_id": data_id,
+            "seed_window_index": rollout.seed_window_index,
+            "sequence_id": sequence,
+            "subsequence_id": int(windowed.subsequence_ids[row]),
+            "model_start_position": start,
+            "window_start_offset": int(windowed.window_start_offsets[row]),
+        }
     schema = (
         ExecutionSchema.from_interface(
             inferer.inference_model.interface, config.window_view.context_length
@@ -1306,22 +1324,12 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
             "collection_budget": rollout.max_steps,
             "seed": config.seed,
             "enforce_determinism": config.enforce_determinism,
-            "seed_origin": {
-                "data_id": data_id,
-                "seed_window_index": rollout.seed_window_index,
-                "sequence_id": int(windowed.sequence_ids[row]),
-                "subsequence_id": int(windowed.subsequence_ids[row]),
-                "model_start_position": int(windowed.model_start_positions[row]),
-                "window_start_offset": int(windowed.window_start_offsets[row]),
-            },
+            "seed_origin": origin,
         },
     )
-    path = normalize_path(rollout.trajectory_path, config.project_root)
-    config.validate_output_destination(path, label="trajectory_path")
-    write_inference_trajectory(trajectory, path)
-    logger.info(
-        f"Wrote {len(trajectory.transitions)} rollout transitions to '{path}'; return={trajectory.total_return}"
-    )
+    from sequifier.trajectory.sequence_output import publish_inference_rollout
+
+    publish_inference_rollout(trajectory, config)
 
 
 @beartype

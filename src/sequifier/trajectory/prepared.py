@@ -29,6 +29,7 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
         else None
     )
 
+    identities = getattr(metadata, "sequence_identities", {})
     rows = {}
     for path in source.paths:
         if path.suffix.lower() == ".pt":
@@ -80,6 +81,13 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
                     **values,
                     "__decision": int(lows[row]) <= position < int(highs[row]),
                 }
+                if identity := identities.get(str(key[0])):
+                    for column, field in (
+                        ("episodeId", "episode_id"),
+                        ("__group", "group_id"),
+                    ):
+                        if identity.get(field) is not None:
+                            record[column] = identity[field]
                 if key in rows and rows[key] != record:
                     raise ValueError(
                         "prepared history windows disagree on overlapping positions or split bounds"

@@ -23,6 +23,7 @@ import pyarrow.parquet as pq
 import torch
 from loguru import logger
 
+from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.config.metadata import (
     dataset_tensor_kind,
     dataset_tensor_version,
@@ -868,10 +869,69 @@ class Preprocessor:
 
     def __init__(self, config: PreprocessorModel):
         self.config = config
+        self.sequence_identities = {}
+        self.sequence_dependencies = DependencyManifest()
+        self.sequence_manifest_path = None
+        self.sequence_view = config.sequence_view
+        self.external_static_source = None
 
     def run(self, *, indexed_writer=None, indexed_prediction=False) -> None:
         from sequifier.io.indexed_sequences import IndexedSequenceWriter
 
+        if (
+            self.config.read_format == "sequence"
+            or Path(self.config.preprocessing_data_path).suffix.lower() == ".json"
+        ) and Path(self.config.preprocessing_data_path).is_file():
+            from sequifier.trajectory.sequence_output import supervised_manifest_input
+
+            with supervised_manifest_input(
+                self.config.preprocessing_data_path,
+                self.config.sequence_view,
+                dependencies=self.sequence_dependencies,
+            ) as (
+                table,
+                manifest,
+            ):
+                columns = self.config.selected_columns
+                if columns is None:
+                    columns = manifest.get("observation_columns") or manifest.get(
+                        "policy_schema", {}
+                    ).get("observation_columns")
+                config = self.config.model_copy(
+                    update={
+                        "preprocessing_data_path": str(table),
+                        "read_format": "parquet",
+                        "sequence_view": "decisions",
+                        "selected_columns": columns,
+                    }
+                )
+                static = manifest.get(
+                    "static_columns",
+                    manifest.get("policy_schema", {}).get("static_columns", []),
+                )
+                if static and not config.static_data_path:
+                    static_path = table.parent / (table.name + ".static.parquet")
+                    pl.scan_parquet(table).select(
+                        "sequenceId", *static
+                    ).unique().sink_parquet(static_path)
+                    config.static_data_path = str(static_path)
+                run = Preprocessor(config)
+                run.sequence_view = self.config.sequence_view
+                run.external_static_source = self.config.static_data_path
+                run.sequence_dependencies = self.sequence_dependencies
+                if run.external_static_source:
+                    run.sequence_dependencies.add(run.external_static_source)
+                run.sequence_manifest_path = Path(
+                    self.config.preprocessing_data_path
+                ).resolve()
+                run.run(
+                    indexed_writer=indexed_writer, indexed_prediction=indexed_prediction
+                )
+            return
+        if self.config.sequence_view == "observations":
+            raise ValueError(
+                "sequence_view observations requires a sequence manifest or trajectory"
+            )
         path = self.config.indexed_output_path
         if path is None or indexed_writer is not None:
             self._process(indexed_writer, indexed_prediction)
@@ -883,6 +943,70 @@ class Preprocessor:
             if work is not None:
                 with IndexedSequenceWriter(destination, workspace=work) as writer:
                     self._process(writer, indexed_prediction)
+
+    def sequence_manifest_provenance(self):
+        path = self.sequence_manifest_path
+        assert path is not None
+        self.sequence_dependencies.revalidate()
+        return {
+            "source": {"manifest_path": str(path), "sequence_view": self.sequence_view},
+            "files": [
+                {"path": location, "sha256": checksum}
+                for location, checksum in sorted(
+                    self.sequence_dependencies.identity.items()
+                )
+            ],
+        }
+
+    def _read_sequence_identities(self):
+        config = self.config
+        path = Path(config.preprocessing_data_path)
+        files = (
+            [path]
+            if path.is_file()
+            else _folder_input_files(
+                str(path), config.read_format, config.static_data_path
+            )
+        )
+        for file in files:
+            scan = (
+                pl.scan_parquet(file)
+                if config.read_format == "parquet"
+                else pl.scan_csv(file)
+            )
+            schema = scan.collect_schema()
+            identity = [name for name in ("episodeId", "__group") if name in schema]
+            if not identity:
+                continue
+            records = scan.select("sequenceId", *identity).unique().collect()
+            for row in records.iter_rows(named=True):
+                key = row["sequenceId"]
+                value = (row.get("episodeId"), row.get("__group"))
+                if self.sequence_identities.setdefault(key, value) != value:
+                    raise ValueError(
+                        f"Episode identity or group changes within sequence {key}"
+                    )
+
+    def _sequence_assignments(self, sequences):
+        from sequifier.io.partitioning import partition_components
+
+        groups = {
+            seq: group
+            for seq, (_, group) in self.sequence_identities.items()
+            if group is not None
+        }
+        ratios = _require_split_ratios(self.config.split_ratios)
+        if not groups:
+            return _balanced_sequence_split_assignments(
+                list(sequences), ratios, self.config.seed
+            )
+        partitions = partition_components(
+            sorted(sequences),
+            lambda seq: [groups[seq]] if seq in groups else [],
+            ratios,
+            self.config.seed,
+        )
+        return {seq: index for index, part in enumerate(partitions) for seq in part}
 
     def _process(self, indexed_writer, indexed_prediction) -> None:
         from sequifier.io.preprocessing_output import IndexedOutput, WindowOutput
@@ -955,8 +1079,13 @@ class Preprocessor:
         self.image_manifest = self._validate_image_sources()
         self._setup_directories()
 
+        self._read_sequence_identities()
         selected_columns = config.selected_columns
-        if config.time_alignment_column is not None or config.indexed_passthrough:
+        if (
+            self.sequence_identities
+            or config.time_alignment_column is not None
+            or config.indexed_passthrough
+        ):
             if selected_columns is None:
                 source_file = (
                     config.preprocessing_data_path
@@ -978,6 +1107,8 @@ class Preprocessor:
                     if column
                     not in {
                         *INPUT_METADATA_COLUMNS,
+                        "episodeId",
+                        "__group",
                         config.time_alignment_column,
                         config.mask_column,
                         *config.indexed_passthrough,
@@ -1060,8 +1191,9 @@ class Preprocessor:
         sequence_split_assignments = None
         if config.split_method == "between_sequence":
             lengths = dict(data.group_by("sequenceId").agg(pl.len()).iter_rows())
+            sequence_split_assignments = self._sequence_assignments(lengths)
             sequence_split_assignments = _between_sequence_assignments(
-                lengths, self.window_plan, config.seed
+                lengths, self.window_plan, config.seed, sequence_split_assignments
             )
         if config.split_method == "value_cutoff":
             cutoffs = _normalized_split_cutoffs(config.split_values)
@@ -1145,7 +1277,9 @@ class Preprocessor:
             and config.split_method == "within_sequence"
         )
         if not combine_audit_and_fit and (
-            config.metadata_config_path or not config.normalize_on_all_data
+            config.metadata_config_path
+            or not config.normalize_on_all_data
+            or self.sequence_identities
         ):
             (
                 files_to_process,
@@ -1160,11 +1294,7 @@ class Preprocessor:
                 self.num_workers,
             )
         sequence_split_assignments = (
-            _balanced_sequence_split_assignments(
-                list(folder_sequence_summaries),
-                _require_split_ratios(config.split_ratios),
-                config.seed,
-            )
+            self._sequence_assignments(folder_sequence_summaries)
             if folder_sequence_summaries is not None
             and config.split_method == "between_sequence"
             else None
@@ -1993,7 +2123,17 @@ class Preprocessor:
             "preprocessing_config": {
                 **self._layout_metadata(),
                 "read_format": self.config.read_format,
-                "static_data_path": self.config.static_data_path,
+                "static_data_path": self.external_static_source
+                if self.sequence_manifest_path
+                else self.config.static_data_path,
+                **(
+                    {
+                        "sequence_manifest": self.sequence_manifest_provenance(),
+                        "sequence_view": self.sequence_view,
+                    }
+                    if self.sequence_manifest_path
+                    else {}
+                ),
                 "static_categorical_columns": self.config.static_categorical_columns,
                 "static_real_columns": self.config.static_real_columns,
                 **self.image_manifest,

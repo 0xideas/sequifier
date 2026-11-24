@@ -65,9 +65,71 @@ to start with one observation and the binding’s initial feedback. See
 [inference options](configs/infer.md#policy-model-interfaces) and the
 [Python example](example_inputs/ppo_toy_control.py) using the shipped PPO scaffold.
 
-Both seed indices are required, zero-based, and checked before environment creation.
-Only the route-specific seed index name is accepted and recorded in trajectory
-metadata. Neither `seed_index` nor `rollout.type` is accepted.
+Both modes accept a physical seed coordinate in the selected input split. Use exactly
+one selector. Existing configs can continue using a zero-based `seed_window_index`
+for forecasts or `seed_row_index` for policies. Coordinate selection stays stable
+when the same items are repacked into different windows or shards.
+
+```yaml
+rollout:
+  seed: {sequenceId: 42, itemPosition: 17}
+  output: {manifest_path: data/simulation/manifest.json}
+  # Keep the existing environment, max_steps and any forecast bindings here.
+```
+
+## Reusing rollout data
+
+Forecast and policy inference write checksummed Parquet shards beside the configured
+manifest. Set `trajectory_path` to also keep the single-trajectory JSON. For PPO
+and GRPO, use the same `output` mapping under the phase's `collection`. The phase
+report records the manifest path and checksum. The optional collection archive
+retains algorithm-specific scores and optimizer inputs.
+
+Each decision has an integer `sequenceId` and an `itemPosition`. `episodeId`
+carries the external episode identity and `__group` associates related samples,
+such as GRPO siblings. A PPO update boundary can split a sequence across shards.
+Rows carry the current observation, static fields, raw reward, recorded successor
+and separate boundary flags. Predictions use `__prediction_<name>`. Policy
+decisions also retain the structured executed action and previous action.
+
+For supervised training, point `preprocessing_data_path` at the manifest and use
+the usual split, feature and window settings. Use `read_format: sequence` for
+a manifest without a JSON suffix. The default `sequence_view: decisions` exposes
+one row per action, including named action fields when selected. When an observation
+and an action share a name such as `x`, select `x` for the observation and
+`__executed_x` for the action. With
+`sequence_view: observations`, each sequence also includes its final successor
+when recorded. Existing inference trajectory JSON can be read through the same
+interface.
+
+For policy learning, set the sequence source's `manifest_path` or pass it to
+`prepare_policy`. Forecast predictions used as actions require
+`action_semantics: executed_predictions` and matching policy action names.
+Historical optimizer archives can be read with `format: collection` and `paths`.
+Older GRPO archives support imitation from their recorded actions and observations.
+They lack the raw rewards and final successors needed to reconstruct a complete
+transition dataset.
+
+A later phase in the same training plan can refer to an earlier PPO or GRPO
+phase by name. The producer must have `collection.output` configured.
+
+```yaml
+datasets:
+  simulations:
+    model_interface: actor
+    sources:
+      recorded:
+        type: rollout
+        phase: collect
+        preprocessing_config_path: configs/preprocess-simulations.yaml
+```
+
+The preprocessing config supplies the feature roles and named splits. The runner
+supplies the committed manifest and indexed output location. For direct policy
+consumption, omit `preprocessing_config_path` and select the whole source or use
+the dataset's `partition` settings. Supervised phases consume prepared splits.
+Use the normal phase source references, such as `simulations.train`, to select
+the resulting view.
 
 ## Boundaries and trajectory API
 

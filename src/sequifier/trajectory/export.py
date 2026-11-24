@@ -147,7 +147,10 @@ class EpisodeTableEncoder:
         values = {
             **episode.observations,
             **{name: [value] * length for name, value in episode.static_inputs.items()},
-            "sequenceId": [index] * length,
+            "sequenceId": [
+                episode.sequence_id if episode.sequence_id is not None else index
+            ]
+            * length,
             "itemPosition": episode.item_positions,
             EPISODE_ID_COLUMN: [episode.episode_id] * length,
             ACTION_RECORD: episode.actions,
@@ -195,8 +198,8 @@ def import_sequences(config) -> Path:
 def _write_import(config, destination, work):
     import pyarrow.parquet as pq
 
-    policy = config.resolved_policy()
     resolved_source = config.resolved_source()
+    policy = config.resolved_policy(resolved_source)
     metadata = resolved_source.metadata
     if config.initialize_from is None and metadata is not None:
         policy = policy.model_copy(

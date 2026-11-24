@@ -23,6 +23,8 @@ from sequifier.trajectory.tables import table_episodes
 def sequence_from_trajectory(
     trajectory: Trajectory, policy: PolicyEpisodeSpec, action_semantics="policy"
 ) -> SequenceEpisode:
+    from sequifier.trajectory.sequence_output import sequence_coordinate
+
     episode = validate_trajectory(trajectory)
     if (
         episode.format
@@ -66,6 +68,7 @@ def sequence_from_trajectory(
     )
     previous = seed_actions[-1]
     result = SequenceEpisode(
+        sequence_id=sequence_coordinate(episode.episode_id),
         episode_id=episode.episode_id,
         item_positions=tuple(step.step_id for step in steps),
         starts_episode=previous is None,
@@ -106,8 +109,14 @@ class TrajectoryReference:
         episode = sequence_from_trajectory(
             load_trajectory(self.path), self.policy, self.action_semantics
         )
+        from sequifier.trajectory.sequence_output import sequence_coordinate
+
+        identity = self.namespace + episode.episode_id
         return episode.model_copy(
-            update={"episode_id": self.namespace + episode.episode_id}
+            update={
+                "episode_id": identity,
+                "sequence_id": sequence_coordinate(identity),
+            }
         )
 
 
@@ -118,6 +127,10 @@ def source_episodes(
         resolve_source(source) if isinstance(source, SequenceSourceConfig) else source
     )
     source_config = resolved.declaration
+    if resolved.kind == "collection":
+        from sequifier.trajectory.collection_inputs import collection_episodes
+
+        return collection_episodes(resolved, policy)
     if resolved.kind == "trajectory":
         return [
             TrajectoryReference(

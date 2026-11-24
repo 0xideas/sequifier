@@ -331,14 +331,13 @@ prepared dataset view. For an in-memory training partition, supply the inference
 Forecast rejects policy-only output/return/action/history options; embeddings also
 reject generative sampling, decoding, probabilities, autoregression and rollout.
 
-Policy rollout declares `environment: {factory: module:factory, config: {},
-units: {}}`, required `max_steps`, `seed_row_index` and
-`trajectory_path`, plus optional `max_episode_steps`. It rejects forecast `bindings`.
-Forecast rollout uses the forecast rollout adapter protocol, requires bindings and
-selects `seed_window_index`. Neither accepts `rollout.type` or `seed_index`.
-Both indices are zero-based and validated before environment creation. Trajectory
-metadata uses the same route-specific index name. See the [rollout guide](../rollout.md) and
-[policy template](../../src/sequifier/templates/infer-policy.yaml).
+Policy rollout requires an environment and `max_steps`. Forecast rollout also
+requires bindings for temporal inputs. Both accept `rollout.seed` with
+`sequenceId` and `itemPosition`. As an alternative, policies accept a zero-based
+`seed_row_index` and forecasts accept a zero-based `seed_window_index`.
+Set `rollout.output.manifest_path` to publish sequence data,
+`rollout.trajectory_path` to publish a trajectory JSON, or both. The seed origin
+records the selected coordinates. [Rollout guide](../rollout.md)
 
 Execution determinism, action selection and seed are independent. A seeded
 stochastic policy can reproduce its actions under the same supported runtime,

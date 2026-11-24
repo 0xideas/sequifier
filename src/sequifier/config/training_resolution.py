@@ -428,18 +428,20 @@ def _inferred_metadata(config, name, binding, settings):
         if normalization and normalization.source == "statistics"
         else {}
     )
-    return DatasetMetadata(
-        window_length=settings.context_length + max(1, settings.target_offset),
-        column_data_types=types,
-        static_columns=static,
-        n_classes=counts,
-        id_maps=maps,
-        selected_columns_statistics={
-            column: statistics.get(column, {"mean": 0.0, "std": 1.0})
-            for column in columns
-            if column not in counts
-            and (normalization is not None or column not in inputs)
-        },
+    return DatasetMetadata.model_validate(
+        dict(
+            window_length=settings.context_length + max(1, settings.target_offset),
+            column_data_types=types,
+            static_columns=static,
+            n_classes=counts,
+            id_maps=maps,
+            selected_columns_statistics={
+                column: statistics.get(column, {"mean": 0.0, "std": 1.0})
+                for column in columns
+                if column not in counts
+                and (normalization is not None or column not in inputs)
+            },
+        )
     )
 
 
@@ -710,6 +712,34 @@ def resolve_training_run(
     from sequifier.model.execution import ModelExecution
     from sequifier.model.history_transfer import validate_history_transfer
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
+    from sequifier.training.rollout_sources import first_consumer
+
+    deferred = first_consumer(authored)
+    if deferred is not None:
+        prefix = authored.model_copy(
+            deep=True, update={"plan": authored.plan[:deferred]}
+        )
+        supervised = [p for p in authored.ordered_phases if p.algorithm == "supervised"]
+        if (
+            supervised
+            and prefix.model
+            and not prefix.initialize_from
+            and prefix.model.execution.prediction_view is None
+        ):
+            prefix.model.execution = type(prefix.model.execution).model_validate(
+                {
+                    **prefix.model.execution.model_dump(exclude_unset=True),
+                    "prediction_view": supervised[-1].learning.objective_name("causal"),
+                }
+            )
+        resolved = resolve_training_run(
+            prefix, metadata_by_part=metadata_by_part, loaded_metadata=loaded_metadata
+        )
+        resolved._rollout_plan = authored.model_copy(deep=True)
+        resolved.run_mode = "coordinated"
+        if authored.run.reproducibility.seed == "random":
+            resolved._random_seed_inputs = (authored, metadata_by_part)
+        return resolved
 
     prepared_inputs = PreparedTrainingInputs()
     config = authored.model_copy(deep=True)
@@ -804,6 +834,9 @@ def resolve_training_run(
                 name = settings.environment
                 if isinstance(name, str):
                     settings.environment = config.environments[name]
+            if phase.collection.output:
+                output = phase.collection.output
+                output.manifest_path = str((root / output.manifest_path).resolve())
             if phase.collection.archive_directory:
                 phase.collection.archive_directory = str(
                     (root / phase.collection.archive_directory).resolve()

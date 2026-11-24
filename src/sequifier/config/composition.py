@@ -70,6 +70,7 @@ def merge_config_fragments(
 def load_composed_yaml_config(
     config_path: str,
     *,
+    input_paths: list[str] | None = None,
     atomic_paths: frozenset[ConfigPath] = DEFAULT_ATOMIC_PATHS,
 ) -> dict[str, Any]:
     """Load one YAML config and its direct, complementary fragments.
@@ -81,6 +82,8 @@ def load_composed_yaml_config(
     """
 
     entry_path = os.path.abspath(config_path)
+    if input_paths is not None:
+        input_paths.append(entry_path)
     entry_values = _load_yaml_mapping(entry_path)
     raw_additional_paths = entry_values.pop(ADDITIONAL_CONFIG_PATHS_KEY, None)
     additional_paths = _normalize_additional_config_paths(
@@ -113,6 +116,8 @@ def load_composed_yaml_config(
             )
         seen_paths.add(canonical_path)
 
+        if input_paths is not None:
+            input_paths.append(resolved_path)
         fragment_values = _load_yaml_mapping(resolved_path)
         if ADDITIONAL_CONFIG_PATHS_KEY in fragment_values:
             raise ValueError(

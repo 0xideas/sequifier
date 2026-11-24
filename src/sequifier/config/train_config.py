@@ -133,6 +133,12 @@ class SequencePartSpecModel(SequenceSourceConfig):
     type: Literal["sequence"]
 
 
+class RolloutPhaseSource(ConfigModel):
+    type: Literal["rollout"]
+    phase: str = Field(min_length=1)
+    preprocessing_config_path: str | None = Field(default=None, min_length=1)
+
+
 class PreferencePartSpecModel(ConfigModel):
     type: Literal["preferences"]
     manifest_path: str = Field(min_length=1)
@@ -142,6 +148,7 @@ DatasetPart = Annotated[
     DatasetPartSpecModel
     | IndexedSource
     | SequencePartSpecModel
+    | RolloutPhaseSource
     | PreferencePartSpecModel,
     Field(discriminator="type"),
 ]
@@ -497,6 +504,7 @@ def resolve_phases(authored_phases, sources, *, seed: int):
 class ResolvedSequifierConfig(ConfigModel):
     """Compiled run, model, source, phase, and publication records."""
 
+    _rollout_plan: Any = PrivateAttr(default=None)
     _random_seed_inputs: tuple | None = PrivateAttr(default=None)
     _prepared_inputs: Any = PrivateAttr(default=None)
     _policy_bindings: dict[str, ResolvedPolicyBinding] = PrivateAttr()
@@ -1420,7 +1428,14 @@ class DatasetTrainingSpecModel(ConfigModel):
     @property
     def uses_metadata_views(self):
         return not self.views and all(
-            source.type == "prepared" for source in self.sources.values()
+            self.prepared_source(source) for source in self.sources.values()
+        )
+
+    @staticmethod
+    def prepared_source(source):
+        return source.type == "prepared" or (
+            isinstance(source, RolloutPhaseSource)
+            and source.preprocessing_config_path is not None
         )
 
     @model_validator(mode="after")
@@ -1428,7 +1443,13 @@ class DatasetTrainingSpecModel(ConfigModel):
         for name in self.sources:
             _identifier(name, "Dataset source")
         if self.partition:
-            kinds = {source.type for source in self.sources.values()}
+            kinds = {
+                "sequence"
+                if isinstance(source, RolloutPhaseSource)
+                and not source.preprocessing_config_path
+                else source.type
+                for source in self.sources.values()
+            }
             if kinds not in ({"sequence"}, {"preferences"}):
                 raise ValueError(
                     "A generated partition requires raw sequences or preference manifests"
@@ -1451,7 +1472,7 @@ class DatasetTrainingSpecModel(ConfigModel):
                     raise ValueError(
                         f"{name}: select train or validation from the partition"
                     )
-                if not self.partition and (source.type == "prepared") != (
+                if not self.partition and self.prepared_source(source) != (
                     view.split is not None
                 ):
                     raise ValueError(

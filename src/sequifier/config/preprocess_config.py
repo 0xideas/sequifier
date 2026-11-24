@@ -142,6 +142,7 @@ class PreprocessorModel(WindowStrideSettings):
 
     read_format: str = "csv"
     write_format: str = "parquet"
+    sequence_view: Literal["decisions", "observations"] = "decisions"
     indexed_output_path: str | None = Field(default=None, min_length=1)
     indexed_passthrough: list[str] = Field(default_factory=list)
     merge_output: bool = True
@@ -219,7 +220,10 @@ class PreprocessorModel(WindowStrideSettings):
     @model_validator(mode="after")
     def validate_static_source(self):
         if self.static_data_path is None:
-            if self.static_categorical_columns or self.static_real_columns:
+            if (self.static_categorical_columns or self.static_real_columns) and not (
+                self.read_format == "sequence"
+                or self.preprocessing_data_path.lower().endswith(".json")
+            ):
                 raise ValueError("Static column roles require static_data_path")
             return self
         path = self.static_data_path
@@ -257,6 +261,16 @@ class PreprocessorModel(WindowStrideSettings):
             raise ValueError("curriculum_column must contain unique, non-empty names")
         return value
 
+    @field_validator("preprocessing_data_path", "static_data_path", mode="before")
+    @classmethod
+    def resolve_input_path(cls, value, info):
+        run = info.data.get("run")
+        if value is not None and run is not None and run.project_root != ".":
+            from sequifier.helpers import normalize_path
+
+            return normalize_path(str(value), run.project_root)
+        return value
+
     @field_validator("preprocessing_data_path")
     @classmethod
     @beartype
@@ -269,7 +283,7 @@ class PreprocessorModel(WindowStrideSettings):
     @classmethod
     @beartype
     def validate_read_format(cls, v: str) -> str:
-        supported_formats = ["csv", "parquet"]
+        supported_formats = ["csv", "parquet", "sequence"]
         if v not in supported_formats:
             raise ValueError(
                 f"Currently only {', '.join(supported_formats)} are supported "

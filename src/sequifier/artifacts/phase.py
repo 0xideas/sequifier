@@ -97,6 +97,13 @@ class PhaseCommit:
         ):
             raise ValueError("Committed phase result changed")
         commit.verify_model()
+        provenance = commit.result.get("provenance", {})
+        if snapshot := provenance.get("committed_sequence_manifest"):
+            verify_artifact(
+                snapshot,
+                provenance["committed_sequence_manifest_sha256"],
+                "Committed rollout manifest changed",
+            )
         if checkpoint_path is not None and commit.result["checkpoint_path"] != str(
             checkpoint_path
         ):

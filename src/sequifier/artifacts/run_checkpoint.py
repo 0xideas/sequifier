@@ -35,8 +35,11 @@ def read_training_plan(saved: dict):
 
 
 def phase_contract(phase):
+    values = phase.model_dump(mode="json", exclude={"optimization"})
+    if "collection" in values and values["collection"].get("output") is None:
+        values["collection"].pop("output", None)
     return {
-        **phase.model_dump(mode="json", exclude={"optimization"}),
+        **values,
         "optimization": {
             name: role.compatibility_settings()
             for name, role in phase.optimization.items()

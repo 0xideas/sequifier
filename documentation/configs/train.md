@@ -1304,3 +1304,7 @@ evaluation view explicitly. Use episode-group splits when policy evaluation
 measures performance on unseen episodes. For mixed plans, exclude the policy
 holdout from supervised training and feature fitting. The indexed loader builds
 batches from the recorded split coordinates and the selected model view.
+
+## Training on collected sequences
+
+PPO and GRPO publish sequence data through `collection.output.manifest_path`. A later phase can consume the committed data by declaring a dataset source with `type: rollout` and the producer’s `phase` name. Set `preprocessing_config_path` on the source to prepare named splits for supervised training. [Rollout configuration and examples](../rollout.md#reusing-rollout-data)

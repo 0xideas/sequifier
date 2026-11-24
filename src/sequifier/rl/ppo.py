@@ -12,6 +12,7 @@ from sequifier.rl.environment import (
 from sequifier.rl.ppo_collector import PPOCollector
 from sequifier.rl.ppo_update import update_ppo
 from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
+from sequifier.rl.sequence_output import CollectedSequences
 from sequifier.rl.snapshots import snapshots_equal
 from sequifier.runtime.resource_accounting import allocation
 
@@ -37,6 +38,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     session = PhaseSession(context)
     value = session.modules["value"]
     state = session.state
+    sequences = CollectedSequences(context, state)
     env_steps = state.get("env_steps", 0)
     if (
         env_steps
@@ -90,6 +92,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             return {
                 "env_steps": env_steps,
                 "collector": collector.state_dict(),
+                **sequences.checkpoint(),
                 "environment_state": environment_state,
                 "adapter_identity": identity,
             }
@@ -113,6 +116,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                             / f"collection-{session.transaction + 1:08d}.json",
                             include_scores=phase.collection.archive_scores,
                         )
+                sequences.ppo(buffer)
                 record = update_ppo(session, value, buffer)
                 del buffer
             env_steps += horizon
@@ -136,5 +140,5 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             "env_steps": env_steps,
             **session.optimizer_clocks(),
         },
-        {"adapter": identity},
+        {"adapter": identity, **sequences.publish()},
     )

@@ -54,9 +54,9 @@ def _source_files(source, root, metadata, dependencies):
             ):
                 raise ValueError("each manifest entry requires a nonempty path")
             path = manifest_path.parent / entry["path"]
-            if manifest_format == "sequifier.sequence-data" and dependencies.add(
-                path
-            ) != entry.get("sha256"):
+            if entries_field == "shards" and dependencies.add(path) != entry.get(
+                "sha256"
+            ):
                 raise ValueError(f"sequence shard checksum disagrees with {path}")
             if (
                 "episode_id" in entry
@@ -79,6 +79,7 @@ class ResolvedSequenceSource:
     metadata: DatasetMetadata | None
     static_path: Path | None
     dependencies: DependencyManifest
+    manifest: dict | None = None
 
     @cached_property
     def cache_key(self) -> str:
@@ -170,4 +171,5 @@ def resolve_source(
         metadata,
         static_path,
         dependencies,
+        manifest,
     )

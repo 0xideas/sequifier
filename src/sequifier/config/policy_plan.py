@@ -26,6 +26,7 @@ from sequifier.config.phase_controls import (
     PhaseControls,
 )
 from sequifier.config.policy_optimization import OptimizationConfig
+from sequifier.config.rollout_config import SequenceOutput
 from sequifier.config.sources import TrainingSourceSpecModel
 
 
@@ -177,6 +178,7 @@ class OnlineEnvironmentConfig(ConfigModel):
 
 
 class OnlineCollection(ConfigModel):
+    output: SequenceOutput | None = None
     environment: str | SkipJsonSchema[OnlineEnvironmentConfig]
     archive_directory: str | None = Field(default=None, min_length=1)
     max_buffer_bytes: int = Field(default=536870912, gt=0)

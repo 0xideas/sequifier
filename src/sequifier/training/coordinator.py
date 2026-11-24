@@ -60,7 +60,12 @@ from sequifier.runtime.plan import (
     new_run_id,
     run_phases,
 )
-from sequifier.training.phase_runners import compile_phase_group
+from sequifier.training.phase_runners import (
+    PolicyPhaseGroup,
+    SupervisedPhaseGroup,
+    compile_phase_group,
+)
+from sequifier.training.rollout_sources import PendingGroup
 
 if TYPE_CHECKING:
     from sequifier.config.train_config import ResolvedSequifierConfig
@@ -143,6 +148,8 @@ def _prepare_plan(config, groups, revision, state, completed):
     last_data_phase = -1
     active = state["active"]
     for group in groups:
+        if isinstance(group, PendingGroup):
+            continue
         # A recoverable active phase can use the reference embedded in its checkpoint.
         recovering = (
             active is not None
@@ -159,6 +166,8 @@ def _prepare_plan(config, groups, revision, state, completed):
         if group.index + len(group.phases) <= committed:
             group.release()
     for group in groups:
+        if isinstance(group, PendingGroup):
+            continue
         validate_training_destinations(
             group.config,
             group.artifacts.recovery,
@@ -197,15 +206,25 @@ def _run_learning_plan(config, prepared):
     active = state["active"]
     # Policy groups retain this parent, including resolved supervised scheduler budgets.
     config = config.model_copy()
-    groups = [
+    groups: list[PolicyPhaseGroup | SupervisedPhaseGroup | PendingGroup] = [
         compile_phase_group(config, phases, index, prepared)
         for index, phases in continuation_groups(
             config.training_plan, group_supervised=True
         )
     ]
-    phases = [phase for group in groups for phase in group.phases]
-    config.training_plan = phases
+    config.training_plan = [phase for group in groups for phase in group.phases]
     plan_identity = training_plan_identity(config)
+    if config._rollout_plan is not None:
+        from sequifier.fingerprints import fingerprint
+
+        groups.extend(PendingGroup.planned(config, len(config.training_plan)))
+        authored = config._rollout_plan.model_dump(
+            mode="json", exclude={"run": {"recovery", "retrain"}}
+        )
+        plan_identity = fingerprint(
+            {"resolved_prefix": plan_identity, "authored_plan": authored}
+        )
+    phases = [phase for group in groups for phase in group.phases]
     if resuming and state.get("plan") != plan_identity:
         raise ValueError("learning run checkpoint differs from the requested plan")
     state["plan"] = plan_identity
@@ -242,6 +261,10 @@ def _run_learning_plan(config, prepared):
     if resuming:
         manifest.validate(state["dependencies"])
     state["dependencies"] = manifest.identity
+    for recorded in state.get("deferred_dependencies", {}).values():
+        saved_inputs = DependencyManifest()
+        saved_inputs.include(recorded)
+        saved_inputs.revalidate()
     validate_training_destinations(config, checkpoint, manifest.protected_paths)
 
     if last_data_phase < len(completed):
@@ -291,6 +314,30 @@ def _run_learning_plan(config, prepared):
 
     def run_group(transition):
         group = transition.phase
+        if isinstance(group, PendingGroup):
+            group, inputs = group.compile(
+                config, completed, artifact_before(group.index), prepared
+            )
+            recovering = (
+                state["active"] is not None and state["active"]["recovery"] is not None
+            )
+            deps, _ = group.preflight(
+                state.get("deferred_dependencies", {}).get(str(group.index)),
+                len(completed) - group.index + int(recovering),
+            )
+            inputs.merge(deps)
+            expected = state.setdefault("deferred_dependencies", {}).setdefault(
+                str(group.index), inputs.identity
+            )
+            inputs.validate(expected)
+            inputs.revalidate()
+            validate_training_destinations(
+                group.config,
+                group.artifacts.recovery,
+                inputs.protected_paths,
+                phase_offset=group.index,
+                group=True,
+            )
         index = group.index
         base = group.artifacts
         native_checkpoint = base.recovery
@@ -393,7 +440,14 @@ def _run_learning_plan(config, prepared):
         completed,
         resume=resume,
         completion_reason=completion_reason,
-        source_provenance=manifest.identity,
+        source_provenance={
+            **manifest.identity,
+            **{
+                path: checksum
+                for inputs in state.get("deferred_dependencies", {}).values()
+                for path, checksum in inputs.items()
+            },
+        },
         initialization=initialization,
         backbone_parent_revision_id=state["backbone_revision"],
         backbone_publication=publish_selected_backbone(

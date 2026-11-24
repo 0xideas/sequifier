@@ -11,17 +11,18 @@ from sequifier.config.inference_common import (
 )
 from sequifier.config.policy_config import PolicyConfigBase
 from sequifier.config.policy_plan import OnlineEnvironmentConfig
+from sequifier.config.rollout_config import RolloutSelection
 
 if TYPE_CHECKING:
     from sequifier.trajectory.sources import ResolvedSequenceSource
 
 
-class PolicyRolloutConfig(PolicyConfigBase):
+class PolicyRolloutConfig(RolloutSelection):
+    model_config = PolicyConfigBase.model_config
     environment: OnlineEnvironmentConfig
     max_steps: int = Field(gt=0)
-    trajectory_path: str = Field(min_length=1)
     seed_history: Literal["available", "current"] = "available"
-    seed_row_index: int = Field(ge=0)
+    seed_row_index: int | None = Field(default=None, ge=0)
     max_episode_steps: int | None = Field(default=None, gt=0)
 
 

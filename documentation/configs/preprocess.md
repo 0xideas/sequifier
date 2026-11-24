@@ -642,3 +642,7 @@ For a policy artifact created before explicit preprocessing was available,
 `operation: export_metadata` takes `model_path`, optional `model_interface`,
 and `output_path`. It exports the artifact's frozen feature transforms to a
 metadata JSON that can be used with both fresh-data inference routes.
+
+## Rollout inputs
+
+Set `preprocessing_data_path` to the rollout manifest. The default `sequence_view: decisions` retains action-aligned rows. Use `sequence_view: observations` for observation histories including a recorded final successor. For `operation: prepare_policy`, use `source.manifest_path`. [Rollout configuration and examples](../rollout.md#reusing-rollout-data)

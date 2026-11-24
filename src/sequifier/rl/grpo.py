@@ -24,6 +24,7 @@ from sequifier.rl.environment import (
 from sequifier.rl.grpo_collector import collect_groups
 from sequifier.rl.grpo_update import update_grpo
 from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
+from sequifier.rl.sequence_output import CollectedSequences
 from sequifier.runtime.resource_accounting import allocation
 from sequifier.trajectory.archives import collection_archive
 
@@ -50,6 +51,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     actor, phase = context.actor.eval(), context.phase
     session = PhaseSession(context)
     state = session.state
+    sequences = CollectedSequences(context, state)
     groups, env_steps = state.get("groups", 0), state.get("env_steps", 0)
     restart_stream = state.get("restart_stream", 0)
     if (
@@ -134,6 +136,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 )
                 collection_seconds = perf_counter() - collection_start
                 update_start = perf_counter()
+                sequences.grpo(buffer)
                 record = update_grpo(session, buffer)
                 if actor.device.type == "cuda":
                     torch.cuda.synchronize(actor.device)
@@ -209,6 +212,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                     env_steps=env_steps,
                     adapter_identity=identity,
                     restart_stream=restart_stream,
+                    **sequences.checkpoint(),
                 ),
             )
             logger.debug(
@@ -233,6 +237,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             "env_steps": env_steps,
         },
         {
+            **sequences.publish(),
             "reference_weight_hash": context.reference_identity,
             "adapter": identity,
         },
