@@ -96,6 +96,23 @@ including an evaluation before the next update. Sparse logging can skip step
 numbers. Phase reports record the final value in `clocks.global_step`, alongside
 the algorithm's own training counters.
 
+Run `python tools/extract_validation_losses_to_table.py <model-validation-full.csv>`
+to write a sibling `-wide.csv` with one row per evaluation. It keeps the run,
+phase, algorithm, dataset, progress and timing fields. Each recorded metric and
+target has a column. The primary metric, target and value also appear together.
+
+| Phase | Validation measures available in the wide table |
+|---|---|
+| Supervised | Total and per-target loss, baseline loss, and per-target accuracy when recorded |
+| Policy imitation | Held-out action negative log likelihood |
+| IQL | Held-out action negative log likelihood, Bellman residual, value estimate and minimum Q estimate |
+| DPO | Preference accuracy, margin, DPO loss and chosen/rejected sequence lengths |
+| PPO and GRPO | Completed return and length, return spread and range, censoring, timeouts, success rate when available, and GRPO score when evaluated |
+
+An evaluation with an unavailable policy monitor retains its diagnostics and
+leaves the primary value empty. An empty metric cell in a mixed run means the
+evaluation has no recorded value for that measure.
+
 Iteration-budgeted policy phases leave `epoch` empty. Policy plots use the
 committed iteration for progress. Nested diagnostic records remain in phase reports.
 

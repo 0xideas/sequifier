@@ -38,13 +38,16 @@ class PolicyMetrics:
             % (context.run.parent.run.logging.log_interval_iterations or 10)
         ):
             return
-        scalars = {
+        scalars: dict[str, float | None] = {
             name: float(value)
             for name, value in values.items()
             if isinstance(value, (float, int))
             and name != "initial"
             and math.isfinite(value)
         }
+        if validation and primary is not None and values.get(primary) is None:
+            # Censored evaluations still have a monitor and episode diagnostics.
+            scalars[primary] = None
         if not scalars:
             return
         if primary is None:

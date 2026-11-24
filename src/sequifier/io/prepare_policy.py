@@ -11,8 +11,9 @@ from sequifier.config.depth_layout import (
     DepthLayoutRegistryModel,
     depth_mask_metadata_key,
 )
-from sequifier.config.metadata import load_dataset_metadata
+from sequifier.config.metadata import RawInputMetadata, load_dataset_metadata
 from sequifier.config.splits import validate_disjoint_roles
+from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_path
 from sequifier.io.episode_corpus import EpisodeCorpus
 from sequifier.io.feature_fitting import FeatureStatistics, FittedColumns, FittingRules
@@ -39,10 +40,40 @@ from sequifier.trajectory.export import EpisodeTableEncoder
 from sequifier.trajectory.table_schema import cast_episode_table
 from sequifier.trajectory.tables import (
     PREVIOUS_ACTION_RECORD,
+    REWARD_COLUMN,
     SUCCESSOR_PREFIX,
+    TRANSITION_FLAGS,
+    TableEpisodeReference,
     executed_action_columns,
     project_actions,
 )
+
+
+def _preparation_inputs(config):
+    original = (
+        Path(config.project_root) / config.metadata_config_path
+        if config.metadata_config_path
+        else None
+    )
+    resolved = config.resolved_source()
+    if original is not None:
+        resolved.dependencies.add(original)
+    if config.initialize_from:
+        resolved.dependencies.add(Path(config.project_root) / config.initialize_from)
+    # Cached fits and completed item files must describe the same inputs, feature
+    # roles, and ordered splits as the invocation that publishes them.
+    signature = fingerprint(
+        {
+            "settings": config.model_dump(
+                mode="json", exclude={"reprocess", "indexed_output_path"}
+            ),
+            "split_order": list(config.splits),
+            "action_order": list(config.policy_binding.actions),
+            "feedback_order": list(config.policy_binding.feedback),
+            "files": resolved.dependencies.identity,
+        }
+    )
+    return resolved, original, signature
 
 
 def prepare_policy(config):
@@ -50,12 +81,55 @@ def prepare_policy(config):
     with preprocessing_workspace(
         destination, indexed=True, resume=not config.reprocess
     ) as work:
-        if work is not None:
-            with IndexedSequenceWriter(destination, workspace=work) as writer:
-                _prepare_policy(config, writer)
+        if work is None:
+            published = json.loads((destination / "dataset.json").read_text())
+            previous = published.get("provenance", {}).get("preparation")
+            if previous is None:
+                metadata = load_dataset_metadata(str(destination / "metadata.json"))
+                if (
+                    config.mask_column
+                    and config.mask_column != metadata.raw_mask_column
+                ) or set(config.indexed_passthrough) - set(
+                    metadata.indexed_passthrough
+                ):
+                    raise ValueError(
+                        "Published dataset has different mask or passthrough settings; choose a new indexed_output_path"
+                    )
+                return
+        else:
+            identity_path = work / "policy-preparation.json"
+            previous = (
+                json.loads(identity_path.read_text())
+                if identity_path.exists()
+                else None
+            )
+            if previous is None and (work / "episode-schema.arrow").exists():
+                raise ValueError(
+                    "This partial preparation predates input tracking; set reprocess: true to rebuild it"
+                )
+
+        if previous is not None and config.run.reproducibility._requested_random:
+            config = config.model_copy(deep=True)
+            config.run.reproducibility.seed = previous["seed"]
+        resolved, original, signature = _preparation_inputs(config)
+        identity = {"signature": signature, "seed": config.run.reproducibility.seed}
+        if work is None:
+            if identity != previous:
+                raise ValueError(
+                    "Published dataset belongs to different inputs or settings; choose a new indexed_output_path"
+                )
+            return
+        if previous is not None and previous != identity:
+            raise ValueError(
+                "Policy preprocessing inputs or settings changed; set reprocess: true to rebuild partial work"
+            )
+        with atomic_path(work / "policy-preparation.json") as temporary:
+            temporary.write_text(json.dumps(identity))
+        with IndexedSequenceWriter(destination, workspace=work) as writer:
+            _prepare_policy(config, writer, resolved, original, identity)
 
 
-def _prepare_policy(config, writer):
+def _prepare_policy(config, writer, resolved, original, identity):
     from sequifier.preprocess import (
         SPLIT_VALUE_COLUMN,
         _add_normalized_split_column,
@@ -65,11 +139,6 @@ def _prepare_policy(config, writer):
         _validate_declared_column_roles,
     )
 
-    original = (
-        Path(config.project_root) / config.metadata_config_path
-        if config.metadata_config_path
-        else None
-    )
     frozen = load_dataset_metadata(str(original)) if original is not None else None
     authored_cardinality = _normalize_cardinality_config(config.cardinality_config)
     cardinality = authored_cardinality
@@ -83,10 +152,17 @@ def _prepare_policy(config, writer):
         if frozen is not None
         else config.normalize_real_columns
     )
-    resolved = config.resolved_source()
     policy = config.resolved_policy(resolved)
-    if frozen is not None:
-        policy = policy.model_copy(update={"raw_inputs": frozen})
+    raw_inputs = frozen or policy.raw_inputs or resolved.metadata
+    if config.mask_column:
+        if raw_inputs and raw_inputs.raw_mask_column not in (None, config.mask_column):
+            raise ValueError(
+                "mask_column differs from the original preprocessing metadata"
+            )
+        raw_inputs = (raw_inputs or RawInputMetadata()).model_copy(
+            update={"raw_mask_column": config.mask_column}
+        )
+    policy = policy.model_copy(update={"raw_inputs": raw_inputs})
     if config.initialize_from is None:
         policy = policy.model_copy(
             update={"context_length": max(config.window_lengths)}
@@ -158,6 +234,28 @@ def _prepare_policy(config, writer):
     ]
     temporal = features + actions + feedback
     columns = temporal + static
+    derived = ["__policy_return"] if policy.return_conditioned else []
+    # Transition scalars already have domain values in the canonical table.
+    auxiliary = [
+        name
+        for name in config.indexed_passthrough
+        if name not in (REWARD_COLUMN, *TRANSITION_FLAGS)
+    ]
+    reserved = {
+        *columns,
+        *derived,
+        *schema.names,
+        policy.raw_mask_column,
+        "__decision",
+        DOMAIN_CONTEXT,
+        DOMAIN_STATIC,
+        DOMAIN_SUCCESSORS,
+        DOMAIN_OBSERVATIONS,
+    }
+    if collisions := reserved.intersection(auxiliary):
+        raise ValueError(
+            f"Indexed passthrough overlaps policy fields: {sorted(collisions)}"
+        )
     if len(columns) != len(set(columns)):
         raise ValueError(
             "Policy inputs, derived histories, and targets must have distinct names"
@@ -193,8 +291,6 @@ def _prepare_policy(config, writer):
             frame = pl.DataFrame({column: episode.observations[column]})
         else:
             reference = episodes.source(index)
-            from sequifier.trajectory.tables import TableEpisodeReference
-
             if not isinstance(reference, TableEpisodeReference):
                 raise ValueError(f"Missing recorded split_column {column!r}")
             frame = reference.decision_columns(episode.item_positions, [column])
@@ -226,20 +322,16 @@ def _prepare_policy(config, writer):
             pl.from_arrow(cast_episode_table(table, schema)), policy, action_columns
         )
 
-    derived = ["__policy_return"] if policy.return_conditioned else []
     raw_schema = _action_features(
         pl.from_arrow(schema.empty_table()), policy, action_columns
     ).schema
     fit_path = writer.workspace / "feature-fit.json"
-    # Older frozen contracts predate flat targets for same-named actions.
-    # Fit only those newly exposed columns and retain all existing transforms.
+    # A supervised feature contract may predate the policy targets and feedback.
     fit_columns = (
         columns
         if frozen is None
         else [
-            name
-            for action, name in action_columns.items()
-            if name != action and name not in frozen.column_data_types
+            name for name in actions + feedback if name not in frozen.column_data_types
         ]
     )
     metadata = dict(frozen) if frozen is not None else {}
@@ -324,6 +416,7 @@ def _prepare_policy(config, writer):
             dtype = dtype.inner
         transforms[name] = fitted.column_transform(name, dtype, normalize, cardinality)
     static_rows = []
+    mask_column = policy.raw_mask_column
     static_payload = [*static, *([PREFIX_IMAGE] if prefix else [])]
     for index in range(len(episodes)):
         record = episodes.metadata(index)
@@ -334,9 +427,21 @@ def _prepare_policy(config, writer):
         if checkpoint.is_file():
             if static_payload:
                 static_rows.append(pl.read_parquet(static_path))
-            rows = pl.read_parquet(checkpoint, columns=["sequenceId", "itemPosition"])
+            rows = pl.read_parquet(
+                checkpoint, columns=["sequenceId", "itemPosition", OBSERVATION_MASK]
+            )
         else:
             rows = episode_rows(index)
+            if auxiliary:
+                reference = episodes.source(index)
+                if not isinstance(reference, TableEpisodeReference):
+                    raise ValueError(
+                        "Auxiliary indexed_passthrough columns require a table source"
+                    )
+                extra = reference.decision_columns(
+                    episodes[index].item_positions, auxiliary
+                )
+                rows = rows.hstack(extra)
             rows = with_domain_record(rows, features, DOMAIN_OBSERVATIONS)
             rows = with_domain_record(rows, static, DOMAIN_STATIC)
             rows = with_domain_record(
@@ -390,6 +495,8 @@ def _prepare_policy(config, writer):
                 with atomic_path(static_path) as temporary:
                     static_row.write_parquet(temporary)
                 rows = rows.drop(static_payload + ([DOMAIN_STATIC] if static else []))
+        if mask_column is None and frozen is None and rows[OBSERVATION_MASK].any():
+            mask_column = OBSERVATION_MASK
         first = rows["itemPosition"][0]
         placements = plan.placements(
             first, len(rows), assigned=assigned.get(index), bounds=episode_bounds(index)
@@ -439,10 +546,11 @@ def _prepare_policy(config, writer):
         if frozen
         else config.normalize_on_all_data,
         cardinality_config=cardinality,
-        raw_mask_column=policy.raw_mask_column,
+        raw_mask_column=mask_column,
         static_columns=static,
         static_features_path="static.parquet" if static_rows else None,
         indexed_derived_features=derived,
+        indexed_passthrough=config.indexed_passthrough,
     )
     writer.publish(
         metadata,
@@ -450,6 +558,7 @@ def _prepare_policy(config, writer):
         original_metadata=original,
         provenance={
             **resolved.provenance(),
+            "preparation": identity,
             "policy_binding": policy.task_binding.model_dump(mode="json"),
         },
     )

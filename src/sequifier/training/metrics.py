@@ -729,7 +729,7 @@ class StructuredMetricWriters:
                 **common,
                 "metric": name,
                 "target": TOTAL_TARGET,
-                "value": float(value),
+                "value": None if value is None else float(value),
                 "is_primary": name == primary,
                 "learning_rate": learning_rate,
             }
@@ -782,7 +782,9 @@ class StructuredMetricWriters:
         )
         if validation:
             value = (
-                _format_number(values[primary]) if primary in values else "unavailable"
+                _format_number(values[primary])
+                if values.get(primary) is not None
+                else "unavailable"
             )
             logger.info(
                 f"[INFO] Validation | {progress} | {primary}: {value} | "

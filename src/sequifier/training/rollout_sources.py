@@ -154,7 +154,10 @@ class PendingGroup:
 def prepare_source(manifest, config_path, root, seed, dependencies):
     from sequifier.config.command_ownership import PreprocessingSeed
     from sequifier.config.preprocess_config import PreprocessorModel
-    from sequifier.config.sequence_import_config import PreparePolicyConfig
+    from sequifier.config.sequence_import_config import (
+        PreparePolicyConfig,
+        select_policy_input,
+    )
     from sequifier.io.prepare_policy import prepare_policy
     from sequifier.preprocess import Preprocessor
 
@@ -185,10 +188,7 @@ def prepare_source(manifest, config_path, root, seed, dependencies):
     output = manifest.parent / (manifest.name + ".parts") / "prepared" / key
     values["indexed_output_path"] = str(output)
     if values.get("operation") == "prepare_policy":
-        source = values.setdefault("source", {})
-        for location in ("paths", "split"):
-            source.pop(location, None)
-        source["manifest_path"] = str(manifest)
+        select_policy_input(values, manifest, source_format="sequifier.sequence-data")
         prepare_policy(PreparePolicyConfig.model_validate(values))
     else:
         values.update(

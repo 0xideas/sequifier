@@ -22,6 +22,7 @@ from sequifier.config.naming import ConfigModel
 from sequifier.config.sequence_import_config import (
     PreparePolicyConfig,
     SequenceImportConfig,
+    select_policy_input,
 )
 from sequifier.config.splits import SequencePreprocessingSettings
 from sequifier.config.splits import WindowSplit as WindowSplit
@@ -49,6 +50,8 @@ def load_preprocessor_config(
     if config_values.get("operation") == "import_sequences":
         return SequenceImportConfig.model_validate(config_values)
     if config_values.get("operation") == "prepare_policy":
+        if "preprocessing_data_path" in args_config:
+            select_policy_input(config_values, config_values["preprocessing_data_path"])
         return try_catch_excess_keys(config_path, PreparePolicyConfig, config_values)
     if config_values.get("operation") == "export_metadata":
         return try_catch_excess_keys(config_path, ExportMetadataConfig, config_values)

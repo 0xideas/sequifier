@@ -617,6 +617,17 @@ Use `operation: prepare_policy` for policy demonstrations. It takes the same
 `source` and `policy_binding` declarations as `import_sequences`, and adds
 named splits, per-split window lengths, `window_stride`, prediction alignment, and optional overrides
 for categorical and real feature roles. Set `indexed_output_path` for the indexed store.
+Set `mask_column` to the raw observation mask, for example `hide`. Either that
+column or the canonical `__observation_mask` can hide a row. Masked observations
+are excluded from feature fitting. Set `indexed_passthrough` to retain auxiliary
+decision columns such as a timestamp or a rollout's `__collection` struct.
+These columns keep their recorded types and are available in the indexed view.
+Trajectory JSON carries the standard transition fields. Additional passthrough
+columns require a tabular source, including Parquet rollout manifests.
+For a single input, `preprocessing_data_path` can supply the location in YAML
+or Python while `source.columns` supplies feature roles when needed.
+The CLI's `--preprocessing-data-path` replaces the source location. In a training
+plan, the producing phase supplies its committed manifest to the same preparation.
 Use `cardinality_config` to fit bounded observation or static-feature vocabularies,
 for example `{place: {max_categories: 100, hashing: {num_buckets: 16, seed: 7}}}`.
 Policy preparation uses the same count thresholds, ranking and hashing as supervised
@@ -661,6 +672,13 @@ after the last completed shard. Policy preparation reuses the saved episode
 schema, fitted feature metadata, and completed episodes. Supervised indexed
 preprocessing reuses completed item files and repeats feature fitting and window
 placement. Both indexed routes rebuild their split indexes before publication.
+
+Policy preparation records the inputs, settings, and resolved seed used for
+each new store. A repeated invocation checks them before reusing completed or
+partial work. With `seed: random`, retries reuse the recorded draw.
+For a changed or older partial preparation, `reprocess: true` starts a fresh
+build. Older published policy stores have no input fingerprint and can only be
+checked against their recorded metadata.
 
 Keep inputs and settings consistent when resuming. The output path identifies
 the run. To build a different dataset after publication, choose a new output

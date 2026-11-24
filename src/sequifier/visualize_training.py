@@ -134,7 +134,7 @@ class StructuredMetricsParser:
             previous_batches[batch] = window_batches
 
         for row in validation_rows:
-            if row.get("run_id") != run_id:
+            if row.get("run_id") != run_id or row["value"] == "":
                 continue
             epoch_position = (
                 int(row["iteration"]) if policy_rows else self._epoch_position(row)
@@ -158,7 +158,9 @@ class StructuredMetricsParser:
             elif metric == "loss" and target:
                 metrics.var_losses.setdefault(target, {})[epoch_position] = value
 
-        if allow_training_only and not validation_rows:
+        if (allow_training_only and not validation_rows) or (
+            policy_rows and validation_metric and not metrics.val_losses
+        ):
             return metrics
         if not metrics.val_losses:
             raise DataContinuityError(
