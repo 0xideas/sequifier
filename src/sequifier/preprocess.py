@@ -81,7 +81,6 @@ from sequifier.io.sequence import (
     with_domain_record,
 )
 from sequifier.io.window_placement import (
-    PredictionAlignment,
     SplitWindowPlan,
     WindowPlacement,
     cutoff_intervals,
@@ -1052,13 +1051,7 @@ class Preprocessor:
             config.max_target_offset,
             ContractVersions.STORED_WINDOW_LAYOUT,
         )
-        alignment = PredictionAlignment.from_settings(config)
-        self.window_plan = SplitWindowPlan(
-            tuple(config.window_lengths),
-            config.resolved_window_stride,
-            tuple(config.split_ratios or ()),
-            alignment,
-        )
+        self.window_plan = SplitWindowPlan.from_settings(config)
         if config.split_method == "within_sequence" and config.split_ratios is not None:
             self.window_plan.validate_training_share(config.split_ratios)
         self.column_data_types = _normalize_column_types(config.column_data_types)
@@ -2133,14 +2126,8 @@ class Preprocessor:
             "depth_layouts": self.config.depth_layouts.model_dump(mode="json"),
             "tensor_payload_kind": tensor_kind,
             "tensor_payload_version": dataset_tensor_version(tensor_kind),
-            "window_length": self.storage_layout.window_length,
-            "window_lengths": self.config.window_lengths,
-            "prediction_alignment_steps": self.config.prediction_alignment_steps,
-            "max_target_offset": self.storage_layout.max_target_offset,
+            **self.config.window_metadata(),
             "stored_window_layout_version": self.storage_layout.version,
-            "prediction_aligned_splits": self.config.prediction_aligned_splits,
-            "prediction_length": self.config.prediction_length,
-            "target_offset": self.config.target_offset,
         }
 
     @beartype
@@ -2175,27 +2162,10 @@ class Preprocessor:
                 "data_columns": fitted.data_columns,
                 "categorical_columns": self.config.categorical_columns,
                 "real_columns": self.config.real_columns,
-                "split_names": list(self.config.splits),
-                "split_ratios": self.config.split_ratios,
-                "split_method": self.config.split_method,
-                "split_column": self.config.split_column,
-                "split_values": (
-                    [
-                        (
-                            value.isoformat()
-                            if isinstance(value, (date, datetime))
-                            else value
-                        )
-                        for value in self.config.split_values
-                    ]
-                    if self.config.split_values is not None
-                    else None
-                ),
+                **self.config.split_metadata(),
                 "seed": self.config.seed,
-                "window_stride": self.config.resolved_window_stride,
                 "max_rows": self.config.max_rows,
                 "process_by_file": self.config.process_by_file,
-                "prediction_aligned_splits": self.config.prediction_aligned_splits,
                 "mask_column": self.config.mask_column,
                 **(
                     {"curriculum_column": self.config.curriculum_column}
@@ -2319,7 +2289,7 @@ class Preprocessor:
             **fitted.metadata(),
             "cardinality_config": self.cardinality_config | self.static_cardinality,
             "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
-            "split_names": list(self.config.splits),
+            **self.config.split_metadata(),
             "split_paths": [
                 os.path.splitext(split_path)[0]
                 if not self.config.merge_output
@@ -2329,21 +2299,8 @@ class Preprocessor:
             "normalize_real_columns": self.normalize_real_columns,
             "normalize_on_all_data": self.metadata_fitted_on_all_data,
             **self.image_manifest,
-            "window_stride": self.config.resolved_window_stride,
             "raw_mask_column": self.config.mask_column,
             "raw_curriculum_column": self.config.curriculum_column,
-            "prediction_aligned_splits": self.config.prediction_aligned_splits,
-            "split_ratios": self.config.split_ratios,
-            "split_method": self.config.split_method,
-            "split_column": self.config.split_column,
-            "split_values": (
-                [
-                    value.isoformat() if isinstance(value, (date, datetime)) else value
-                    for value in self.config.split_values
-                ]
-                if self.config.split_values is not None
-                else None
-            ),
             **self._layout_metadata(),
         }
         self.output.write_metadata(data_driven_config, fitted.data_columns)

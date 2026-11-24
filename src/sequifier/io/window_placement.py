@@ -88,6 +88,15 @@ class SplitWindowPlan:
     ratios: tuple[float, ...]
     alignment: PredictionAlignment | None
 
+    @classmethod
+    def from_settings(cls, settings):
+        return cls(
+            tuple(settings.window_lengths),
+            settings.resolved_window_stride,
+            tuple(settings.split_ratios or ()),
+            PredictionAlignment.from_settings(settings),
+        )
+
     def validate_training_share(self, row_counts: Sequence[float]):
         """Estimate window shares using each split's configured spacing."""
         weights = [

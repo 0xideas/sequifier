@@ -17,7 +17,6 @@ from sequifier.fingerprints import file_checksum, fingerprint
 from sequifier.io.action_record import action_record_layout
 from sequifier.io.actions import decode_action
 from sequifier.io.atomic import atomic_path, write_json_atomic
-from sequifier.io.feature_fitting import mask_expression
 from sequifier.io.sequence import (
     CONTEXT_COLUMN,
     CONTEXT_RECORDS,
@@ -314,16 +313,6 @@ def publish_inference_rollout(trajectory, config):
             )
 
 
-def _validated_mask(scan, column, path):
-    schema = scan.collect_schema()
-    if column not in schema:
-        raise ValueError(f"mask_column '{column}' not found in {path}")
-    values = scan.select(pl.col(column).unique()).collect().to_series()
-    if values.null_count():
-        raise ValueError(f"Mask column {column} contains null values")
-    return mask_expression(values, schema[column], column)
-
-
 @contextmanager
 def supervised_manifest_input(
     path,
@@ -336,7 +325,12 @@ def supervised_manifest_input(
     """Feed the verified shards to ordinary file preprocessing, including split fitting."""
     from sequifier.config.policy_train_config import SequenceSourceConfig
     from sequifier.trajectory.sources import resolve_source
-    from sequifier.trajectory.tables import scan_tables
+    from sequifier.trajectory.tables import (
+        executed_action_columns,
+        observation_mask,
+        project_actions,
+        scan_tables,
+    )
 
     path = Path(path).resolve()
     if dependencies is not None:
@@ -388,31 +382,13 @@ def supervised_manifest_input(
             if dependencies is not None:
                 dependencies.merge(resolved.dependencies)
             scan = scan_tables(resolved.paths)
-        if OBSERVATION_MASK in scan.collect_schema() or mask_column == OBSERVATION_MASK:
-            scan = scan.with_columns(
-                _validated_mask(scan, OBSERVATION_MASK, path).alias(OBSERVATION_MASK)
-            )
-        else:
-            scan = scan.with_columns(pl.lit(False).alias(OBSERVATION_MASK))
-        if ACTION_RECORD in scan.collect_schema() and sequence_view == "decisions":
-            dtype = scan.collect_schema()[ACTION_RECORD]
+        schema = scan.collect_schema()
+        if ACTION_RECORD in schema and sequence_view == "decisions":
+            dtype = schema[ACTION_RECORD]
             if isinstance(dtype, pl.Struct):
-                columns = scan.collect_schema().names()
-                projected = []
-                for field in dtype.fields:
-                    name = (
-                        field.name
-                        if field.name not in columns
-                        else "__executed_" + field.name
-                    )
-                    if name in columns:
-                        raise ValueError(
-                            f"Executed action projection overlaps existing column {name!r}"
-                        )
-                    projected.append(
-                        pl.col(ACTION_RECORD).struct.field(field.name).alias(name)
-                    )
-                scan = scan.with_columns(projected)
+                scan = project_actions(
+                    scan, executed_action_columns(dtype.to_schema(), schema)
+                )
         if sequence_view == "observations":
             observations = manifest.get("observation_columns")
             if not observations:
@@ -429,7 +405,9 @@ def supervised_manifest_input(
             )
             coordinates = ["sequenceId", "itemPosition", "sequenceName", "__group"]
             static = manifest.get("static_columns", [])
-            columns = coordinates + observations + list(static) + [OBSERVATION_MASK]
+            columns = coordinates + observations + list(static)
+            if OBSERVATION_MASK in schema:
+                columns.append(OBSERVATION_MASK)
             if split_column and split_column not in columns:
                 # An auxiliary cutoff belongs to the decision that produced the successor.
                 columns.append(split_column)
@@ -455,11 +433,11 @@ def supervised_manifest_input(
             static_path = table.with_suffix(".static.parquet")
             scan.select("sequenceId", *static).unique().sink_parquet(static_path)
             scan = scan.drop(static)
-        if mask_column is not None and mask_column != OBSERVATION_MASK:
-            configured_mask = _validated_mask(scan, mask_column, path)
-            scan = scan.with_columns(
-                (configured_mask | pl.col(OBSERVATION_MASK)).alias(mask_column)
-            ).drop(OBSERVATION_MASK)
+        scan = scan.with_columns(
+            observation_mask(scan, mask_column).alias(mask_column or OBSERVATION_MASK)
+        )
+        if mask_column and mask_column != OBSERVATION_MASK:
+            scan = scan.drop(OBSERVATION_MASK, strict=False)
         elif mask_column is None:
             manifest = {
                 **manifest,

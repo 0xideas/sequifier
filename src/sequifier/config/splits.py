@@ -100,6 +100,33 @@ class WindowStrideSettings(ConfigModel):
             return None
         return [split.cutoff for split in list(self.splits.values())[:-1]]
 
+    def window_metadata(self):
+        return {
+            "window_length": self.window_lengths[0],
+            "window_lengths": self.window_lengths,
+            "window_stride": self.resolved_window_stride,
+            "max_target_offset": self.max_target_offset,
+            "prediction_length": self.prediction_length,
+            "target_offset": self.target_offset,
+            "prediction_aligned_splits": self.prediction_aligned_splits,
+            "prediction_alignment_steps": self.prediction_alignment_steps,
+        }
+
+    def split_metadata(self):
+        cutoffs = self.split_values
+        return {
+            "split_names": list(self.splits),
+            "split_ratios": self.split_ratios,
+            "split_method": self.split_method,
+            "split_column": self.split_column,
+            "split_values": [
+                value.isoformat() if isinstance(value, date) else value
+                for value in cutoffs
+            ]
+            if cutoffs is not None
+            else None,
+        }
+
     def validate_split_method(self):
         for name in self.splits:
             identifier(name, "Split")

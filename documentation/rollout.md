@@ -99,7 +99,9 @@ Trajectory JSON stores the row-level mask in `seed.observation_mask`, aligned
 with the padded seed history. The Parquet decision table carries
 `__observation_mask` and its pre-decision context carries each preceding
 observation's mask. Both supervised preprocessing and offline policy training
-apply the recorded masks when consuming these outputs.
+apply the recorded masks when consuming these outputs. A configured raw mask name
+can read the recorded mask when the original column is absent. If both columns
+are present, either can mark an observation as masked.
 
 Each decision has an integer `sequenceId` and an `itemPosition`. `sequenceName`
 carries the external episode identity. On import, `episode_namespace` prefixes this
@@ -125,6 +127,10 @@ the final decision's value forward to its successor.
 Existing inference trajectory JSON can be read through the same
 interface. Supervised preprocessing extracts the declared static fields into a
 separate table with one row per sequence.
+
+Policy preparation exposes the same flat action names, including `__executed_x`,
+alongside the structured action record. Both preparation routes record the split
+names, method, column, fractions and cutoffs in dataset metadata.
 
 For policy learning, set the sequence source's `manifest_path` or pass it to
 `prepare_policy`. Forecast predictions used as actions require

@@ -30,7 +30,6 @@ from sequifier.io.sequence import (
     with_domain_record,
 )
 from sequifier.io.window_placement import (
-    PredictionAlignment,
     SplitWindowPlan,
     cutoff_intervals,
     split_intervals,
@@ -39,9 +38,10 @@ from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.trajectory.export import EpisodeTableEncoder
 from sequifier.trajectory.table_schema import cast_episode_table
 from sequifier.trajectory.tables import (
-    ACTION_RECORD,
     PREVIOUS_ACTION_RECORD,
     SUCCESSOR_PREFIX,
+    executed_action_columns,
+    project_actions,
 )
 
 
@@ -93,14 +93,9 @@ def _prepare_policy(config, writer):
         )
     source_episodes = EpisodeCorpus([resolved], policy).view()
     decisions = EpisodeDecisions(source_episodes, policy)
-    fractions = tuple(config.split_ratios or ())
+    plan = SplitWindowPlan.from_settings(config)
+    fractions = plan.ratios
     split_count = len(config.splits)
-    plan = SplitWindowPlan(
-        config.window_lengths,
-        config.resolved_window_stride,
-        fractions,
-        PredictionAlignment.from_settings(config),
-    )
     assigned = {}
     if config.split_method == "between_sequence":
         assigned = dict(
@@ -135,35 +130,6 @@ def _prepare_policy(config, writer):
     if missing := depth_masks - set(observations):
         raise ValueError(f"Policy preparation lacks depth masks: {sorted(missing)}")
     features = [name for name in observations if name not in media_inputs | depth_masks]
-    # The executed action always has its own record. Expose a scalar training
-    # column as well when its name is free in the model feature namespace.
-    actions = _scalar_actions(policy)
-    # A shared self-feedback/target column stores the executed action, as in
-    # supervised next-step prediction. Policy windows obtain its lag from the
-    # separate previous-action record, including at a fragment boundary.
-    feedback = [
-        name for name, action in policy.previous_action_inputs.items() if name != action
-    ]
-    temporal = features + actions + feedback
-    columns = temporal + static
-    if len(columns) != len(set(columns)):
-        raise ValueError(
-            "Policy inputs, derived histories, and targets must have distinct names"
-        )
-    categorical: list[str] = list(config.categorical_columns or ())
-    real: list[str] = list(config.real_columns or ())
-    for name, source_action in (
-        *((name, name) for name in actions),
-        *policy.previous_action_inputs.items(),
-    ):
-        action = policy.actions[source_action]
-        (categorical if action.type == "categorical" else real).append(name)
-    categorical, real = list(dict.fromkeys(categorical)), list(dict.fromkeys(real))
-    validate_disjoint_roles(categorical, real)
-    _validate_declared_column_roles(columns, categorical, real)
-
-    _validate_cardinality_columns(authored_cardinality, features + static, {})
-
     encoder = EpisodeTableEncoder(policy)
     episodes = decisions.episodes
     schema_path = writer.workspace / "episode-schema.arrow"
@@ -182,7 +148,35 @@ def _prepare_policy(config, writer):
             raise ValueError("Policy preparation requires eligible episodes")
         with atomic_path(schema_path) as temporary:
             temporary.write_bytes(schema.serialize().to_pybytes())
-    if collisions := set(actions + feedback) & set(schema.names):
+    action_columns = executed_action_columns(policy.actions, schema.names)
+    actions = list(action_columns.values())
+    # A shared self-feedback/target column stores the executed action, as in
+    # supervised next-step prediction. Policy windows obtain its lag from the
+    # separate previous-action record, including at a fragment boundary.
+    feedback = [
+        name for name, action in policy.previous_action_inputs.items() if name != action
+    ]
+    temporal = features + actions + feedback
+    columns = temporal + static
+    if len(columns) != len(set(columns)):
+        raise ValueError(
+            "Policy inputs, derived histories, and targets must have distinct names"
+        )
+    categorical: list[str] = list(config.categorical_columns or ())
+    real: list[str] = list(config.real_columns or ())
+    for name, source_action in (
+        *((name, action) for action, name in action_columns.items()),
+        *policy.previous_action_inputs.items(),
+    ):
+        action = policy.actions[source_action]
+        (categorical if action.type == "categorical" else real).append(name)
+    categorical, real = list(dict.fromkeys(categorical)), list(dict.fromkeys(real))
+    validate_disjoint_roles(categorical, real)
+    _validate_declared_column_roles(columns, categorical, real)
+
+    _validate_cardinality_columns(authored_cardinality, features + static, {})
+
+    if collisions := set(feedback) & set(schema.names):
         raise ValueError(
             f"Action columns collide with recorded fields: {sorted(collisions)}"
         )
@@ -229,26 +223,46 @@ def _prepare_policy(config, writer):
         episode = episodes[index]
         table = encoder.table(decisions.sequence_ids[index], episode)
         return _action_features(
-            pl.from_arrow(cast_episode_table(table, schema)), policy
+            pl.from_arrow(cast_episode_table(table, schema)), policy, action_columns
         )
 
     derived = ["__policy_return"] if policy.return_conditioned else []
-    raw_schema = _action_features(pl.from_arrow(schema.empty_table()), policy).schema
+    raw_schema = _action_features(
+        pl.from_arrow(schema.empty_table()), policy, action_columns
+    ).schema
     fit_path = writer.workspace / "feature-fit.json"
+    # Older frozen contracts predate flat targets for same-named actions.
+    # Fit only those newly exposed columns and retain all existing transforms.
+    fit_columns = (
+        columns
+        if frozen is None
+        else [
+            name
+            for action, name in action_columns.items()
+            if name != action and name not in frozen.column_data_types
+        ]
+    )
+    metadata = dict(frozen) if frozen is not None else {}
     if frozen is None and fit_path.exists():
         metadata = json.loads(fit_path.read_text())
         metadata["id_maps"] = {
             name: dict(pairs) for name, pairs in metadata["id_maps"].items()
         }
-        fitted = FittedColumns.from_metadata(columns, metadata)
-    elif frozen is None:
+    elif fit_columns:
+        declared_maps = policy.categorical_id_maps()
+        mappings = {
+            name: declared_maps[action]
+            for action, name in action_columns.items()
+            if action in declared_maps
+        }
+        mappings.update(
+            {name: declared_maps[name] for name in feedback if name in declared_maps}
+        )
         rules = FittingRules(
             precomputed={
-                name: mapping
-                for name, mapping in policy.categorical_id_maps().items()
-                if name in actions + feedback
+                name: mappings[name] for name in fit_columns if name in mappings
             },
-            cardinality=cardinality,
+            cardinality=cardinality if frozen is None else {},
             categorical=categorical,
             real=real,
         )
@@ -269,6 +283,7 @@ def _prepare_policy(config, writer):
                 (rows, actions + feedback),
                 (rows.head(1), static),
             ):
+                selected = [name for name in selected if name in fit_columns]
                 if nested := [
                     name for name in selected if frame[name].dtype.is_nested()
                 ]:
@@ -278,23 +293,27 @@ def _prepare_policy(config, writer):
                 if selected:
                     features_fit.observe(frame, selected, rules)
         maps, stats = features_fit.finish(rules)
-        fitted = FittedColumns.resolve(columns, maps, stats, raw_schema)
-        metadata = fitted.metadata(for_resume=True)
-        # Preserve numeric categorical keys across the JSON round trip.
-        metadata["id_maps"] = {
-            name: list(mapping.items()) for name, mapping in maps.items()
-        }
-        with atomic_path(fit_path) as temporary:
-            temporary.write_text(json.dumps(metadata))
-    else:
-        stored = columns + [
-            name
-            for name in derived
-            if name in frozen.column_data_types and name not in columns
-        ]
-        fitted = FittedColumns.from_metadata(
-            stored, dict(frozen), categorical=categorical, real=real
-        )
+        newly_fitted = FittedColumns.resolve(fit_columns, maps, stats, raw_schema)
+        for field, values in newly_fitted.metadata(for_resume=True).items():
+            metadata[field] = {**metadata.get(field, {}), **values}
+        if frozen is None:
+            # Preserve numeric categorical keys across the JSON round trip.
+            checkpoint = {
+                **metadata,
+                "id_maps": {
+                    name: list(mapping.items()) for name, mapping in maps.items()
+                },
+            }
+            with atomic_path(fit_path) as temporary:
+                temporary.write_text(json.dumps(checkpoint))
+    stored = columns + [
+        name
+        for name in derived
+        if name in metadata["column_data_types"] and name not in columns
+    ]
+    fitted = FittedColumns.from_metadata(
+        stored, metadata, categorical=categorical, real=real
+    )
 
     transforms = {}
     for name in columns:
@@ -390,21 +409,14 @@ def _prepare_policy(config, writer):
     metadata = dict(
         split_paths=[f"{i}.split.json" for i in range(split_count)],
         indexed_views=list(map(str, range(split_count))),
-        split_names=list(config.splits),
+        **config.split_metadata(),
         fit_split_indices=(
             list(range(split_count)) if config.normalize_on_all_data else [0]
         )
-        if frozen is None
+        if fit_columns
         else [],
         depth_layouts=layouts,
-        window_length=config.window_lengths[0],
-        window_lengths=list(config.window_lengths),
-        max_target_offset=config.max_target_offset,
-        prediction_length=config.prediction_length,
-        target_offset=config.target_offset,
-        prediction_aligned_splits=config.prediction_aligned_splits,
-        prediction_alignment_steps=config.prediction_alignment_steps,
-        window_stride=config.resolved_window_stride,
+        **config.window_metadata(),
         image_sources={
             name: image.compatibility_signature() for name, image in images.items()
         },
@@ -443,16 +455,8 @@ def _prepare_policy(config, writer):
     )
 
 
-def _scalar_actions(policy):
-    inputs = set(policy.observation_columns + policy.static_columns)
-    return [name for name in policy.actions if name not in inputs]
-
-
-def _action_features(rows, policy):
-    targets = [
-        pl.col(ACTION_RECORD).struct.field(name).alias(name)
-        for name in _scalar_actions(policy)
-    ]
+def _action_features(rows, policy, action_columns):
+    rows = project_actions(rows, action_columns)
     previous = [
         pl.col(PREVIOUS_ACTION_RECORD)
         .struct.field(action)
@@ -461,7 +465,7 @@ def _action_features(rows, policy):
         for name, action in policy.previous_action_inputs.items()
         if name != action
     ]
-    result = rows.with_columns(*targets, *previous)
+    result = rows.with_columns(previous)
     if any(
         name not in policy.initial_inputs
         and rows[PREVIOUS_ACTION_RECORD].struct.field(action).null_count()

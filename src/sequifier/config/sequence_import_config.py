@@ -115,12 +115,10 @@ class PreparePolicyConfig(
     @model_validator(mode="after")
     def validate_resources(self):
         limited = set(self.cardinality_config)
-        if limited & (
-            set(self.policy_binding.actions) | set(self.policy_binding.feedback)
-        ):
-            raise ValueError(
-                "cardinality_config cannot change action or feedback vocabularies"
-            )
+        # Action names can also denote independent observed features. Validate
+        # cardinality against resolved observation/static columns during preparation.
+        if limited & set(self.policy_binding.feedback):
+            raise ValueError("cardinality_config cannot change feedback vocabularies")
         if limited & set(self.real_columns or ()) or (
             self.categorical_columns and limited - set(self.categorical_columns)
         ):

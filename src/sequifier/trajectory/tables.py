@@ -154,6 +154,52 @@ class IndexedEpisodeTable:
         return rows.with_columns((pl.col("itemPosition") >= start).alias("__decision"))
 
 
+def executed_action_columns(actions, occupied):
+    """Map action names to flat training columns while preserving existing fields."""
+    occupied = {ACTION_RECORD, *occupied}
+    actions = tuple(actions)
+    reserved = occupied.union(actions)
+    columns = {}
+    for action in actions:
+        name = action
+        if name in occupied:
+            name = "__executed_" + action
+            while name in reserved:
+                name = "__executed_" + name
+        columns[action] = name
+        reserved.add(name)
+    return columns
+
+
+def project_actions(frame, columns):
+    return frame.with_columns(
+        pl.col(ACTION_RECORD).struct.field(action).alias(name)
+        for action, name in columns.items()
+    )
+
+
+def observation_mask(frame, raw_column):
+    """Combine the available recorded and configured row masks in boolean form."""
+    from sequifier.io.feature_fitting import mask_expression
+
+    schema = frame.collect_schema()
+    columns = [
+        name for name in dict.fromkeys((OBSERVATION_MASK, raw_column)) if name in schema
+    ]
+    if raw_column and not columns:
+        raise ValueError(f"Missing observation mask column {raw_column!r}")
+    result = pl.lit(False)
+    for name in columns:
+        if isinstance(frame, pl.LazyFrame):
+            values = frame.select(pl.col(name).unique()).collect().to_series()
+        else:
+            values = frame[name]
+        if values.null_count():
+            raise ValueError(f"Mask column {name} contains null values")
+        result = result | mask_expression(values, schema[name], name)
+    return result
+
+
 def project_prepared_rows(
     rows, metadata, observations, static, actions, *, physical_inputs
 ):
@@ -163,10 +209,8 @@ def project_prepared_rows(
     if actions and ACTION_RECORD not in rows.columns:
         recorded = []
         physical = rows.schema.get(DOMAIN_OBSERVATIONS)
-        for name in actions:
-            column = (
-                "__executed_" + name if name in observations or name in static else name
-            )
+        columns = executed_action_columns(actions, [*observations, *static])
+        for name, column in columns.items():
             if isinstance(physical, pl.Struct) and column in physical.to_schema():
                 recorded.append(
                     pl.col(DOMAIN_OBSERVATIONS).struct.field(column).alias(name)
@@ -482,18 +526,10 @@ def table_episode(
             raise ValueError(f"{label} must remain constant within an episode")
         return entries[0]
 
-    raw_mask = policy.raw_mask_column
-    if raw_mask and raw_mask in data.columns:
-        from sequifier.io.feature_fitting import mask_expression
-
-        if data[raw_mask].null_count():
-            raise ValueError(f"Mask column {raw_mask} contains null values")
-        masked = mask_expression(data[raw_mask], data.schema[raw_mask], raw_mask)
-        if raw_mask != OBSERVATION_MASK and OBSERVATION_MASK in data.columns:
-            masked = masked | pl.col(OBSERVATION_MASK)
-        data = data.with_columns(masked.alias(OBSERVATION_MASK))
-    elif raw_mask and OBSERVATION_MASK not in data.columns:
-        raise ValueError(f"Missing observation mask column {raw_mask!r}")
+    if policy.raw_mask_column or OBSERVATION_MASK in data.columns:
+        data = data.with_columns(
+            observation_mask(data, policy.raw_mask_column).alias(OBSERVATION_MASK)
+        )
     positions = tuple(data["itemPosition"])
     actions = tuple(action_at(row) for row in data.iter_rows(named=True))
     preceding = action_at(preceding_row) if preceding_row is not None else None
