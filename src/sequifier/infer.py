@@ -833,34 +833,44 @@ def inference_output_path(
 
 def validate_probability_destinations(config, model_id, target_types, part_count):
     """Reserve all prediction and probability files before writing either."""
-    output_path = config.output_path
-    paths = []
-    for index in range(part_count):
-        paths.append(
-            _inference_destination(
-                config.project_root,
-                config.write_format,
-                "predictions",
-                model_id,
-                index,
-                output_path=output_path,
-            )[0]
+    reserved, existing_files = set(), set()
+    for part in range(part_count):
+        reserve_prediction_part(
+            config, model_id, target_types, part, reserved, existing_files
         )
-        paths.extend(
+
+
+def reserve_prediction_part(
+    config, model_id, target_types, part, reserved, existing_files
+):
+    paths = [
+        _inference_destination(
+            config.project_root,
+            config.write_format,
+            "predictions",
+            model_id,
+            part,
+            output_path=config.output_path,
+        )[0],
+        *(
             _inference_destination(
                 config.project_root,
                 config.write_format,
                 "probabilities",
                 model_id,
-                index,
+                part,
                 target,
             )[0]
             for target, kind in target_types.items()
             if kind == "categorical"
-        )
-    paths = unique_paths(paths, "prediction and probability outputs must be distinct")
+        ),
+    ]
+    message = "prediction and probability outputs must be distinct"
+    paths = unique_paths(paths, message)
+    if reserved.intersection(paths):
+        raise ValueError(message)
+    reserved.update(paths)
     require_file_destinations(paths)
-    existing_files = set()
     for path in paths:
         try:
             stat = path.stat()

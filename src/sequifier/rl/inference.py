@@ -2,7 +2,7 @@
 
 from collections import deque
 from contextlib import contextmanager
-from itertools import chain, islice
+from itertools import chain, islice, pairwise
 from pathlib import Path
 from typing import cast
 
@@ -90,25 +90,12 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
             raise ValueError(
                 "policy rollout seed coordinate or seed_row_index is outside the input rows"
             )
-        predictions = predict_policy(
+        predict_policy(
             policy,
             frames,
             config,
             policy_row_key(first_rows, spec),
         )
-    from sequifier.infer import inference_output_path
-
-    destination = inference_output_path(
-        config.project_root,
-        config.write_format,
-        "predictions",
-        Path(config.model_paths[0]).stem,
-        0,
-        output_path=config.output_path,
-        config=config,
-    )
-    write_data(predictions, destination, config.write_format)
-    logger.info(f"Wrote {len(predictions)} policy predictions to '{destination}'")
 
 
 @contextmanager
@@ -179,22 +166,31 @@ def _indexed_policy_frames(view, spec, config):
         return
     for key in sorted(view.dataset["sequences"], key=int):
         sequence = int(key)
-        if not predict and sequence not in bounds:
+        if predict:
+            yield _prepared_frame(
+                view.read(sequence),
+                sequence,
+                None,
+                static,
+                media,
+                metadata,
+                spec,
+                config,
+            )
             continue
-        start, end = bounds.get(sequence, (None, None))
-        read_start = _context_start(start, spec)
-        if not predict:
-            read_start = view.history_start(sequence, start, end, read_start)
-        rows = view.read(sequence, read_start, end)
-        rows, previous = _prepared_frame(
-            rows, sequence, start, static, media, metadata, spec, config
-        )
-        yield rows, previous
+        if sequence not in bounds:
+            continue
+        start, end = bounds[sequence]
+        for first, stop in view.covered_intervals(sequence, start, end):
+            owned = max(start, first)
+            read_start = max(first, _context_start(owned, spec))
+            rows = view.read(sequence, read_start, stop)
+            yield _prepared_frame(
+                rows, sequence, owned, static, media, metadata, spec, config
+            )
 
 
-def _context_start(start, spec):
-    if start is None:
-        return None
+def _context_start(start: int, spec) -> int:
     return max(
         0, start - spec.context_length + 1 - int(bool(spec.previous_action_inputs))
     )
@@ -209,7 +205,14 @@ def _stored_policy_frames(source, spec, config):
     static = (
         scan_tables((source.static_path,)).collect() if source.static_path else None
     )
-    for rows in prepared_table(source).partition_by("sequenceId", maintain_order=True):
+    table = prepared_table(source)
+    # A sparse stride can leave holes inside a split. History stops at each hole.
+    boundaries = (pl.col("itemPosition").diff() != 1) | (
+        pl.col("sequenceId") != pl.col("sequenceId").shift()
+    )
+    starts = [0, *table.select(boundaries.arg_true()).to_series().to_list(), len(table)]
+    for first, stop in pairwise(starts):
+        rows = table.slice(first, stop - first)
         decisions = rows.filter(pl.col("__decision"))
         if decisions.is_empty():
             continue
@@ -326,24 +329,66 @@ def infer_rollout(policy, history, config, identity):
 
 @torch.no_grad()
 def predict_policy(policy, frames, config, row_key):
-    spec = policy.config.model_copy(update={"input_encoding": "model"})
-    if config.output_path is not None and config.output_probabilities:
-        from sequifier.infer import validate_probability_destinations
+    from sequifier.infer import inference_output_path, reserve_prediction_part
+    from sequifier.io.indexed_sequences import WINDOW_CHUNK_SIZE
 
-        validate_probability_destinations(
-            config,
-            Path(config.model_paths[0]).stem,
-            {name: field.type for name, field in spec.actions.items()},
-            1,
-        )
+    spec = policy.config.model_copy(update={"input_encoding": "model"})
+    action_dtypes = {
+        name: pl.Series(field.values).dtype
+        if field.type == "categorical"
+        else pl.Float64
+        for name, field in spec.actions.items()
+    }
+    model = Path(config.model_paths[0]).stem
     windows = policy_windows(frames, spec, config, row_key)
     generator = action_generator(policy.device, config.seed)
-    outputs = []
-    probability_rows = {
-        name: [] for name, field in spec.actions.items() if field.type == "categorical"
-    }
+    predictions = _prediction_rows(policy, windows, config, generator)
+    reserved, existing_files = set(), set()
+    target_types = {name: field.type for name, field in spec.actions.items()}
+    for part, chunk in enumerate(
+        iter(lambda: list(islice(predictions, WINDOW_CHUNK_SIZE)), [])
+    ):
+        if config.output_path is not None and config.output_probabilities:
+            reserve_prediction_part(
+                config, model, target_types, part, reserved, existing_files
+            )
+        records = [row for row, _ in chunk]
+        destination = inference_output_path(
+            config.project_root,
+            config.write_format,
+            "predictions",
+            model,
+            part,
+            output_path=config.output_path,
+            config=config,
+        )
+        write_data(
+            pl.DataFrame(records, schema_overrides=action_dtypes),
+            destination,
+            config.write_format,
+        )
+        for name in chunk[0][1]:
+            path = inference_output_path(
+                config.project_root,
+                config.write_format,
+                "probabilities",
+                model,
+                part,
+                name,
+                config=config,
+            )
+            values = [probabilities[name] for _, probabilities in chunk]
+            write_data(
+                probability_table(spec.actions[name].values, values),
+                path,
+                config.write_format,
+            )
+        logger.info(f"Wrote {len(records)} policy predictions to '{destination}'")
+
+
+def _prediction_rows(policy, windows, config, generator):
     while batch := list(islice(windows, config.inference_batch_size)):
-        rows, histories, identities = zip(*batch)
+        _, histories, identities = zip(*batch)
         inputs = cast(SequifierInputs, collate_model_inputs(histories)).to(
             policy.device
         )
@@ -359,41 +404,19 @@ def predict_policy(policy, frames, config, row_key):
             sampled = distribution.select_decision(deterministic, generator)
             scores, probabilities = None, {}
         actions = distribution.domain_actions(sampled)
-        for index, (row_index, action) in enumerate(zip(rows, actions)):
-            output = {
-                row_key: row_index,
-                **identities[index],
-                **action,
-            }
+        for index, (identity, action) in enumerate(
+            zip(identities, actions, strict=True)
+        ):
+            record = {**identity, **action}
             if scores is not None:
-                output["action_log_probability"] = float(scores[index])
-            for name, values in probabilities.items():
-                probability_rows[name].append((row_index, values[index].tolist()))
-            outputs.append(output)
-    predictions = pl.DataFrame(outputs).sort(row_key).drop(row_key)
-    if config.output_probabilities:
-        from sequifier.infer import inference_output_path
-
-        for name, records in probability_rows.items():
-            if not records:
-                continue
-            destination = inference_output_path(
-                config.project_root,
-                config.write_format,
-                "probabilities",
-                Path(config.model_paths[0]).stem,
-                0,
-                name,
-                config=config,
+                record["action_log_probability"] = float(scores[index])
+            yield (
+                record,
+                {
+                    name: values[index].tolist()
+                    for name, values in probabilities.items()
+                },
             )
-            write_data(
-                probability_table(
-                    spec.actions[name].values, [row for _, row in sorted(records)]
-                ),
-                destination,
-                config.write_format,
-            )
-    return predictions
 
 
 def policy_row_key(data, spec):
@@ -460,6 +483,8 @@ def _lagged_action(row, prior, spec, config, position):
 
 def _decision_histories(frames, spec, config, row_key, *, seed_index=None):
     offset = 0
+    previous_sequence = None
+    index = 0
     for data, context in frames:
         indexed = data.with_row_index(row_key, offset=offset)
         offset += len(data)
@@ -480,7 +505,10 @@ def _decision_histories(frames, spec, config, row_key, *, seed_index=None):
                 )
             history = deque(maxlen=spec.context_length)
             prior = None
-            index = 0
+            sequence = group["sequenceId"][0]
+            if sequence != previous_sequence:
+                index = 0
+                previous_sequence = sequence
             for row in group.iter_rows(named=True):
                 position = row["itemPosition"]
                 previous_action = None

@@ -369,6 +369,21 @@ def _resolve_policy_inference(
             if metadata_path is not None and path in split_paths
             else None
         )
+        folder = _assert_folder_metadata_matches(
+            str(path),
+            metadata,
+            interface.feature_selection,
+            allow_wider_layout=metadata_path is None,
+        )
+        if folder is not None:
+            if split is not None and folder.split_index not in (
+                None,
+                metadata.named_split_index(split),
+            ):
+                raise ValueError("Prepared folder disagrees with the selected split")
+            metadata = folder
+            metadata_path = path / "metadata.json"
+            split = None
         source = SequenceSourceConfig(
             split=split,
             paths=[] if split is not None else [str(path)],

@@ -70,7 +70,11 @@ to start with one observation and the binding’s initial feedback. See
 Both modes accept a physical seed coordinate in the selected input split. Use exactly
 one selector. Existing configs can continue using a zero-based `seed_window_index`
 for forecasts or `seed_row_index` for policies. Coordinate selection stays stable
-when the same items are repacked into different windows or shards.
+when the same items are repacked into different shards. In a prepared split, a
+seed must be covered by a preprocessing window and belong to that split. If a
+sparse stride leaves a gap, history starts again at the first covered item after
+the gap. Aligned windows can retain context from before the split. These rules
+apply to both indexed and materialized inputs.
 
 ```yaml
 rollout:

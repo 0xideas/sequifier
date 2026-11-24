@@ -514,6 +514,31 @@ class IndexedView:
         )
         return max(requested, int(placement.starts[0] + placement.padding[0]))
 
+    def covered_intervals(self, sequence, low, high):
+        """Contiguous physical rows represented by the preprocessing windows."""
+        split = int(self.view["view"])
+        width = self._metadata.width_for_split(split)
+        stride = self._metadata.window_stride or width
+        alignment = PredictionAlignment.for_split(self._metadata, split)
+        if alignment is not None or stride <= width:
+            yield self.history_start(sequence, low, high, low - width), high
+            return
+        placement = WindowPlacement.for_split(
+            self.dataset["sequences"][str(sequence)]["position"],
+            low,
+            high,
+            width,
+            stride,
+        )
+        start, stop = low, low
+        for offset, padding in placement:
+            first = offset + padding
+            if first > stop:
+                yield start, stop
+                start = first
+            stop = offset + width
+        yield start, stop
+
     @property
     def is_fitting_split(self) -> bool:
         return (

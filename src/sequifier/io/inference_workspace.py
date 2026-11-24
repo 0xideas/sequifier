@@ -160,6 +160,8 @@ def inference_workspace(request, *, random_seed, skip_metadata):
         }
         identity["output"] = default[request.task]().model_dump(exclude_none=True)
     if rollout := getattr(request, "rollout", None):
+        if rollout.seed is not None:
+            identity["seed_layout_version"] = ContractVersions.ROLLOUT_SEED_LAYOUT
         identity["trajectory_version"] = (
             ContractVersions.JOINT_POLICY_TRAJECTORY
             if request.task == "policy"

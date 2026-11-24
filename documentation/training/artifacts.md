@@ -157,7 +157,10 @@ probabilities remain conditional on the selected preceding actions.
 All inference routes accept `output.path` for one model. A relative path resolves
 under `run.project_root`. An absolute path is used directly. It overrides the first
 prediction/embedding file; later chunks append `-part-NNN` to its stem. Probability
-files keep their canonical target-specific destinations.
+files keep their canonical target-specific destinations. Policy prediction writes
+up to 256 decisions per part, the same chunk size as indexed forecast windows.
+Every categorical probability part follows its prediction part’s row order.
+The inference batch size controls model execution independently of file boundaries.
 
 Forecast and policy rollout use the shared validated trajectory record.
 Training-time PPO and GRPO publish a sequence manifest with a single Parquet

@@ -51,7 +51,12 @@ def indexed_history(view, seed, width):
         raise ValueError("Rollout seed coordinate is outside the selected split")
     start = position - width + 1
     if view.view["view"] != "predict":
-        start = view.history_start(sequence, *bounds[sequence], start)
+        for first, stop in view.covered_intervals(sequence, *bounds[sequence]):
+            if first <= position < stop:
+                start = max(start, first)
+                break
+        else:
+            raise ValueError("Rollout seed coordinate is outside the selected split")
     rows = view.read(sequence, start, position + 1)
     if rows.is_empty() or rows["itemPosition"][-1] != position:
         raise ValueError("Rollout seed coordinate is outside the sequence")
