@@ -202,7 +202,7 @@ depth feature/position column. Names beginning with
 | `splits.<name>.window_length` | `int` | **Yes** | - | Physical widths in split order, with one entry per split. Required for every split; widths from split 2 onward must equal the first width plus `prediction_alignment_steps - 1`. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
 | `splits.<name>.fraction` | `float`| Conditional | `null` | Ordered split proportions for `within_sequence` and `between_sequence`. Must sum to 1.0 and must be omitted for `value_cutoff`. |
-| `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
+| `split_method` | `str` | No | `between_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
 | `split_column` | `str` | Conditional | `null` | Required for `value_cutoff`. Names the integer, Date, or Datetime column compared with each split cutoff; it cannot be a mask, curriculum, sequence ID, or item-position column. |
 | `splits.<name>.cutoff` | integer or timestamp | Conditional | `null` | Required for `value_cutoff`. Set increasing upper boundaries on every split except the last. Values must all be integers or all be ISO timestamp values. |
 | `window_stride` | `int` | No | First split width | Stored-window stride for distributed splits. |
@@ -555,6 +555,16 @@ can be raw CSV/Parquet tables, existing scalar prepared histories with their
 metadata, or JSON rollout recordings. Import preserves domain values and missing
 transition information; it does not fit vocabularies/statistics or create padded
 windows. Raw tables can also be used directly by policy training without this step.
+
+Both `import_sequences` and `prepare_policy` accept `initialize_from` to resolve
+the authored `policy_binding` against a model artifact. When the artifact has
+multiple interfaces, set `model_interface` to the actor's interface name. A
+single-interface artifact selects its sole interface automatically.
+
+```yaml
+initialize_from: models/mixed.pt
+model_interface: actor
+```
 
 The operation atomically publishes one Parquet decision table and its checksummed manifest.
 See [policy learning](../policy-learning.md#optional-committed-import) and

@@ -25,7 +25,14 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
     source: SequenceSourceConfig
     policy_binding: PolicyBinding
     initialize_from: str | None = None
+    model_interface: str | None = None
     reprocess: bool = False
+
+    @model_validator(mode="after")
+    def validate_interface_source(self):
+        if self.model_interface is not None and not self.initialize_from:
+            raise ValueError("model_interface requires initialize_from")
+        return self
 
     @property
     def project_root(self):
@@ -48,10 +55,11 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
                 read_execution_artifact(
                     Path(self.project_root) / self.initialize_from
                 ).model_config.values,
+                interface_name=self.model_interface,
             )
-            if len(execution.interface_names) != 1:
+            if self.model_interface is None and len(execution.interface_names) > 1:
                 raise ValueError(
-                    "sequence import initialize_from requires one model interface"
+                    "Select model_interface when initialize_from has multiple interfaces"
                 )
             return bind_policy(execution, name, self.policy_binding)
         observations = list(self.source.columns.observations)
@@ -88,9 +96,6 @@ class PreparePolicyConfig(
     run: SeededPreprocessingRun = Field(default_factory=SeededPreprocessingRun)
     indexed_output_path: str = Field(min_length=1)
     operation: Literal["prepare_policy"]
-    split_method: Literal["between_sequence", "within_sequence", "value_cutoff"] = (
-        "between_sequence"
-    )
     normalize_on_all_data: bool = False
 
     categorical_columns: list[str] | None = None

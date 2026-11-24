@@ -21,7 +21,7 @@ class WindowStrideSettings(ConfigModel):
     window_stride: int | None = Field(default=None, gt=0)
 
     split_method: Literal["between_sequence", "within_sequence", "value_cutoff"] = (
-        "within_sequence"
+        "between_sequence"
     )
     split_column: str | None = None
     splits: dict[str, WindowSplit] = Field(min_length=1)
