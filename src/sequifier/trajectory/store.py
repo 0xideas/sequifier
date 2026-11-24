@@ -27,10 +27,5 @@ def load_trajectory(path: str | Path) -> Trajectory:
         raise ValueError("Unsupported trajectory format")
     version = values.pop("version", None)
     expected = _TRAJECTORY_VERSIONS[kind]
-    if (
-        kind == "sequifier.policy-trajectory"
-        and version == ContractVersions.SINGLE_SEED_JOINT_POLICY_TRAJECTORY
-    ):
-        expected = ContractVersions.SINGLE_SEED_JOINT_POLICY_TRAJECTORY
     require_contract_version(kind, version, expected)
     return validate_trajectory(values)

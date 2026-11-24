@@ -1219,10 +1219,14 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
             for column in columns
         },
     )
-    from sequifier.rollout.seeds import forecast_coordinate_seed, seed_origin
+    from sequifier.rollout.seeds import (
+        forecast_coordinate_seed,
+        forecast_window_seed,
+        seed_origin,
+    )
 
     if rollout.seed is not None:
-        seed = forecast_coordinate_seed(config, dataset, column_data_types, codec)
+        seed = forecast_coordinate_seed(config, dataset)
         origin = seed_origin(config, rollout.seed.sequenceId, rollout.seed.itemPosition)
     else:
         remaining = rollout.seed_window_index
@@ -1240,15 +1244,11 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
                 f"rollout seed_window_index {rollout.seed_window_index} is outside the prepared dataset windows"
             )
         data_id, windowed, row = selected
-        seed_inputs = {
-            key: value[row : row + 1].numpy() for key, value in windowed.inputs.items()
-        }
-        seed_mask = windowed.metadata["attention_valid_mask"][row : row + 1].numpy()
-        seed = codec.seed_from_model(
-            seed_inputs, seed_mask, config.input_columns, config.static_columns
-        )
         start = int(windowed.model_start_positions[row])
         sequence = int(windowed.sequence_ids[row])
+        stop = start + config.window_view.context_length
+        valid = int(windowed.metadata["attention_valid_mask"][row].sum())
+        seed = forecast_window_seed(config, sequence, stop - valid, stop)
         origin = {
             **seed_origin(
                 config, sequence, start + config.window_view.context_length - 1

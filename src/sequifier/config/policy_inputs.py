@@ -21,6 +21,7 @@ class PolicyFittingSpec:
     interface_name: str
     observation_columns: list[str]
     static_columns: list[str]
+    raw_mask_column: str | None = None
     categorical_columns: list[str]
     categorical_n_classes: dict[str, int]
     id_maps: dict[str, dict[str | int, int]]
@@ -37,6 +38,7 @@ class PolicyFittingSpec:
             interface_name=interface_name,
             observation_columns=observations,
             static_columns=static,
+            raw_mask_column=metadata.raw_mask_column,
             categorical_columns=[
                 k for k in features if "int" in metadata.column_data_types[k].lower()
             ],

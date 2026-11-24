@@ -7,6 +7,7 @@ from itertools import islice
 from pathlib import Path
 from shutil import copyfile
 from tempfile import TemporaryDirectory
+from typing import cast
 
 import polars as pl
 import pyarrow.parquet as pq
@@ -16,7 +17,12 @@ from sequifier.fingerprints import file_checksum, fingerprint
 from sequifier.io.action_record import action_record_layout
 from sequifier.io.actions import decode_action
 from sequifier.io.atomic import atomic_path, write_json_atomic
-from sequifier.io.sequence import CONTEXT_COLUMN, CONTEXT_RECORDS, ContextObservation
+from sequifier.io.sequence import (
+    CONTEXT_COLUMN,
+    CONTEXT_RECORDS,
+    OBSERVATION_MASK,
+    ContextObservation,
+)
 from sequifier.io.values import portable_value
 from sequifier.trajectory.table_schema import cast_episode_table, sequence_table
 from sequifier.trajectory.tables import ACTION_RECORD, PREVIOUS_ACTION_RECORD
@@ -52,6 +58,7 @@ def decision_row(
     truncated,
     group=None,
     predictions=None,
+    masked=False,
 ):
     row = {
         "sequenceId": sequence_coordinate(identity),
@@ -63,6 +70,7 @@ def decision_row(
         "bootstrap_allowed": not terminated,
         "__group": group,
         CONTEXT_COLUMN: None,
+        OBSERVATION_MASK: masked,
         **{
             "__next_" + key: None if successor is None else successor[key]
             for key in observation
@@ -119,6 +127,7 @@ def trajectory_rows(trajectory, policy=None):
                 else None
             ),
             predictions=step.predictions,
+            masked=i == 0 and trajectory.seed.observation_mask[-1],
             reward=step.reward,
             successor=step.successor_observation,
             terminated=step.terminated,
@@ -130,10 +139,11 @@ def trajectory_rows(trajectory, policy=None):
         elif i == 0 and not episode:
             context = [
                 ContextObservation(
+                    masked=trajectory.seed.observation_mask[index],
                     observation={
                         name: values[index]
                         for name, values in trajectory.seed.observations.items()
-                    }
+                    },
                 )
                 for index, valid in enumerate(trajectory.seed.attention_valid_mask[:-1])
                 if valid
@@ -299,7 +309,9 @@ def publish_inference_rollout(trajectory, config):
 
 
 @contextmanager
-def supervised_manifest_input(path, sequence_view="decisions", *, dependencies=None):
+def supervised_manifest_input(
+    path, sequence_view="decisions", *, dependencies=None, mask_column=None
+):
     """Feed the verified shards to ordinary file preprocessing, including split fitting."""
     from sequifier.config.policy_train_config import SequenceSourceConfig
     from sequifier.trajectory.sources import resolve_source
@@ -323,12 +335,15 @@ def supervised_manifest_input(path, sequence_view="decisions", *, dependencies=N
 
             trajectory = load_trajectory(path)
             policy = trajectory_policy(trajectory)
-            scan = pl.from_arrow(
-                _decision_table(
-                    list(trajectory_rows(trajectory, policy)),
-                    trajectory.seed.observations,
-                    policy,
-                )
+            scan = cast(
+                pl.DataFrame,
+                pl.from_arrow(
+                    _decision_table(
+                        list(trajectory_rows(trajectory, policy)),
+                        trajectory.seed.observations,
+                        policy,
+                    )
+                ),
             ).lazy()
             manifest = {
                 "observation_columns": list(trajectory.seed.observations),
@@ -352,6 +367,8 @@ def supervised_manifest_input(path, sequence_view="decisions", *, dependencies=N
             if dependencies is not None:
                 dependencies.merge(resolved.dependencies)
             scan = scan_tables(resolved.paths)
+        if OBSERVATION_MASK not in scan.collect_schema():
+            scan = scan.with_columns(pl.lit(False).alias(OBSERVATION_MASK))
         if ACTION_RECORD in scan.collect_schema() and sequence_view == "decisions":
             dtype = scan.collect_schema()[ACTION_RECORD]
             if isinstance(dtype, pl.Struct):
@@ -387,8 +404,9 @@ def supervised_manifest_input(path, sequence_view="decisions", *, dependencies=N
             )
             coordinates = ["sequenceId", "itemPosition", "sequenceName", "__group"]
             static = manifest.get("static_columns", [])
-            columns = coordinates + observations + list(static)
+            columns = coordinates + observations + list(static) + [OBSERVATION_MASK]
             final = final.with_columns(
+                pl.lit(False).alias(OBSERVATION_MASK),
                 (pl.col("itemPosition") + 1).alias("itemPosition"),
                 *[pl.col("__next_" + c).alias(c) for c in observations],
             )
@@ -401,6 +419,22 @@ def supervised_manifest_input(path, sequence_view="decisions", *, dependencies=N
             static_path = table.with_suffix(".static.parquet")
             scan.select("sequenceId", *static).unique().sink_parquet(static_path)
             scan = scan.drop(static)
+        if mask_column and mask_column != OBSERVATION_MASK:
+            if mask_column in scan.collect_schema():
+                scan = scan.with_columns(
+                    (
+                        pl.col(mask_column).cast(pl.Boolean) | pl.col(OBSERVATION_MASK)
+                    ).alias(mask_column)
+                ).drop(OBSERVATION_MASK)
+            else:
+                scan = scan.rename({OBSERVATION_MASK: mask_column})
+        elif not mask_column:
+            manifest = {
+                **manifest,
+                "masked_observations": scan.select(pl.col(OBSERVATION_MASK).any())
+                .collect()
+                .item(),
+            }
         scan.sink_parquet(table)
         if resolved is not None:
             resolved.dependencies.revalidate()

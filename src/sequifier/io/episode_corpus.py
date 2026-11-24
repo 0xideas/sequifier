@@ -177,6 +177,7 @@ def episode_content_key(episode, *, length=None, returns=None) -> str:
             column: entries[:length] for column, entries in episode.observations.items()
         },
         "actions": episode.actions[:length],
+        "observation_masks": episode.observation_masks[:length],
         "static_inputs": episode.static_inputs,
         "previous_action": episode.previous_action,
         "starts_episode": episode.starts_episode,

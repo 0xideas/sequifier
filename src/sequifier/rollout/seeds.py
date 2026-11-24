@@ -2,8 +2,15 @@
 
 from pathlib import Path
 
-import numpy as np
-import torch
+import polars as pl
+
+from sequifier.io.sequence import (
+    DOMAIN_OBSERVATIONS,
+    DOMAIN_STATIC,
+    OBSERVATION_MASK,
+    source_fields,
+)
+from sequifier.trajectory.schema import SeedHistory
 
 
 def seed_origin(config, sequence, position):
@@ -48,78 +55,112 @@ def indexed_history(view, seed, width):
     return rows
 
 
-def forecast_coordinate_seed(config, dataset, dtypes, codec):
-    import polars as pl
+def forecast_source_seed(config, sequence, rows):
+    width = config.window_view.context_length
+    if config.static_columns:
+        path = (
+            config._indexed_view.static_path
+            if config._indexed_view
+            else Path(config.project_root) / config.static_features_path
+        )
+        static = (
+            pl.scan_parquet(path).filter(pl.col("sequenceId") == sequence).collect()
+        )
+        if len(static) != 1:
+            raise ValueError(
+                "Missing or ambiguous source static values for rollout seed"
+            )
+        values = static.select(
+            source_fields(static, DOMAIN_STATIC, config.static_columns)
+        ).row(0, named=True)
+    else:
+        values = {}
+    observations = rows.select(
+        source_fields(rows, DOMAIN_OBSERVATIONS, config.input_columns)
+    ).to_dicts()
+    masks = (
+        rows[OBSERVATION_MASK].to_list()
+        if OBSERVATION_MASK in rows.columns
+        else [False] * len(rows)
+    )
+    return SeedHistory.from_rows(
+        observations, config.input_columns, width, values, masks
+    )
 
-    from sequifier.infer import apply_inference_column_types, subset_to_input_columns
-    from sequifier.io.pt_payload import tabular_tensor_batch
-    from sequifier.io.static_features import table_for_config
 
+def forecast_window_seed(config, sequence, start, stop):
+    view = config._indexed_view
+    if view is not None:
+        rows = view.read(sequence, start, stop)
+    else:
+        path = config.dataset_metadata.source_observations_path
+        if not path:
+            raise ValueError("Forecast rollout requires prepared source observations")
+        rows = (
+            pl.scan_parquet(Path(config.project_root) / path)
+            .filter(
+                (pl.col("sequenceId") == sequence)
+                & pl.col("itemPosition").is_between(start, stop - 1)
+            )
+            .sort("itemPosition")
+            .collect()
+        )
+    if rows["itemPosition"].to_list() != list(range(start, stop)):
+        raise ValueError("Source observations do not cover the rollout window")
+    return forecast_source_seed(config, sequence, rows)
+
+
+def forecast_coordinate_seed(config, dataset):
     seed = config.rollout.seed
     width = config.window_view.context_length
     if config._indexed_view is not None:
         rows = indexed_history(config._indexed_view, seed, width)
-        history = rows.select(config.input_columns).to_dicts()
-    else:
-        positions = {}
-        owned = False
-        for data in dataset:
-            if isinstance(data, pl.DataFrame):
-                data = apply_inference_column_types(
-                    subset_to_input_columns(data, config.input_columns), config
+        return forecast_source_seed(config, seed.sequenceId, rows)
+
+    # Stored windows own a bounded interval and may include preceding context.
+    # Only their coordinates are needed to select physical rows.
+    positions = set()
+    owned = False
+    for data in dataset:
+        if isinstance(data, pl.DataFrame):
+            bounds = (
+                data.filter(pl.col("sequenceId") == seed.sequenceId)
+                .select(
+                    "startItemPosition",
+                    "leftPadLength",
+                    "splitStartItemPosition",
+                    "splitEndItemPosition",
                 )
-                data = tabular_tensor_batch(
-                    data,
-                    dtypes,
-                    config.input_columns,
-                    config.storage_layout.window_length,
-                    sort_rows=False,
-                )
-            for i in (
-                (data.sequence_ids == seed.sequenceId).nonzero().flatten().tolist()
-            ):
-                start = int(data.start_item_positions[i])
-                low = start + int(data.left_pad_lengths[i])
-                end = start + config.storage_layout.window_length
-                owned |= (
-                    max(low, int(data.split_start_item_positions[i]))
-                    <= seed.itemPosition
-                    < min(end, int(data.split_end_item_positions[i]))
-                )
-                for pos in range(
+                .unique()
+                .iter_rows()
+            )
+        else:
+            selected = data.sequence_ids == seed.sequenceId
+            bounds = zip(
+                *(
+                    values[selected].tolist()
+                    for values in (
+                        data.start_item_positions,
+                        data.left_pad_lengths,
+                        data.split_start_item_positions,
+                        data.split_end_item_positions,
+                    )
+                ),
+                strict=True,
+            )
+        for start, padding, split_start, split_end in bounds:
+            low = start + padding
+            end = start + config.storage_layout.window_length
+            owned |= max(low, split_start) <= seed.itemPosition < min(end, split_end)
+            positions.update(
+                range(
                     max(low, seed.itemPosition - width + 1),
                     min(end, seed.itemPosition + 1),
-                ):
-                    record = {
-                        c: data.sequences[c][i, pos - start].item()
-                        for c in config.input_columns
-                    }
-                    if pos in positions and positions[pos] != record:
-                        raise ValueError("Prepared windows disagree at rollout seed")
-                    positions[pos] = record
-        if not owned or seed.itemPosition not in positions:
-            raise ValueError("Rollout seed coordinate is outside the selected split")
-        first = seed.itemPosition
-        while first - 1 in positions:
-            first -= 1
-        history = [positions[p] for p in range(first, seed.itemPosition + 1)]
-    padding = width - len(history)
-    inputs = {
-        c: np.asarray([[0] * padding + [r[c] for r in history]])
-        for c in config.input_columns
-    }
-    if config.static_columns:
-        static = table_for_config(config)
-        assert static is not None
-        inputs.update(
-            {
-                c: value.numpy()
-                for c, value in static.lookup(torch.tensor([seed.sequenceId])).items()
-            }
-        )
-    return codec.seed_from_model(
-        inputs,
-        np.asarray([[False] * padding + [True] * len(history)]),
-        config.input_columns,
-        config.static_columns,
-    )
+                )
+            )
+    if not owned:
+        raise ValueError("Rollout seed coordinate is outside the selected split")
+    first = seed.itemPosition
+    while first - 1 in positions:
+        first -= 1
+    return forecast_window_seed(config, seed.sequenceId, first, seed.itemPosition + 1)

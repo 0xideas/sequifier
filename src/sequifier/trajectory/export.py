@@ -10,6 +10,7 @@ from sequifier.io.preprocessing_workspace import preprocessing_workspace
 from sequifier.io.sequence import (
     CONTEXT_COLUMN,
     CONTEXT_RECORDS,
+    OBSERVATION_MASK,
     TransitionColumns,
     register_sequence_name,
 )
@@ -45,6 +46,7 @@ class EpisodeTableEncoder:
             GROUP_COLUMN,
             REWARD_COLUMN,
             CONTEXT_COLUMN,
+            OBSERVATION_MASK,
             *TRANSITION_FLAGS,
             *successor_columns,
         }
@@ -68,6 +70,7 @@ class EpisodeTableEncoder:
             * length,
             "itemPosition": episode.item_positions,
             SEQUENCE_NAME_COLUMN: [episode.episode_id] * length,
+            OBSERVATION_MASK: episode.observation_masks,
             ACTION_RECORD: episode.actions,
             PREVIOUS_ACTION_RECORD: (
                 episode.previous_action,

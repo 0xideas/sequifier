@@ -10,7 +10,9 @@ from typing import Literal
 import polars as pl
 
 from sequifier.fingerprints import file_checksum
+from sequifier.io.atomic import atomic_path
 from sequifier.io.pt_payload import load_pt_payload
+from sequifier.io.sequence import DOMAIN_OBSERVATIONS, OBSERVATION_MASK
 from sequifier.preprocess import (
     SPLIT_VALUE_COLUMN,
     WindowWritePlan,
@@ -28,12 +30,24 @@ def _add_static_metadata(metadata, path, columns, fields):
         metadata[name].update(additions)
 
 
+def store_source_rows(scratch, part, rows):
+    path = Path(scratch) / "source-items" / (part + ".parquet")
+    with atomic_path(path) as temporary:
+        rows.select(
+            "sequenceId",
+            "itemPosition",
+            DOMAIN_OBSERVATIONS,
+            *([OBSERVATION_MASK] if OBSERVATION_MASK in rows.columns else []),
+        ).write_parquet(temporary)
+
+
 class WindowOutput:
     indexed: Literal[False] = False
 
     def __init__(self, run):
         self.run = run
         self.fragments = []
+        self.source_path = Path("data") / f"{run.data_name_root}-source-items.parquet"
         self.metadata_path = (
             Path(run.config.project_root)
             / "configs"
@@ -50,6 +64,10 @@ class WindowOutput:
     def cleanup_checkpoint(self):
         scratch = Path(self.run.config.project_root) / "data" / self.run.target_dir
         return scratch / "windows-complete"
+
+    def capture_source(self, data, captured, part):
+        store_source_rows(self.cleanup_checkpoint.parent, part, captured)
+        return data
 
     def bind_media(self, manifest):
         """Materialized media references already use project-relative paths."""
@@ -84,6 +102,7 @@ class WindowOutput:
 
     def write_metadata(self, metadata, columns):
         self.feature_columns = columns
+        metadata["source_observations_path"] = str(self.source_path)
         if self.run.sequence_identities:
             metadata["sequence_identities"] = {
                 str(seq): {"episode_id": episode, "group_id": group}
@@ -137,7 +156,7 @@ class WindowOutput:
                 Path(split).with_suffix("") / "metadata.json"
                 for split in run.split_paths
             )
-        columns = [name for name in static.columns if name != "sequenceId"]
+        columns = list(fields["column_data_types"])
         for file in files:
             metadata = json.loads(file.read_text())
             _add_static_metadata(metadata, path, columns, fields)
@@ -145,6 +164,24 @@ class WindowOutput:
 
     def finish(self):
         run = self.run
+        source_parts = self.cleanup_checkpoint.parent / "source-items"
+        if source_parts.is_dir():
+            destination = Path(run.config.project_root) / self.source_path
+            source = Path(run.config.preprocessing_data_path).resolve()
+            if (
+                destination.resolve() == source
+                or source in destination.resolve().parents
+                or (
+                    run.config.static_data_path
+                    and destination.resolve()
+                    == Path(run.config.static_data_path).resolve()
+                )
+            ):
+                raise ValueError(
+                    f"Source observation output overlaps preprocessing input: {destination}"
+                )
+            with atomic_path(destination) as temporary:
+                pl.scan_parquet(source_parts / "*.parquet").sink_parquet(temporary)
         if self.fragments:
             merge_window_outputs(
                 self.fragments, run.split_paths, run.config.write_format
@@ -180,6 +217,9 @@ class WindowOutput:
 class IndexedOutput:
     indexed: Literal[True] = True
     time_index_name = "item-times.parquet"
+
+    def capture_source(self, data, captured, part):
+        return captured
 
     def __init__(self, run, writer):
         self.run = run

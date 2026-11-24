@@ -252,6 +252,7 @@ class DatasetMetadata(FeatureMetadata, RawInputMetadata):
     split_index: int | None = Field(default=None, ge=0)
     static_columns: list[str] = Field(default_factory=list)
     static_features_path: str | None = None
+    source_observations_path: str | None = None
     indexed_views: list[str] = Field(default_factory=list)
     indexed_inline_media: bool = False
     indexed_derived_features: list[str] = Field(default_factory=list)

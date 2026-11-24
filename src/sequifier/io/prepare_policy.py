@@ -19,13 +19,23 @@ from sequifier.io.feature_fitting import FeatureStatistics, FittedColumns, Fitti
 from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_split_assignments
 from sequifier.io.preprocessing_workspace import preprocessing_workspace
-from sequifier.io.sequence import CONTEXT_COLUMN, CONTEXT_RECORDS
+from sequifier.io.sequence import (
+    CONTEXT_COLUMN,
+    CONTEXT_RECORDS,
+    DOMAIN_CONTEXT,
+    DOMAIN_OBSERVATIONS,
+    DOMAIN_STATIC,
+    DOMAIN_SUCCESSORS,
+    OBSERVATION_MASK,
+    with_domain_record,
+)
 from sequifier.io.window_placement import (
     PredictionAlignment,
     SplitWindowPlan,
     cutoff_intervals,
     split_intervals,
 )
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.trajectory.export import EpisodeTableEncoder
 from sequifier.trajectory.table_schema import cast_episode_table
 from sequifier.trajectory.tables import (
@@ -115,7 +125,9 @@ def _prepare_policy(config, writer):
     if missing := depth_masks - set(observations):
         raise ValueError(f"Policy preparation lacks depth masks: {sorted(missing)}")
     features = [name for name in observations if name not in media_inputs | depth_masks]
-    actions = list(policy.actions)
+    # The executed action always has its own record. Expose a scalar training
+    # column as well when its name is free in the model feature namespace.
+    actions = _scalar_actions(policy)
     # A shared self-feedback/target column stores the executed action, as in
     # supervised next-step prediction. Policy windows obtain its lag from the
     # separate previous-action record, including at a fragment boundary.
@@ -158,9 +170,7 @@ def _prepare_policy(config, writer):
             raise ValueError("Policy preparation requires eligible episodes")
         with atomic_path(schema_path) as temporary:
             temporary.write_bytes(schema.serialize().to_pybytes())
-    if collisions := set(actions + list(policy.previous_action_inputs)) & set(
-        schema.names
-    ):
+    if collisions := set(actions + feedback) & set(schema.names):
         raise ValueError(
             f"Action columns collide with recorded fields: {sorted(collisions)}"
         )
@@ -221,7 +231,11 @@ def _prepare_policy(config, writer):
         fitted = FittedColumns.from_metadata(columns, metadata)
     elif frozen is None:
         rules = FittingRules(
-            precomputed=policy.categorical_id_maps(),
+            precomputed={
+                name: mapping
+                for name, mapping in policy.categorical_id_maps().items()
+                if name in actions + feedback
+            },
             categorical=categorical,
             real=real,
         )
@@ -237,7 +251,11 @@ def _prepare_policy(config, writer):
             rows = rows.head(length)
             if rows.is_empty():
                 continue
-            for frame, selected in ((rows, temporal), (rows.head(1), static)):
+            for frame, selected in (
+                (rows.filter(~pl.col(OBSERVATION_MASK)), features),
+                (rows, actions + feedback),
+                (rows.head(1), static),
+            ):
                 if nested := [
                     name for name in selected if frame[name].dtype.is_nested()
                 ]:
@@ -287,6 +305,11 @@ def _prepare_policy(config, writer):
             rows = pl.read_parquet(checkpoint, columns=["sequenceId", "itemPosition"])
         else:
             rows = episode_rows(index)
+            rows = with_domain_record(rows, features, DOMAIN_OBSERVATIONS)
+            rows = with_domain_record(rows, static, DOMAIN_STATIC)
+            rows = with_domain_record(
+                rows, [SUCCESSOR_PREFIX + name for name in features], DOMAIN_SUCCESSORS
+            )
             rows = rows.with_columns(
                 _encoded_observation(rows, name, source_prefix, layouts, transform)
                 for name, transform in transforms.items()
@@ -294,13 +317,26 @@ def _prepare_policy(config, writer):
                     ("", SUCCESSOR_PREFIX) if name in features else ("",)
                 )
             )
-            if CONTEXT_COLUMN in rows.columns and (payload := rows[CONTEXT_COLUMN][0]):
+            rows = _mask_features(rows, features, fitted, layouts)
+            rows = _mask_features(
+                rows, features, fitted, layouts, prefix=SUCCESSOR_PREFIX
+            )
+            rows = rows.with_columns(pl.col(CONTEXT_COLUMN).alias(DOMAIN_CONTEXT))
+            if payload := rows[CONTEXT_COLUMN][0]:
                 context = CONTEXT_RECORDS.validate_json(payload)
                 history = pl.DataFrame([step.observation for step in context])
                 history = history.with_columns(
                     _encoded_observation(history, name, "", layouts, transforms[name])
                     for name in features
                 )
+                history = _mask_features(
+                    history.with_columns(
+                        pl.Series(OBSERVATION_MASK, [step.masked for step in context])
+                    ),
+                    features,
+                    fitted,
+                    layouts,
+                ).drop(OBSERVATION_MASK)
                 encoded = tuple(
                     step.model_copy(update={"observation": row})
                     for step, row in zip(context, history.to_dicts(), strict=True)
@@ -315,11 +351,13 @@ def _prepare_policy(config, writer):
                     )
                 )
             if static_payload:
-                static_row = rows.select("sequenceId", *static_payload).head(1)
+                static_row = rows.select(
+                    "sequenceId", *static_payload, *([DOMAIN_STATIC] if static else [])
+                ).head(1)
                 static_rows.append(static_row)
                 with atomic_path(static_path) as temporary:
                     static_row.write_parquet(temporary)
-                rows = rows.drop(static_payload)
+                rows = rows.drop(static_payload + ([DOMAIN_STATIC] if static else []))
         first = rows["itemPosition"][0]
         placements = plan.placements(
             first, len(rows), assigned=assigned.get(index), bounds=episode_bounds(index)
@@ -389,9 +427,15 @@ def _prepare_policy(config, writer):
     )
 
 
+def _scalar_actions(policy):
+    inputs = set(policy.observation_columns + policy.static_columns)
+    return [name for name in policy.actions if name not in inputs]
+
+
 def _action_features(rows, policy):
     targets = [
-        pl.col(ACTION_RECORD).struct.field(name).alias(name) for name in policy.actions
+        pl.col(ACTION_RECORD).struct.field(name).alias(name)
+        for name in _scalar_actions(policy)
     ]
     previous = [
         pl.col(PREVIOUS_ACTION_RECORD)
@@ -411,6 +455,29 @@ def _action_features(rows, policy):
             "Policy preparation requires feedback initial values for missing lagged actions"
         )
     return result
+
+
+def _mask_features(rows, features, fitted, layouts, *, prefix=""):
+    masked = pl.col(OBSERVATION_MASK)
+    if prefix:
+        masked = masked.shift(-1, fill_value=False)
+    expressions = []
+    for name in features:
+        column = prefix + name
+        fill = SPECIAL_TOKEN_IDS.mask if name in fitted.id_maps else 0
+        dtype = rows.schema[column]
+        value = (
+            pl.col(column).list.eval(pl.element() * 0 + fill)
+            if layouts.is_deep_column(name)
+            else pl.lit(fill)
+        )
+        expressions.append(
+            pl.when(masked & pl.col(column).is_not_null())
+            .then(value.cast(dtype))
+            .otherwise(pl.col(column))
+            .alias(column)
+        )
+    return rows.with_columns(expressions)
 
 
 def _encoded_observation(rows, name, prefix, layouts, transform):

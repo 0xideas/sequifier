@@ -28,7 +28,22 @@ class Record(BaseModel):
 class SeedHistory(Record):
     observations: dict[str, list[JsonValue]]
     attention_valid_mask: list[bool]
+    observation_mask: list[bool] = Field(default_factory=list)
     static_inputs: dict[str, JsonValue]
+
+    @classmethod
+    def from_rows(cls, rows, columns, width, static, masks):
+        padding = width - len(rows)
+        if padding < 0:
+            raise ValueError("Seed exceeds the model context length")
+        return cls(
+            observations={
+                name: [0.0] * padding + [row[name] for row in rows] for name in columns
+            },
+            attention_valid_mask=[False] * padding + [True] * len(rows),
+            observation_mask=[False] * padding + list(masks),
+            static_inputs=static,
+        )
 
     @model_validator(mode="after")
     def validate_window(self):
@@ -39,6 +54,13 @@ class SeedHistory(Record):
             or any(mask[i] and not mask[i + 1] for i in range(len(mask) - 1))
         ):
             raise ValueError("seed mask must be left padding followed by valid history")
+        if "observation_mask" not in self.model_fields_set:
+            self.observation_mask = [False] * len(mask)
+        if len(self.observation_mask) != len(mask) or any(
+            hidden and not valid
+            for hidden, valid in zip(self.observation_mask, mask, strict=True)
+        ):
+            raise ValueError("Observation masks must align with valid seed positions")
         if not self.observations or any(
             len(values) != len(mask) for values in self.observations.values()
         ):
@@ -186,16 +208,9 @@ def validate_trajectory(value: Trajectory | dict) -> Trajectory:
     )
 
 
-def validate_policy_seed(spec, actions, budgets, count, desired_return, masks=None):
+def validate_policy_seed(spec, actions, budgets, count, desired_return):
     from sequifier.io.actions import decode_action, encode_action
 
-    if masks is not None and (
-        not isinstance(masks, list)
-        or len(masks) != count
-        or any(not isinstance(mask, bool) for mask in masks)
-        or (any(masks) and not spec.raw_mask_column)
-    ):
-        raise ValueError("Observation masks must match the policy seed history")
     if not isinstance(actions, list) or len(actions) != count:
         raise ValueError("Seed actions must align with valid observations")
     for index, action in enumerate(actions):
@@ -255,7 +270,6 @@ def _validate_joint_execution(trajectory):
         seed_returns,
         count,
         initial_budget,
-        execution.get("seed_observation_masks"),
     )
     expected = seed_actions[-1]
     for index, step in enumerate(trajectory.transitions):

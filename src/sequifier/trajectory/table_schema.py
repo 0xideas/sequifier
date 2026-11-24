@@ -5,7 +5,7 @@ import sys
 import pyarrow as pa
 
 from sequifier.io.action_record import action_record_layout
-from sequifier.io.sequence import CONTEXT_COLUMN
+from sequifier.io.sequence import CONTEXT_COLUMN, OBSERVATION_MASK
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
     GROUP_COLUMN,
@@ -130,6 +130,7 @@ def sequence_table(values, observations, *, policy=None, collection_type=None):
         "itemPosition": pa.int64(),
         SEQUENCE_NAME_COLUMN: pa.string(),
         CONTEXT_COLUMN: pa.string(),
+        OBSERVATION_MASK: pa.bool_(),
         GROUP_COLUMN: pa.string(),
         REWARD_COLUMN: pa.float64(),
         **{name: pa.bool_() for name in TRANSITION_FLAGS},

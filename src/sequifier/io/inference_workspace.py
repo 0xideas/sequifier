@@ -160,6 +160,11 @@ def inference_workspace(request, *, random_seed, skip_metadata):
         }
         identity["output"] = default[request.task]().model_dump(exclude_none=True)
     if rollout := getattr(request, "rollout", None):
+        identity["trajectory_version"] = (
+            ContractVersions.JOINT_POLICY_TRAJECTORY
+            if request.task == "policy"
+            else ContractVersions.FORECAST_TRAJECTORY
+        )
         if rollout.output:
             identity["sequence_data_version"] = ContractVersions.SEQUENCE_DATA_MANIFEST
     if random_seed:

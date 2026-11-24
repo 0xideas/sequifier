@@ -74,7 +74,12 @@ from sequifier.io.sample_order import (
     curriculum_storage_columns,
     source_curriculum_column,
 )
-from sequifier.io.sequence import DOMAIN_OBSERVATIONS, DOMAIN_STATIC, with_domain_record
+from sequifier.io.sequence import (
+    DOMAIN_OBSERVATIONS,
+    DOMAIN_STATIC,
+    OBSERVATION_MASK,
+    with_domain_record,
+)
 from sequifier.io.window_placement import (
     PredictionAlignment,
     SplitWindowPlan,
@@ -834,6 +839,7 @@ class Preprocessor:
 
     def __init__(self, config: PreprocessorModel):
         self.config = config
+        self.indexed_prediction = False
         self.sequence_identities = {}
         self.sequence_dependencies = DependencyManifest()
         self.sequence_manifest_path = None
@@ -853,6 +859,7 @@ class Preprocessor:
                 self.config.preprocessing_data_path,
                 self.config.sequence_view,
                 dependencies=self.sequence_dependencies,
+                mask_column=self.config.mask_column,
             ) as (
                 table,
                 manifest,
@@ -866,6 +873,12 @@ class Preprocessor:
                         "preprocessing_data_path": str(table),
                         "read_format": "parquet",
                         "sequence_view": "decisions",
+                        "mask_column": self.config.mask_column
+                        or (
+                            OBSERVATION_MASK
+                            if manifest.get("masked_observations")
+                            else None
+                        ),
                         "selected_columns": columns,
                     }
                 )
@@ -1165,6 +1178,12 @@ class Preprocessor:
         )
         self._export_metadata(fitted)
 
+    def _capture_source(self, data, columns, part):
+        captured = with_domain_record(
+            data, columns, DOMAIN_OBSERVATIONS, self.config.mask_column
+        )
+        return self.output.capture_source(data, captured, part)
+
     def _process_file(self, selected_columns):
         config = self.config
         data = _load_and_preprocess_data(
@@ -1185,6 +1204,7 @@ class Preprocessor:
         configured_col_types = configured_column_types(
             self.column_data_types, data_columns
         )
+        source_rows = data
         data = cast_input_columns(data, data_columns, configured_col_types)
         sequence_split_assignments = None
         if config.split_method == "between_sequence":
@@ -1242,17 +1262,14 @@ class Preprocessor:
                 data.schema,
                 types=configured_col_types,
             )
-        if self.indexed_prediction:
-            data = with_domain_record(
-                data, fitted.data_columns, DOMAIN_OBSERVATIONS, config.mask_column
-            )
+        self._write_feature_metadata(selected_columns, fitted)
         data = fitted.transform(
-            data,
+            self._capture_source(source_rows, data_columns, "items"),
             self.normalize_real_columns,
             self.cardinality_config,
             config.mask_column,
+            input_types=configured_col_types,
         )
-        self._write_feature_metadata(selected_columns, fitted)
 
         data = self._add_indexed_passthrough(data, config.preprocessing_data_path)
         self.output.write_sequences(data, sequence_split_assignments)
@@ -1652,8 +1669,7 @@ class Preprocessor:
             features.observe(fitting, columns, rules)
             maps, stats = features.finish(rules)
             fitted = FittedColumns.resolve(columns, maps, stats, static.schema)
-        if self.indexed_prediction:
-            static = with_domain_record(static, columns, DOMAIN_STATIC)
+        static = with_domain_record(static, columns, DOMAIN_STATIC)
         static = fitted.transform(static, self.normalize_real_columns, {})
         self.output.write_static(static, fitted.metadata())
 
@@ -1933,13 +1949,9 @@ class Preprocessor:
                 self.config.split_column,
                 self.config.split_values,
             )
-            if self.indexed_prediction:
-                data = with_domain_record(
-                    data,
-                    fit.features.data_columns,
-                    DOMAIN_OBSERVATIONS,
-                    self.config.mask_column,
-                )
+            data = self._capture_source(
+                data, fit.features.data_columns, str(file_index)
+            )
             data = fit.features.transform(
                 data,
                 self.normalize_real_columns,
@@ -2452,8 +2464,12 @@ class Preprocessor:
                     f"Could not validate {file_path} for metadata: {e}"
                 ) from e
 
+        from sequifier.io.preprocessing_output import WindowOutput
+
+        assert isinstance(self.output, WindowOutput)
         metadata = {
             "split_index": split_index,
+            "source_observations_path": str(self.output.source_path),
             **self.output_features.metadata(),
             "normalize_real_columns": self.normalize_real_columns,
             **self.image_manifest,
@@ -2847,6 +2863,15 @@ def _process_batches_multiple_files_inner(
                 split_values=config.split_values,
             )
             rows_read += data.height
+            from sequifier.io.preprocessing_output import store_source_rows
+
+            store_source_rows(
+                scratch,
+                name,
+                with_domain_record(
+                    data, features.data_columns, DOMAIN_OBSERVATIONS, config.mask_column
+                ),
+            )
             data = features.transform(
                 data,
                 normalize,

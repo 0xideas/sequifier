@@ -19,12 +19,18 @@ from sequifier.io.preprocessing import denormalize_values
 from sequifier.io.sequence import (
     CONTEXT_COLUMN,
     CONTEXT_RECORDS,
+    DOMAIN_CONTEXT,
+    DOMAIN_OBSERVATIONS,
+    DOMAIN_STATIC,
+    DOMAIN_SUCCESSORS,
+    OBSERVATION_MASK,
     ContextObservation,
     PreparedEpisode,
     SequenceEpisode,
     TransitionColumns,
     episode_identity,
     ordered_sequence_rows,
+    source_fields,
 )
 from sequifier.io.values import domain_scalar, numeric_scalar
 from sequifier.trajectory.prepared import prepared_table
@@ -146,6 +152,45 @@ class IndexedEpisodeTable:
             if record.get(field) is not None and column not in rows.columns:
                 rows = rows.with_columns(pl.lit(record[field]).alias(column))
         return rows.with_columns((pl.col("itemPosition") >= start).alias("__decision"))
+
+
+def project_prepared_rows(
+    rows, metadata, observations, static, actions, *, physical_inputs
+):
+    """Select observation units and read recorded actions in their own namespace."""
+    # Resolve feedback before selecting the observation projection. A model
+    # input and an executed action may have the same logical name.
+    if actions and ACTION_RECORD not in rows.columns:
+        recorded = []
+        physical = rows.schema.get(DOMAIN_OBSERVATIONS)
+        for name in actions:
+            column = (
+                "__executed_" + name if name in observations or name in static else name
+            )
+            if isinstance(physical, pl.Struct) and column in physical.to_schema():
+                recorded.append(
+                    pl.col(DOMAIN_OBSERVATIONS).struct.field(column).alias(name)
+                )
+            elif column in metadata.indexed_passthrough and column in rows.columns:
+                recorded.append(pl.col(column).alias(name))
+        if len(recorded) == len(actions):
+            rows = rows.with_columns(pl.struct(recorded).alias(ACTION_RECORD))
+    if physical_inputs:
+        encoded = set(metadata.column_data_types)
+        rows = rows.with_columns(
+            *source_fields(
+                rows, DOMAIN_OBSERVATIONS, [c for c in observations if c in encoded]
+            ),
+            *source_fields(rows, DOMAIN_STATIC, [c for c in static if c in encoded]),
+        )
+        if DOMAIN_SUCCESSORS in rows.columns:
+            rows = rows.with_columns(
+                pl.col(DOMAIN_SUCCESSORS).struct.field(name).alias(name)
+                for name in rows.schema[DOMAIN_SUCCESSORS].to_schema()
+            )
+        if DOMAIN_CONTEXT in rows.columns:
+            rows = rows.with_columns(pl.col(DOMAIN_CONTEXT).alias(CONTEXT_COLUMN))
+    return rows
 
 
 def model_decoder(metadata, actions):
@@ -299,6 +344,26 @@ class TableEpisodeReference:
                         )
                 else:
                     data = data.with_columns(pl.Series(name, value[0].tolist()))
+        raw_columns = set(self.metadata.indexed_passthrough) if self.metadata else set()
+        if self.prepared:
+            physical = self.policy.input_encoding == "raw"
+            if static_data is not None:
+                data = data.join(static_data, on="sequenceId", validate="m:1")
+                static_data = None
+            data = project_prepared_rows(
+                data,
+                self.metadata,
+                self.policy.observation_columns,
+                self.policy.static_columns,
+                self.policy.actions,
+                physical_inputs=physical,
+            )
+            if physical:
+                raw_columns.update(
+                    self.policy.observation_columns + self.policy.static_columns
+                )
+                if DOMAIN_SUCCESSORS in data.columns:
+                    raw_columns.update(data.schema[DOMAIN_SUCCESSORS].to_schema())
         return table_episode(
             data,
             self.policy,
@@ -308,9 +373,7 @@ class TableEpisodeReference:
             episode_end=self.source.episode_end,
             episode_namespace=self.source.episode_namespace,
             decode=decode,
-            raw_columns=self.metadata.indexed_passthrough
-            if self.metadata is not None
-            else (),
+            raw_columns=raw_columns,
         )
 
 
@@ -419,6 +482,15 @@ def table_episode(
             raise ValueError(f"{label} must remain constant within an episode")
         return entries[0]
 
+    raw_mask = getattr(policy, "raw_mask_column", None)
+    if OBSERVATION_MASK not in data.columns and raw_mask and raw_mask in data.columns:
+        from sequifier.io.feature_fitting import mask_expression
+
+        data = data.with_columns(
+            mask_expression(data[raw_mask], data.schema[raw_mask], raw_mask).alias(
+                OBSERVATION_MASK
+            )
+        )
     positions = tuple(data["itemPosition"])
     actions = tuple(action_at(row) for row in data.iter_rows(named=True))
     preceding = action_at(preceding_row) if preceding_row is not None else None
@@ -452,7 +524,11 @@ def table_episode(
         static_data = data
 
     def feature_value(value, name):
-        return value if policy.input_encoding == "model" else decode(value, name)
+        return (
+            value
+            if policy.input_encoding == "model" or name in raw_columns
+            else decode(value, name)
+        )
 
     static = {
         name: constant(
@@ -506,6 +582,7 @@ def table_episode(
                     observation={
                         name: feature_value(row[name], name) for name in observations
                     },
+                    masked=row.get(OBSERVATION_MASK, False),
                     previous_action=actions[i - 1] if i else preceding,
                     reward=reward_value(row[REWARD_COLUMN], REWARD_COLUMN)
                     if row.get(REWARD_COLUMN) is not None
@@ -557,6 +634,9 @@ def table_episode(
         sequence_id=int(sequence_id),
         episode_id=episode_namespace + episode_identity(sequence_id, identity),
         item_positions=positions,
+        observation_masks=tuple(data[OBSERVATION_MASK])
+        if OBSERVATION_MASK in data.columns
+        else (False,) * len(data),
         observations={name: values(name, feature_value) for name in observations},
         actions=actions,
         static_inputs=static,

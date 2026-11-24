@@ -101,4 +101,25 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
                 rows[key] = record
     if not rows:
         raise ValueError("prepared source contains no valid positions")
-    return pl.DataFrame(list(rows.values())).sort(["sequenceId", "itemPosition"])
+    frame = pl.DataFrame(list(rows.values())).sort(["sequenceId", "itemPosition"])
+    if metadata.source_observations_path:
+        from sequifier.io.sequence import DOMAIN_OBSERVATIONS
+
+        coordinates = ["sequenceId", "itemPosition"]
+        physical = pl.scan_parquet(
+            source.project_root / metadata.source_observations_path
+        )
+        frame = (
+            frame.lazy()
+            .join(
+                physical,
+                on=coordinates,
+                how="left",
+                validate="1:1",
+                maintain_order="left",
+            )
+            .collect()
+        )
+        if frame[DOMAIN_OBSERVATIONS].null_count():
+            raise ValueError("Source observations do not cover the prepared windows")
+    return frame

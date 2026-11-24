@@ -99,6 +99,7 @@ def bind_indexed_input_resources(
                 metadata.image_sources, metadata.preconditioning_image is not None
             ),
             "static_features_path": stored.static_features_path,
+            "source_observations_path": stored.source_observations_path,
         }
     )
 
@@ -817,7 +818,10 @@ def _resolve_inference_config(
     media_metadata = metadata
     if folder_metadata is not None:
         media_metadata = metadata.model_copy(
-            update=folder_metadata.select_media(selection.images, selection.use_prefix)
+            update={
+                **folder_metadata.select_media(selection.images, selection.use_prefix),
+                "source_observations_path": folder_metadata.source_observations_path,
+            }
         )
     split_index = (
         normalized_splits.index(normalized_data_path)
@@ -963,6 +967,14 @@ class _InferenceConfigBase(
 
     def input_paths(self) -> list[str]:
         inputs = super().input_paths()
+        if (
+            self.rollout
+            and (metadata := getattr(self, "dataset_metadata", None))
+            and metadata.source_observations_path
+        ):
+            inputs.append(
+                normalize_path(metadata.source_observations_path, self.project_root)
+            )
         if self.static_features_path:
             inputs.append(normalize_path(self.static_features_path, self.project_root))
         if self.training_config_path:

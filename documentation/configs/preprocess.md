@@ -283,6 +283,14 @@ PT output.
 
 -----
 
+Prepared datasets retain the source observations used for environment resets and
+action feedback. Indexed views store them alongside encoded items. Materialized
+window datasets write one additional Parquet table, referenced by
+`source_observations_path` in the generated metadata, with one row per
+`sequenceId` and `itemPosition`. Keep that file with the dataset when moving
+it for rollout or offline policy learning. Static source values are stored in the
+per-sequence static table. These outputs are generated automatically.
+
 ## Key Trade-offs and Decisions
 
 ### 1\. `write_format`: `parquet` vs. `pt`

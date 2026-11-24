@@ -59,6 +59,7 @@ def sequence_from_trajectory(
                 name: values[i - len(seed_actions)]
                 for name, values in episode.seed.observations.items()
             },
+            masked=episode.seed.observation_mask[i - len(seed_actions)],
             previous_action=decode_action(action, recording_policy)
             if action is not None
             else None,
@@ -80,6 +81,10 @@ def sequence_from_trajectory(
             column: tuple(step.observation[column] for step in steps)
             for column in episode.seed.observations
         },
+        observation_masks=(
+            episode.seed.observation_mask[-1],
+            *([False] * (len(steps) - 1)),
+        ),
         actions=tuple(
             layout.pack(step.predictions, step.action_latents, step.action_components)
             for step in steps

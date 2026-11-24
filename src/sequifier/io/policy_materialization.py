@@ -65,12 +65,21 @@ def encode_value(value, column, config, *, force_raw=False, codecs=None):
     return codecs[key].encode(value)
 
 
-def materialize_history(config, observations, previous_actions, static, *, codecs):
+def materialize_history(
+    config, observations, previous_actions, static, *, codecs, masks=None
+):
     schema = config.input_schema
     if schema is None:
         raise ValueError("Materializing policy windows requires a model input schema")
     transforms = config.transforms
     rows = observations[-config.context_length :]
+    masks = (
+        masks[-len(rows) :]
+        if masks is not None
+        else [row.get(config.raw_mask_column, False) for row in rows]
+    )
+    if len(masks) != len(rows) or any(value not in (True, False) for value in masks):
+        raise ValueError("Observation masks must align with the history")
     previous = previous_actions[-config.context_length :]
     if config.previous_action_inputs and len(previous) != len(rows):
         raise ValueError("lagged actions must align with the observation history")
@@ -154,13 +163,15 @@ def materialize_history(config, observations, previous_actions, static, *, codec
                 if key == DESIRED_RETURN and config.return_conditioned and normalize:
                     raw /= config.returns.scale
                     feedback = True
-                mask = row.get(config.raw_mask_column, False) if not prepared else False
-                if mask not in (True, False):
-                    raise ValueError(
-                        f"{config.raw_mask_column}: expected a boolean or 0 or 1"
-                    )
-                if mask and key in transforms.column_data_types and not feedback:
-                    value = torch.tensor(
+                if (
+                    masks[index]
+                    and key in config.observation_columns
+                    and descriptor.role == "feature"
+                    and key in transforms.column_data_types
+                    and not feedback
+                ):
+                    value = torch.full(
+                        tuple(shape[2:]),
                         SPECIAL_TOKEN_IDS.mask if dtype == torch.int64 else 0,
                         dtype=dtype,
                     )

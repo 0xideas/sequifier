@@ -145,6 +145,8 @@ def resolve_source(
                 "select a source format explicitly for mixed or unsupported files"
             )
     if kind == "prepared":
+        if metadata and metadata.source_observations_path:
+            dependencies.add(root / metadata.source_observations_path)
         if (
             static_path is None
             and metadata is not None

@@ -51,7 +51,10 @@ class PolicyCursor:
     ):
         self.actor, self.adapter, self.units = actor, adapter, units
         self.defer_device_transfer = defer_device_transfer
-        self.history = PolicyHistory(actor.config, strict_vocabulary=strict_vocabulary)
+        self.history = PolicyHistory(
+            actor.config.model_copy(update={"input_encoding": "raw"}),
+            strict_vocabulary=strict_vocabulary,
+        )
         self.generator = action_generator(actor.device, seed)
         self.desired_return = None
         self.episode_return, self.episode_length, self.ended = 0.0, 0, True

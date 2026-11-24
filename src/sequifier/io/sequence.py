@@ -18,17 +18,40 @@ from pydantic import (
 
 from sequifier.io.values import DomainValue, domain_scalar
 
-# Prediction views keep the source values used to initialize an environment.
+# Physical fields are kept separate from model features at the same coordinate.
 DOMAIN_OBSERVATIONS = "__sequifier_domain_observations"
 DOMAIN_STATIC = "__sequifier_domain_static"
+OBSERVATION_MASK = "__observation_mask"
+DOMAIN_SUCCESSORS = "__sequifier_domain_successors"
+DOMAIN_CONTEXT = "__sequifier_domain_context"
 
 
 def with_domain_record(frame, columns, name, mask_column=None):
     if name in frame.columns:
         raise ValueError(f"{name} is reserved for rollout seed values")
+    if OBSERVATION_MASK in columns:
+        raise ValueError(f"{OBSERVATION_MASK} is reserved for observation masking")
     if mask_column:
-        columns = [*columns, mask_column]
+        from sequifier.io.feature_fitting import mask_expression
+
+        if OBSERVATION_MASK in frame.columns and mask_column != OBSERVATION_MASK:
+            raise ValueError(f"{OBSERVATION_MASK} is reserved for observation masking")
+        frame = frame.with_columns(
+            mask_expression(
+                frame[mask_column], frame.schema[mask_column], mask_column
+            ).alias(OBSERVATION_MASK)
+        )
     return frame.with_columns(pl.struct(columns).alias(name)) if columns else frame
+
+
+def source_fields(rows, record, columns):
+    """Select physical fields without changing the model feature columns."""
+    if not columns:
+        return []
+    dtype = rows.schema.get(record)
+    if not isinstance(dtype, pl.Struct) or set(columns) - set(dtype.to_schema()):
+        raise ValueError(f"Prepared data lacks source fields in {record}: {columns}")
+    return [pl.col(record).struct.field(name).alias(name) for name in columns]
 
 
 def episode_identity(sequence_id, label=None):
@@ -99,6 +122,7 @@ class SequenceEpisode(BaseModel):
     episode_id: str = Field(min_length=1)
     item_positions: tuple[StrictInt, ...] = Field(min_length=1)
     observations: dict[str, tuple[JsonValue, ...]] = Field(min_length=1)
+    observation_masks: tuple[StrictBool, ...] = ()
     actions: tuple[DomainValue | dict[str, DomainValue], ...]
     static_inputs: dict[str, JsonValue] = Field(default_factory=dict)
     starts_episode: StrictBool = True
@@ -109,6 +133,10 @@ class SequenceEpisode(BaseModel):
     @model_validator(mode="after")
     def validate_sequence(self):
         length = len(self.item_positions)
+        if "observation_masks" not in self.model_fields_set:
+            object.__setattr__(self, "observation_masks", (False,) * length)
+        if len(self.observation_masks) != length:
+            raise ValueError("Observation masks must match decision count")
         if self.item_positions[0] < 0 or any(
             right != left + 1
             for left, right in zip(self.item_positions, self.item_positions[1:])
@@ -185,6 +213,7 @@ class ContextObservation(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     observation: dict[str, JsonValue]
+    masked: StrictBool = False
     previous_action: dict[str, DomainValue] | None = None
     reward: float | None = None
     desired_return: float | None = None

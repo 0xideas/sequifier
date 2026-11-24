@@ -96,6 +96,7 @@ class CollectedSequences:
             action=record,
             previous=action_record(frame.previous_action, self.policy),
             predictions={key: record[key] for key in self.policy.actions},
+            masked=frame.masked,
             reward=reward,
             successor=successor,
             terminated=terminated,

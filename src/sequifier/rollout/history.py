@@ -21,5 +21,6 @@ def advance_history(
             for key, values in history.observations.items()
         },
         attention_valid_mask=history.attention_valid_mask[1:] + [True],
+        observation_mask=history.observation_mask[1:] + [False],
         static_inputs=dict(history.static_inputs),
     )

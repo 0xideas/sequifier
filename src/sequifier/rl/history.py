@@ -117,15 +117,11 @@ def frame_storage_bytes(frame):
 def history_inputs(spec, frames, *, window=None):
     frames = list(frames)
     inputs = (window or PolicyWindowView(spec)).inputs(
-        [
-            {**dict(frame.observation), spec.raw_mask_column: True}
-            if frame.masked
-            else dict(frame.observation)
-            for frame in frames
-        ],
+        [dict(frame.observation) for frame in frames],
         [frame.previous_action for frame in frames],
         [frame.desired_return for frame in frames] if spec.return_conditioned else None,
         dict(frames[-1].static_inputs),
+        masks=[frame.masked for frame in frames],
     )
     if image_feature_cache_enabled():
         for view in frames[-1].image_identities:

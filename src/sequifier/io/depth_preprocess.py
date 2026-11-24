@@ -955,6 +955,16 @@ def preprocess_depth(owner, selected_columns):
         normalize=owner.normalize_real_columns,
         cardinality=owner.cardinality_config,
     )
+
+    def physical_item(item):
+        domain = {column: item.rows[0][column] for column in shallow}
+        for column in layout.columns:
+            dense = [None] * layout.max_depth_length
+            for row in item.rows:
+                dense[row[layout.position_column] - layout.position_base] = row[column]
+            domain[column] = dense
+        return domain
+
     if owner.output.indexed:
         from itertools import groupby
 
@@ -978,16 +988,7 @@ def preprocess_depth(owner, selected_columns):
                         for column, value in values.items()
                     },
                 }
-                if owner.indexed_prediction:
-                    domain = {column: item.rows[0][column] for column in shallow}
-                    for column in layout.columns:
-                        dense = [None] * layout.max_depth_length
-                        for row in item.rows:
-                            dense[
-                                row[layout.position_column] - layout.position_base
-                            ] = row[column]
-                        domain[column] = dense
-                    record[DOMAIN_OBSERVATIONS] = domain
+                record[DOMAIN_OBSERVATIONS] = physical_item(item)
                 for column in config.indexed_passthrough:
                     value = item.rows[0][column]
                     if any(row[column] != value for row in item.rows[1:]):
@@ -1043,6 +1044,25 @@ def preprocess_depth(owner, selected_columns):
             "shards": {},
         }
 
+    from itertools import islice
+
+    from sequifier.io.preprocessing_output import store_source_rows
+    from sequifier.io.sequence import DOMAIN_OBSERVATIONS
+
+    items = iter(selected_items())
+    for index, batch in enumerate(iter(lambda: list(islice(items, 1024)), [])):
+        rows = pl.DataFrame(
+            [
+                {
+                    "sequenceId": item.sequence_id,
+                    "itemPosition": item.position,
+                    DOMAIN_OBSERVATIONS: physical_item(item),
+                }
+                for item in batch
+            ],
+            infer_schema_length=None,
+        )
+        store_source_rows(scratch_root, str(index), rows)
     owner._export_metadata(fitted)
 
     def shard_path(split, index):

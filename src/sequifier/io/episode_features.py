@@ -34,11 +34,18 @@ class EpisodeFeatures:
             raise ValueError("duplicate episode IDs in fitting view")
 
     def values(self, episode, length, column):
-        return (
-            episode.observations[column][:length]
-            if column in episode.observations
-            else [episode.static_inputs[column]]
-        )
+        if column in episode.static_inputs:
+            return [episode.static_inputs[column]]
+        values = episode.observations[column][:length]
+        if any(episode.observation_masks[:length]):
+            return [
+                value
+                for value, masked in zip(
+                    values, episode.observation_masks[:length], strict=True
+                )
+                if not masked
+            ]
+        return values
 
     def fit_categorical_config(self) -> PolicyFittingSpec:
         """Fit only declared raw categorical features, using the training episodes."""
@@ -100,7 +107,8 @@ class EpisodeFeatures:
                 if column in self.config.categorical_n_classes:
                     continue
                 values = self.values(episode, length, column)
-                statistics.observe_real(pl.Series(column, values))
+                if values:
+                    statistics.observe_real(pl.Series(column, values))
         return {
             column: {"mean": values["mean"], "std": values["std"]}
             for column, values in statistics.moments.items()

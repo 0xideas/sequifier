@@ -46,10 +46,12 @@ the supplied history without executing a transition; step receives copied curren
 observations, forecasts and static values. It returns external inputs, a finite reward
 and separate Python boolean `terminated`/`truncated` flags. Adapters must not autoreset.
 
-Adapters and trajectories use original units. Fixed training codecs decode seeds/
-forecasts and encode successors with the same `std + 1e-9` normalization; rollout
-never fits statistics. Padding stays zero with a false mask; history and mask slide
-together. Unsupported shapes, overflow and non-finite transformed inputs fail.
+Adapters and trajectories use original units. Both seed selectors read the physical
+observations and static values retained by preprocessing. The predictor uses the
+frozen training codecs. An observation hidden by the preprocessing mask still
+initializes the environment with its recorded value. In the model window it
+receives the fitted feature's mask value. Padding, tracked by
+`attention_valid_mask`, has no corresponding observation. Unsupported shapes, overflow and non-finite transformed inputs fail.
 
 ## Policy rollout
 
@@ -92,6 +94,12 @@ the policy version, reference identity, group and sample indices, JSON start tok
 scaled reward, log probabilities, trajectory score, advantage and cutoff reason.
 The top-level reward is the raw environment reward. Immutable intermediate shards
 remain available to resume older checkpoints.
+
+Trajectory JSON stores the row-level mask in `seed.observation_mask`, aligned
+with the padded seed history. The Parquet decision table carries
+`__observation_mask` and its pre-decision context carries each preceding
+observation's mask. Both supervised preprocessing and offline policy training
+apply the recorded masks when consuming these outputs.
 
 Each decision has an integer `sequenceId` and an `itemPosition`. `sequenceName`
 carries the external episode identity. On import, `episode_namespace` prefixes this

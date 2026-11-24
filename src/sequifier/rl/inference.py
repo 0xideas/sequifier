@@ -21,7 +21,7 @@ from sequifier.io.sequence import (
     CONTEXT_COLUMN,
     CONTEXT_RECORDS,
     DOMAIN_OBSERVATIONS,
-    DOMAIN_STATIC,
+    OBSERVATION_MASK,
     ordered_sequence_rows,
     validate_sequence_ids,
 )
@@ -35,7 +35,7 @@ from sequifier.trajectory.schema import SeedHistory
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
     PREVIOUS_ACTION_RECORD,
-    model_decoder,
+    project_prepared_rows,
 )
 
 
@@ -48,7 +48,7 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
     required = set(spec.observation_columns + spec.static_columns)
     if spec.return_conditioned and config.desired_return is None:
         required.add(config.desired_return_column)
-    with _policy_input_frames(policy, config) as (frames, prepared):
+    with _policy_input_frames(policy, config) as frames:
         first = next((frame for frame in frames if len(frame[0])), None)
         if first is None:
             raise ValueError("policy inference input must be nonempty")
@@ -59,8 +59,7 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
             raise ValueError(f"policy inference is missing columns: {sorted(missing)}")
         frames = chain((first,), frames)
         if (
-            prepared
-            and config.sequence_id_column != "sequenceId"
+            config.sequence_id_column != "sequenceId"
             and config.sequence_id_column in first_rows.columns
         ):
             # A user-defined grouping key can span physical sequences.
@@ -94,7 +93,6 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
                         spec,
                         config,
                         key,
-                        prepared=prepared,
                         seed_index=offset,
                     )
                     for _, history, identity in histories:
@@ -109,7 +107,6 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
             frames,
             config,
             policy_row_key(first_rows, spec, config),
-            prepared=prepared,
         )
     from sequifier.infer import inference_output_path
 
@@ -150,17 +147,17 @@ def _policy_input_frames(policy, config):
                 for name in spec.observation_columns
                 if name in policy.interface.column_data_types
             ),
-            passthrough_columns=auxiliary,
+            passthrough_columns=auxiliary - set(spec.observation_columns),
             optional_passthrough=(*spec.actions, ACTION_RECORD, PREVIOUS_ACTION_RECORD)
             if uses_feedback
             else (),
         ) as view:
-            yield _indexed_policy_frames(view, spec, config), True
+            yield _indexed_policy_frames(view, spec, config)
     elif config._indexed_view is not None:
-        yield _indexed_policy_frames(config._indexed_view, spec, config), True
+        yield _indexed_policy_frames(config._indexed_view, spec, config)
     else:
         assert config._prepared_source is not None
-        yield _stored_policy_frames(config._prepared_source, spec, config), True
+        yield _stored_policy_frames(config._prepared_source, spec, config)
 
 
 def _validate_policy_coordinates(rows, config):
@@ -177,7 +174,6 @@ def _validate_policy_coordinates(rows, config):
 
 def _indexed_policy_frames(view, spec, config):
     metadata = view.metadata()
-    decode = model_decoder(metadata, spec.actions)
     raw_columns = set(metadata.indexed_passthrough)
     if conflicts := raw_columns.intersection(
         spec.observation_columns + spec.static_columns
@@ -185,21 +181,6 @@ def _indexed_policy_frames(view, spec, config):
         raise ValueError(
             f"Policy model inputs are stored as raw auxiliary columns: {sorted(conflicts)}"
         )
-    if view.view["view"] == "predict" and not config.rollout:
-        required_raw = {
-            name
-            for name in spec.previous_action_inputs.values()
-            if name in metadata.column_data_types
-            and (spec.actions[name].type == "real" or spec.raw_mask_column is not None)
-        }
-        if raw_columns.intersection({ACTION_RECORD, PREVIOUS_ACTION_RECORD}):
-            required_raw.clear()
-        if config.previous_action_columns:
-            required_raw = set(config.previous_action_columns.values())
-        if missing := required_raw - raw_columns:
-            raise ValueError(
-                f"Prepare lagged action columns with passthrough_columns: {sorted(missing)}"
-            )
     static = pl.read_parquet(view.static_path) if view.static_path else None
     media = None if metadata.indexed_inline_media else view.image_store()
     bounds = view.split_bounds()
@@ -220,7 +201,6 @@ def _indexed_policy_frames(view, spec, config):
             static,
             media,
             metadata,
-            decode,
             spec,
             config,
         )
@@ -233,7 +213,7 @@ def _indexed_policy_frames(view, spec, config):
         read_start = _context_start(start, spec, config)
         rows = view.read(sequence, read_start, end)
         rows, previous = _prepared_frame(
-            rows, sequence, start, static, media, metadata, decode, spec, config
+            rows, sequence, start, static, media, metadata, spec, config
         )
         yield rows, previous
 
@@ -256,7 +236,6 @@ def _stored_policy_frames(source, spec, config):
     from sequifier.trajectory.tables import scan_tables
 
     metadata = source.metadata
-    decode = model_decoder(metadata, spec.actions)
     media = (
         ImageStore(
             metadata.image_sources,
@@ -284,15 +263,12 @@ def _stored_policy_frames(source, spec, config):
             static,
             media,
             metadata,
-            decode,
             spec,
             config,
         )
 
 
-def _prepared_frame(
-    rows, sequence, start, static, media, metadata, decode, spec, config
-):
+def _prepared_frame(rows, sequence, start, static, media, metadata, spec, config):
     if static is not None:
         rows = rows.join(
             static.filter(pl.col("sequenceId") == sequence), on="sequenceId"
@@ -311,66 +287,14 @@ def _prepared_frame(
                 else value[0].tolist()
             )
             rows = rows.with_columns(pl.Series(name, values))
-    uses_recorded_actions = bool(spec.previous_action_inputs) and (
-        config.rollout is None
-        or getattr(config.rollout, "seed_history", "available") == "available"
+    rows = project_prepared_rows(
+        rows,
+        metadata,
+        spec.observation_columns,
+        spec.static_columns,
+        spec.actions if spec.previous_action_inputs else (),
+        physical_inputs=config.rollout is not None,
     )
-    domain_columns = (
-        set(spec.actions)
-        if uses_recorded_actions and ACTION_RECORD not in rows.columns
-        else set()
-    )
-    if config.rollout is not None and spec.input_encoding == "raw":
-        domain_columns.update(spec.observation_columns + spec.static_columns)
-        if spec.raw_mask_column:
-            domain_columns.add(spec.raw_mask_column)
-    encoded_columns = set(metadata.column_data_types) - set(
-        metadata.indexed_passthrough
-    )
-    # Prediction views retain exact source values alongside model encodings.
-    for record in (DOMAIN_OBSERVATIONS, DOMAIN_STATIC):
-        if domain_columns and isinstance(dtype := rows.schema.get(record), pl.Struct):
-            names = domain_columns.intersection(dtype.to_schema())
-            rows = rows.with_columns(
-                pl.col(record).struct.field(name).alias(name) for name in names
-            )
-            domain_columns.difference_update(names)
-    for column in domain_columns.intersection(rows.columns, encoded_columns):
-        rows = rows.with_columns(
-            pl.Series(
-                column,
-                [
-                    decode(value, column) if value is not None else None
-                    for value in rows[column].to_list()
-                ],
-            )
-        )
-    if (
-        config.rollout
-        and spec.input_encoding == "raw"
-        and CONTEXT_COLUMN in rows.columns
-    ):
-
-        def decode_context(payload):
-            context = CONTEXT_RECORDS.validate_json(payload)
-            decoded = tuple(
-                step.model_copy(
-                    update={
-                        "observation": {
-                            name: decode(value, name)
-                            if name in encoded_columns
-                            else value
-                            for name, value in step.observation.items()
-                        }
-                    }
-                )
-                for step in context
-            )
-            return CONTEXT_RECORDS.dump_json(decoded).decode()
-
-        rows = rows.with_columns(
-            pl.col(CONTEXT_COLUMN).map_elements(decode_context, return_dtype=pl.String)
-        )
     previous = None
     if start is not None and rows["itemPosition"][0] < start:
         previous = rows.filter(pl.col("itemPosition") < start)
@@ -396,14 +320,12 @@ def infer_rollout(policy, history, config, identity):
 
     spec = policy.config
     rollout = config.rollout
-    pad = spec.context_length - len(history)
-    seed = SeedHistory(
-        observations={
-            column: [0.0] * pad + [dict(frame.observation)[column] for frame in history]
-            for column in spec.observation_columns
-        },
-        attention_valid_mask=[False] * pad + [True] * len(history),
-        static_inputs=dict(history[-1].static_inputs),
+    seed = SeedHistory.from_rows(
+        [dict(frame.observation) for frame in history],
+        spec.observation_columns,
+        spec.context_length,
+        dict(history[-1].static_inputs),
+        [frame.masked for frame in history],
     )
     budget = history[-1].desired_return
     trajectory = collect_policy_rollout(
@@ -413,10 +335,6 @@ def infer_rollout(policy, history, config, identity):
         rollout,
         rollout.max_steps,
         desired_return=budget,
-        seed_observation_masks=[
-            bool(dict(frame.observation).get(spec.raw_mask_column, False))
-            for frame in history
-        ],
         seed_previous_actions=[
             {name: frame.previous_action[name] for name in spec.actions}
             if frame.previous_action is not None
@@ -448,10 +366,8 @@ def infer_rollout(policy, history, config, identity):
 
 
 @torch.no_grad()
-def predict_policy(policy, frames, config, row_key, *, prepared=False):
-    spec = policy.config
-    if prepared:
-        spec = spec.model_copy(update={"input_encoding": "model"})
+def predict_policy(policy, frames, config, row_key):
+    spec = policy.config.model_copy(update={"input_encoding": "model"})
     if config.output_path is not None and config.output_probabilities:
         from sequifier.infer import validate_probability_destinations
 
@@ -461,7 +377,7 @@ def predict_policy(policy, frames, config, row_key, *, prepared=False):
             {name: field.type for name, field in spec.actions.items()},
             1,
         )
-    windows = policy_windows(frames, spec, config, row_key, prepared=prepared)
+    windows = policy_windows(frames, spec, config, row_key)
     generator = action_generator(policy.device, config.seed)
     outputs = []
     probability_rows = {
@@ -472,9 +388,7 @@ def predict_policy(policy, frames, config, row_key, *, prepared=False):
         inputs = cast(SequifierInputs, collate_model_inputs(histories)).to(
             policy.device
         )
-        distribution = policy.distribution(
-            inputs, input_encoding="model" if prepared else None
-        )
+        distribution = policy.distribution(inputs, input_encoding="model")
         deterministic = config.action_selection == "deterministic"
         if config.output_probabilities:
             selected = distribution.select_and_score(
@@ -536,10 +450,10 @@ def policy_row_key(data, spec, config):
     return key
 
 
-def policy_windows(frames, spec, config, row_key, *, prepared):
+def policy_windows(frames, spec, config, row_key):
     view = PolicyWindowView(spec)
     for row_index, history, identity in _decision_histories(
-        frames, spec, config, row_key, prepared=prepared
+        frames, spec, config, row_key
     ):
         yield row_index, history_inputs(spec, history, window=view), identity
 
@@ -562,28 +476,31 @@ def _stored_context_frames(row, spec, config, sequence, position):
                 str(sequence),
                 position - i,
                 budget,
+                step.masked,
             )
         )
     return reversed(frames)
 
 
-def _lagged_action(row, prior, spec, config, position, prepared):
+def _lagged_action(row, prior, spec, config, position):
     if position and config.previous_action_columns:
+        physical = row.get(DOMAIN_OBSERVATIONS) or {}
         lagged = {
-            name: row[column] for name, column in config.previous_action_columns.items()
+            name: physical[column] if column in physical else row[column]
+            for name, column in config.previous_action_columns.items()
         }
         if any(value is not None for value in lagged.values()):
             return encode_action(lagged, spec)
     if row.get(PREVIOUS_ACTION_RECORD):
         return encode_action(row[PREVIOUS_ACTION_RECORD], spec)
     if prior is not None:
-        recorded = prior.get(ACTION_RECORD, prior)
+        recorded = prior.get(ACTION_RECORD)
         if recorded and all(recorded.get(name) is not None for name in spec.actions):
             return encode_action({name: recorded[name] for name in spec.actions}, spec)
     return None
 
 
-def _decision_histories(frames, spec, config, row_key, *, prepared, seed_index=None):
+def _decision_histories(frames, spec, config, row_key, *, seed_index=None):
     offset = 0
     for data, context in frames:
         indexed = data.with_row_index(row_key, offset=offset)
@@ -615,9 +532,7 @@ def _decision_histories(frames, spec, config, row_key, *, prepared, seed_index=N
                 if spec.previous_action_inputs and (
                     seed_index is None or config.rollout.seed_history != "current"
                 ):
-                    previous_action = _lagged_action(
-                        row, prior, spec, config, position, prepared
-                    )
+                    previous_action = _lagged_action(row, prior, spec, config, position)
                     if position and previous_action is None:
                         if row[row_key] is None:
                             prior = row
@@ -629,10 +544,6 @@ def _decision_histories(frames, spec, config, row_key, *, prepared, seed_index=N
                             )
                         history.clear()
                 observation = {name: row[name] for name in spec.observation_columns}
-                if (
-                    not prepared or seed_index is not None
-                ) and spec.raw_mask_column in row:
-                    observation[spec.raw_mask_column] = row[spec.raw_mask_column]
                 sequence = row[config.sequence_id_column]
                 if row.get(CONTEXT_COLUMN) and (
                     seed_index is None or config.rollout.seed_history == "available"
@@ -652,6 +563,7 @@ def _decision_histories(frames, spec, config, row_key, *, prepared, seed_index=N
                         str(sequence),
                         position,
                         desired_return(config, spec, row),
+                        bool(row.get(OBSERVATION_MASK, False)),
                     )
                 )
                 prior = row
