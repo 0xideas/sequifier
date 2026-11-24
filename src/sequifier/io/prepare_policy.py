@@ -13,7 +13,6 @@ from sequifier.config.depth_layout import (
 )
 from sequifier.config.metadata import RawInputMetadata, load_dataset_metadata
 from sequifier.config.splits import validate_disjoint_roles
-from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_path
 from sequifier.io.episode_corpus import EpisodeCorpus
 from sequifier.io.feature_fitting import FeatureStatistics, FittedColumns, FittingRules
@@ -23,7 +22,10 @@ from sequifier.io.indexed_sequences import (
     IndexedView,
 )
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_split_assignments
-from sequifier.io.preprocessing_workspace import preprocessing_workspace
+from sequifier.io.preprocessing_workspace import (
+    indexed_preparation,
+    preprocessing_workspace,
+)
 from sequifier.io.sequence import (
     CONTEXT_COLUMN,
     CONTEXT_RECORDS,
@@ -65,20 +67,7 @@ def _preparation_inputs(config):
         resolved.dependencies.add(original)
     if config.initialize_from:
         resolved.dependencies.add(Path(config.project_root) / config.initialize_from)
-    # Cached fits and completed item files must describe the same inputs, feature
-    # roles, and ordered splits as the invocation that publishes them.
-    signature = fingerprint(
-        {
-            "settings": config.model_dump(
-                mode="json", exclude={"reprocess", "indexed_output_path"}
-            ),
-            "split_order": list(config.splits),
-            "action_order": list(config.policy_binding.actions),
-            "feedback_order": list(config.policy_binding.feedback),
-            "files": resolved.dependencies.identity,
-        }
-    )
-    return resolved, original, signature
+    return resolved, original
 
 
 def _validate_unfingerprinted_store(config, destination, provenance):
@@ -136,39 +125,20 @@ def prepare_policy(config):
         if work is None:
             published = json.loads((destination / "dataset.json").read_text())
             provenance = published.get("provenance", {})
-            previous = provenance.get("preparation")
-            if previous is None:
+            if not provenance.get("policy_binding") or "preparation" not in provenance:
                 _validate_unfingerprinted_store(config, destination, provenance)
                 return
-        else:
-            identity_path = work / "policy-preparation.json"
-            previous = (
-                json.loads(identity_path.read_text())
-                if identity_path.exists()
-                else None
-            )
-            if previous is None and (work / "episode-schema.arrow").exists():
-                raise ValueError(
-                    "This partial preparation predates input tracking; set reprocess: true to rebuild it"
-                )
-
-        if previous is not None and config.run.reproducibility._requested_random:
-            config = config.model_copy(deep=True)
-            config.run.reproducibility.seed = previous["seed"]
-        resolved, original, signature = _preparation_inputs(config)
-        identity = {"signature": signature, "seed": config.run.reproducibility.seed}
+        resolved, original = _preparation_inputs(config)
+        config, identity = indexed_preparation(
+            config,
+            destination,
+            work,
+            resolved.dependencies.identity,
+            action_order=list(config.policy_binding.actions),
+            feedback_order=list(config.policy_binding.feedback),
+        )
         if work is None:
-            if identity != previous:
-                raise ValueError(
-                    "Published dataset belongs to different inputs or settings; choose a new indexed_output_path"
-                )
             return
-        if previous is not None and previous != identity:
-            raise ValueError(
-                "Policy preprocessing inputs or settings changed; set reprocess: true to rebuild partial work"
-            )
-        with atomic_path(work / "policy-preparation.json") as temporary:
-            temporary.write_text(json.dumps(identity))
         with IndexedSequenceWriter(destination, workspace=work) as writer:
             _prepare_policy(config, writer, resolved, original, identity)
 

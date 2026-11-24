@@ -12,10 +12,11 @@ from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
-from sequifier.config.image_config import MediaPath, bind_image_paths
+from sequifier.config.image_config import MediaPath
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
     ResolvedInferenceModel,
+    inference_image_store,
 )
 from sequifier.config.metadata import (
     DatasetMetadata,
@@ -1116,27 +1117,8 @@ class ResolvedInferenceConfig(
 
     def image_store(self):
         if self._image_store is None:
-            from sequifier.io.images import ImageStore
-
-            sources = self.dataset_metadata.image_sources
-            preconditioning = self.dataset_metadata.preconditioning_image
-            if (
-                self._indexed_view is None
-                or self.image_paths
-                or self.preconditioning_image_paths
-            ):
-                sources, preconditioning = bind_image_paths(
-                    sources,
-                    preconditioning,
-                    self.image_paths,
-                    self.preconditioning_image_paths,
-                )
-            self._image_store = (
-                self._indexed_view.image_store(
-                    sources, preconditioning, project_root=self.project_root
-                )
-                if self._indexed_view is not None
-                else ImageStore(sources, preconditioning, self.project_root)
+            self._image_store = inference_image_store(
+                self, self.dataset_metadata, self._indexed_view
             )
         return self._image_store
 

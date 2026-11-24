@@ -142,6 +142,26 @@ class InferenceExecutionConfig(ConfigModel):
         return normalized
 
 
+def inference_image_store(config, metadata, indexed=None):
+    """Bind authored media locations while preserving indexed storage semantics."""
+    from sequifier.config.image_config import bind_image_paths
+    from sequifier.io.images import ImageStore
+
+    sources, prefix = metadata.image_sources, metadata.preconditioning_image
+    if not sources and prefix is None:
+        return None
+    if indexed is not None and not (
+        config.image_paths or config.preconditioning_image_paths
+    ):
+        return indexed.image_store()
+    sources, prefix = bind_image_paths(
+        sources, prefix, config.image_paths, config.preconditioning_image_paths
+    )
+    if indexed is not None:
+        return indexed.image_store(sources, prefix, project_root=config.project_root)
+    return ImageStore(sources, prefix, config.project_root)
+
+
 def resolve_inference_model(values, *, interface_name, task):
     """Apply task-specific interface selection before resolving portable execution."""
     from sequifier.artifacts.model_config import model_execution_from_model_config

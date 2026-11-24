@@ -8,6 +8,8 @@ from pathlib import Path
 from loguru import logger
 
 from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.fingerprints import fingerprint
+from sequifier.io.atomic import write_json_atomic
 
 WORKSPACE_DIR = ".sequifier-preprocessing"
 
@@ -42,7 +44,7 @@ def preprocessing_workspace(destination, *, indexed, resume):
                     )
                 if work.is_dir():
                     shutil.rmtree(work)
-                logger.info(f"Reusing published dataset at {destination}")
+                logger.info(f"Found published dataset at {destination}")
                 yield None
                 return
             # Interrupted work lives beside the destination. Never recursively
@@ -62,3 +64,42 @@ def preprocessing_workspace(destination, *, indexed, resume):
             shutil.rmtree(publication)
         yield work
         shutil.rmtree(work)
+
+
+def indexed_preparation(config, destination, work, files, **ordered_fields):
+    """Match both partial items and published views to the inputs that produced them."""
+    if work is None:
+        manifest = json.loads((destination / "dataset.json").read_text())
+        previous = manifest.get("provenance", {}).get("preparation")
+    else:
+        path = work / "preparation.json"
+        previous = json.loads(path.read_text()) if path.exists() else None
+    if previous and config.run.reproducibility._requested_random:
+        config = config.model_copy(deep=True)
+        config.run.reproducibility.seed = previous["seed"]
+    signature = fingerprint(
+        {
+            "settings": config.model_dump(
+                mode="json", exclude={"reprocess", "indexed_output_path"}
+            ),
+            "split_order": list(config.splits),
+            **ordered_fields,
+            "files": files,
+        }
+    )
+    identity = {"signature": signature, "seed": config.run.reproducibility.seed}
+    if work is None and identity != previous:
+        raise ValueError(
+            "Published dataset belongs to different inputs or settings; choose a new indexed_output_path"
+        )
+    if work is not None:
+        if previous is not None and previous != identity:
+            raise ValueError(
+                "Preprocessing inputs or settings changed; set reprocess: true to rebuild partial work"
+            )
+        if previous is None and any(work.iterdir()):
+            raise ValueError(
+                "Unidentified partial work; set reprocess: true to rebuild"
+            )
+        write_json_atomic(work / "preparation.json", identity)
+    return config, identity

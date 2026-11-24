@@ -99,11 +99,15 @@ class PhaseCommit:
         commit.verify_model()
         provenance = commit.result.get("provenance", {})
         if snapshot := provenance.get("committed_sequence_manifest"):
+            from sequifier.config.policy_train_config import SequenceSourceConfig
+            from sequifier.trajectory.sources import resolve_source
+
             verify_artifact(
                 snapshot,
                 provenance["committed_sequence_manifest_sha256"],
                 "Committed rollout manifest changed",
             )
+            resolve_source(SequenceSourceConfig(manifest_path=snapshot))
         if checkpoint_path is not None and commit.result["checkpoint_path"] != str(
             checkpoint_path
         ):

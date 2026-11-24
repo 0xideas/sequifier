@@ -673,7 +673,7 @@ schema, fitted feature metadata, and completed episodes. Supervised indexed
 preprocessing reuses completed item files and repeats feature fitting and window
 placement. Both indexed routes rebuild their split indexes before publication.
 
-Policy preparation records the inputs, settings, and resolved seed used for
+Both indexed preprocessors record the inputs, settings, and resolved seed used for
 each new store. A repeated invocation checks them before reusing completed or
 partial work. With `seed: random`, retries reuse the recorded draw.
 For a changed or older partial preparation, `reprocess: true` starts a fresh

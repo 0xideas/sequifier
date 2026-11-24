@@ -59,13 +59,17 @@ from sequifier.io.feature_fitting import (
     configured_column_types,
     validate_cardinality_values,
 )
-from sequifier.io.images import _time_ms, validate_sources
+from sequifier.io.images import _time_ms, media_files, validate_sources
 from sequifier.io.partitioning import (
     sequence_assignments,
     sequence_split_overrides,
     table_content_keys,
 )
-from sequifier.io.preprocessing_workspace import WORKSPACE_DIR, preprocessing_workspace
+from sequifier.io.preprocessing_workspace import (
+    WORKSPACE_DIR,
+    indexed_preparation,
+    preprocessing_workspace,
+)
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
     CURRICULUM_COLUMN_PREFIX,
@@ -474,12 +478,24 @@ def preprocess(args: Any, args_config: dict[str, Any]) -> None:
 
 @beartype
 def _folder_input_files(
-    data_path: str, read_format: str, exclude_path: str | None = None
+    data_path: str,
+    read_format: str,
+    exclude_path: str | None = None,
+    *,
+    exclude_directory: Path | None = None,
 ) -> list[str]:
     """Return folder input files in a stable traversal order."""
     file_paths = []
     for root, directories, files in os.walk(data_path):
-        directories[:] = sorted(name for name in directories if name != WORKSPACE_DIR)
+        directories[:] = sorted(
+            name
+            for name in directories
+            if name != WORKSPACE_DIR
+            and (
+                exclude_directory is None
+                or (Path(root) / name).resolve() != exclude_directory
+            )
+        )
         file_paths.extend(
             os.path.join(root, file)
             for file in sorted(files)
@@ -844,11 +860,10 @@ class Preprocessor:
         self.sequence_manifest_path = None
         self.sequence_view = config.sequence_view
         self.external_static_source = None
+        self.preparation = None
         self.static_cardinality = {}
 
     def run(self, *, indexed_writer=None, indexed_prediction=False) -> None:
-        from sequifier.io.indexed_sequences import IndexedSequenceWriter
-
         if (
             self.config.read_format == "sequence"
             or Path(self.config.preprocessing_data_path).suffix.lower() == ".json"
@@ -895,38 +910,111 @@ class Preprocessor:
                 run.sequence_manifest_path = Path(
                     self.config.preprocessing_data_path
                 ).resolve()
-                run.run(
-                    indexed_writer=indexed_writer, indexed_prediction=indexed_prediction
-                )
+                run._run_table(self.config, indexed_writer, indexed_prediction)
             return
         if self.config.sequence_view == "observations":
             raise ValueError(
                 "sequence_view observations requires a sequence manifest or trajectory"
             )
-        path = self.config.indexed_output_path
-        if path is None or indexed_writer is not None:
+        self._run_table(self.config, indexed_writer, indexed_prediction)
+
+    def table_input_paths(self):
+        config = self.config
+        source = Path(config.preprocessing_data_path)
+        files = (
+            [source]
+            if source.is_file()
+            else [
+                Path(path)
+                for path in _folder_input_files(
+                    str(source),
+                    config.read_format,
+                    config.static_data_path,
+                    # A published store may sit under its raw input folder.
+                    exclude_directory=(
+                        Path(config.project_root) / config.indexed_output_path
+                    ).resolve()
+                    if config.indexed_output_path
+                    else None,
+                )
+            ]
+        )
+        if config.static_data_path:
+            files.append(Path(config.static_data_path))
+        return files
+
+    def _run_table(self, authored, indexed_writer, indexed_prediction):
+        from sequifier.io.indexed_sequences import IndexedSequenceWriter
+
+        if authored.indexed_output_path is None or indexed_writer is not None:
             self._process(indexed_writer, indexed_prediction)
             return
-        destination = Path(self.config.project_root) / path
+        root = Path(authored.project_root).resolve()
+        destination = root / authored.indexed_output_path
         with preprocessing_workspace(
-            destination, indexed=True, resume=not self.config.reprocess
+            destination, indexed=True, resume=not authored.reprocess
         ) as work:
+            dependencies = DependencyManifest()
+            if self.sequence_manifest_path:
+                dependencies.merge(self.sequence_dependencies)
+            else:
+                for path in self.table_input_paths():
+                    dependencies.add(path)
+            if authored.metadata_config_path:
+                dependencies.add(root / authored.metadata_config_path)
+            for path in (root / "configs/id_maps").glob("*.json"):
+                dependencies.add(path)
+            locations = [source.path for source in authored.image_sources.values()]
+            if prefix := authored.preconditioning_image:
+                locations.extend((prefix.paths or {}).values())
+            for location in filter(None, locations):
+                dependencies.add_media_directory(
+                    root / location, media_files(location, authored.project_root)
+                )
+            effective, self.preparation = indexed_preparation(
+                authored, destination, work, dependencies.identity
+            )
             if work is not None:
+                self.config = self.config.model_copy(update={"run": effective.run})
+                self.sequence_dependencies = dependencies
                 with IndexedSequenceWriter(destination, workspace=work) as writer:
                     self._process(writer, indexed_prediction)
 
-    def sequence_manifest_provenance(self):
-        path = self.sequence_manifest_path
-        assert path is not None
+    def source_provenance(self):
+        if self.sequence_manifest_path:
+            source = {
+                "manifest_path": str(self.sequence_manifest_path),
+                "sequence_view": self.sequence_view,
+            }
+        else:
+            config = self.config
+            source = {
+                "preprocessing_data_path": str(
+                    Path(config.preprocessing_data_path).absolute()
+                ),
+                "static_data_path": str(Path(config.static_data_path).absolute())
+                if config.static_data_path
+                else None,
+                "indexed_passthrough": config.indexed_passthrough,
+            }
+            if self.preparation is None:
+                # Fresh inference supplies its own writer and skips the restart workspace.
+                for path in self.table_input_paths():
+                    self.sequence_dependencies.add(path)
         self.sequence_dependencies.revalidate()
         return {
-            "source": {"manifest_path": str(path), "sequence_view": self.sequence_view},
+            "source": source,
             "files": [
                 {"path": location, "sha256": checksum}
                 for location, checksum in sorted(
                     self.sequence_dependencies.identity.items()
                 )
             ],
+            **(
+                {"preparation": self.preparation}
+                if self.preparation is not None
+                else {}
+            ),
         }
 
     def _read_sequence_identities(self):
@@ -2148,7 +2236,7 @@ class Preprocessor:
                 else self.config.static_data_path,
                 **(
                     {
-                        "sequence_manifest": self.sequence_manifest_provenance(),
+                        "sequence_manifest": self.source_provenance(),
                         "sequence_view": self.sequence_view,
                     }
                     if self.sequence_manifest_path

@@ -10,6 +10,7 @@ import polars as pl
 import torch
 from loguru import logger
 
+from sequifier.config.inference_common import inference_image_store
 from sequifier.config.policy_infer_config import ResolvedPolicyInferenceConfig
 from sequifier.helpers import configure_determinism
 from sequifier.io.actions import encode_action
@@ -182,7 +183,10 @@ def _indexed_policy_frames(view, spec, config):
             f"Policy model inputs are stored as raw auxiliary columns: {sorted(conflicts)}"
         )
     static = pl.read_parquet(view.static_path) if view.static_path else None
-    media = None if metadata.indexed_inline_media else view.image_store()
+    media = inference_image_store(config, metadata, view)
+    # Inline frames and masks are already present in the policy rows.
+    if metadata.indexed_inline_media:
+        media = None
     bounds = view.split_bounds()
     predict = view.view["view"] == "predict"
     coordinate = getattr(config.rollout, "seed", None)
@@ -231,20 +235,11 @@ def _context_start(start, spec, config):
 
 
 def _stored_policy_frames(source, spec, config):
-    from sequifier.io.images import ImageStore
     from sequifier.trajectory.prepared import prepared_table
     from sequifier.trajectory.tables import scan_tables
 
     metadata = source.metadata
-    media = (
-        ImageStore(
-            metadata.image_sources,
-            metadata.preconditioning_image,
-            str(source.project_root),
-        )
-        if metadata.image_sources or metadata.preconditioning_image
-        else None
-    )
+    media = inference_image_store(config, metadata)
     static = (
         scan_tables((source.static_path,)).collect() if source.static_path else None
     )

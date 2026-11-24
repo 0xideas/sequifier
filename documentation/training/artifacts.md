@@ -15,7 +15,8 @@ All paths are relative to `run.project_root` unless absolute.
 | `run.outputs.phase_directory` | `outputs/training/<model_name>/phases` |
 | `run.recovery.resume.checkpoint_path` | `checkpoints/runs/<model_name>/<model_name>-latest.pt` |
 
-Every runner publishes a final portable PT model, independently of the optional
+The final model path must have a `.pt` extension. Every runner publishes this
+portable model independently of the optional
 best/last, embedding and ONNX exports controlled by `run.export`. Supervised
 training retains its existing `<model>-best-<epoch>` and `<model>-last-<epoch>`
 exports. The canonical final model follows the final executed phase's

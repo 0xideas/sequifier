@@ -216,9 +216,10 @@ def validate_training_destinations(
 def resolve_training_output_paths(run):
     root = Path(run.project_root)
     output_dir = Path("outputs/training") / run.model_name
-    run.outputs.model_path = str(
-        (root / (run.outputs.model_path or f"models/{run.model_name}.pt")).resolve()
-    )
+    model = (root / (run.outputs.model_path or f"models/{run.model_name}.pt")).resolve()
+    if model.suffix.lower() != ".pt":
+        raise ValueError("run.outputs.model_path must name a .pt portable model")
+    run.outputs.model_path = str(model)
     run.outputs.report_path = str(
         (root / (run.outputs.report_path or output_dir / "report.json")).resolve()
     )

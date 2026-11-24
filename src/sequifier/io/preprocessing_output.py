@@ -9,7 +9,6 @@ from typing import Literal
 
 import polars as pl
 
-from sequifier.fingerprints import file_checksum
 from sequifier.io.atomic import atomic_path
 from sequifier.io.pt_payload import load_pt_payload
 from sequifier.io.sequence import DOMAIN_OBSERVATIONS, OBSERVATION_MASK
@@ -17,7 +16,6 @@ from sequifier.preprocess import (
     SPLIT_VALUE_COLUMN,
     WindowWritePlan,
     _batch_to_arrays,
-    _folder_input_files,
     _place_sequence_windows_for_splits,
     _process_batches_single_file,
     merge_window_outputs,
@@ -109,7 +107,7 @@ class WindowOutput:
                 for seq, (episode, group) in self.run.sequence_identities.items()
             }
         if self.run.sequence_manifest_path:
-            metadata["provenance"] = self.run.sequence_manifest_provenance()
+            metadata["provenance"] = self.run.source_provenance()
         self.metadata_path.parent.mkdir(parents=True, exist_ok=True)
         self.metadata_path.write_text(json.dumps(metadata))
 
@@ -323,38 +321,9 @@ class IndexedOutput:
             if run.config.metadata_config_path
             else None
         )
-        input_path = Path(run.config.preprocessing_data_path)
-        paths = (
-            [input_path]
-            if input_path.is_file()
-            else [
-                Path(path)
-                for path in _folder_input_files(
-                    str(input_path), run.config.read_format, run.config.static_data_path
-                )
-            ]
-        )
-        if run.config.static_data_path:
-            paths.append(Path(run.config.static_data_path))
         self.writer.publish(
             self.metadata,
             feature_columns=self.feature_columns,
             original_metadata=original,
-            provenance=run.sequence_manifest_provenance()
-            if run.sequence_manifest_path
-            else {
-                "source": {
-                    "preprocessing_data_path": str(input_path.absolute()),
-                    "static_data_path": str(
-                        Path(run.config.static_data_path).absolute()
-                    )
-                    if run.config.static_data_path
-                    else None,
-                    "indexed_passthrough": run.config.indexed_passthrough,
-                },
-                "files": [
-                    {"path": str(path.absolute()), "sha256": file_checksum(path)}
-                    for path in paths
-                ],
-            },
+            provenance=run.source_provenance(),
         )
