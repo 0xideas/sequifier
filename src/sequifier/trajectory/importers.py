@@ -70,6 +70,7 @@ def sequence_from_trajectory(
     result = SequenceEpisode(
         sequence_id=sequence_coordinate(episode.episode_id),
         episode_id=episode.episode_id,
+        group_id=episode.seed_group,
         item_positions=tuple(step.step_id for step in steps),
         starts_episode=previous is None,
         previous_action=decode_action(previous, recording_policy)

@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from sequifier.config.rollout_config import InputBinding
+from sequifier.fingerprints import fingerprint
 from sequifier.io.values import DomainValue
 from sequifier.trajectory.returns import remaining_return
 
@@ -78,6 +79,14 @@ class Trajectory(Record):
     collection_cutoff: bool
     total_return: FiniteFloat
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def seed_group(self) -> str | None:
+        origin = self.metadata.get("seed_origin")
+        keys = ("dataset", "sequenceId", "itemPosition")
+        if isinstance(origin, dict) and all(key in origin for key in keys):
+            return fingerprint({key: origin[key] for key in keys})
+        return None
 
     @model_validator(mode="after")
     def validate_temporal_contract(self):

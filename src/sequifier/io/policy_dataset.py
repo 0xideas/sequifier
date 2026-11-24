@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import Dataset, Sampler
 
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
+from sequifier.helpers import assign_sequence_to_split
 from sequifier.io.batch import (
     ModelEncodedPolicyBatch,
     ModelEncodedPolicyInputs,
@@ -15,7 +16,7 @@ from sequifier.io.batch import (
 from sequifier.io.episode_cache import EpisodeCache
 from sequifier.io.episode_corpus import EpisodeCorpus, EpisodeView, episode_content_key
 from sequifier.io.episode_features import EpisodeFeatures, return_labels
-from sequifier.io.partitioning import split_components
+from sequifier.io.partitioning import sequence_split_overrides
 from sequifier.io.policy_window import PolicyWindowView, action_index
 
 
@@ -37,6 +38,7 @@ class EpisodeDecisions(EpisodeFeatures):
         self.exclusions = {}
         self.all_episode_ids = []
         self.episode_ids = []
+        self.sequence_ids = []
         self.demonstration_keys = []
         self.group_ids = []
         self.lengths = []
@@ -79,6 +81,7 @@ class EpisodeDecisions(EpisodeFeatures):
                 demonstration = episode_content_key(episode, length=length)
             eligible.append(index)
             self.episode_ids.append(episode_id)
+            self.sequence_ids.append(record.sequence_id)
             self.demonstration_keys.append(demonstration)
             self.group_ids.append(record.group_id)
             self.lengths.append(length)
@@ -153,24 +156,51 @@ class EpisodeWindowSampler(Sampler):
                 yield offset + step
 
 
+def episode_split_assignments(dataset, fractions, seed, *, group_identical):
+    """Return one supervised split index per eligible policy episode."""
+    groups = {
+        seq: [("group", group)]
+        for seq, group in zip(dataset.sequence_ids, dataset.group_ids, strict=True)
+        if group is not None
+    }
+    overrides = sequence_split_overrides(dataset.sequence_ids, groups, fractions, seed)
+    assignments = [
+        overrides[seq]
+        if seq in overrides
+        else assign_sequence_to_split(seq, fractions, seed)
+        for seq in dataset.sequence_ids
+    ]
+    if group_identical:
+        content_splits = {}
+        for content, split in zip(dataset.demonstration_keys, assignments, strict=True):
+            if content_splits.setdefault(content, split) != split:
+                # A duplicate actually crosses the supervised boundary. Keep whole
+                # connected components, including any linked collection groups.
+                for seq, key in zip(
+                    dataset.sequence_ids, dataset.demonstration_keys, strict=True
+                ):
+                    groups.setdefault(seq, []).append(("content", key))
+                constrained = sequence_split_overrides(
+                    dataset.sequence_ids, groups, fractions, seed
+                )
+                return [constrained[seq] for seq in dataset.sequence_ids]
+    return assignments
+
+
 def episode_partition_indices(
     dataset, validation_fraction=0.2, seed=1010, *, group_identical=False
 ):
-    def keys(index):
-        result = (
-            []
-            if dataset.group_ids[index] is None
-            else [("group", dataset.group_ids[index])]
-        )
-        if group_identical:
-            result.append(("content", dataset.demonstration_keys[index]))
-        return result
-
+    if not 0 < validation_fraction < 1:
+        raise ValueError("validation_fraction must be in (0,1)")
+    assignments = episode_split_assignments(
+        dataset,
+        [1 - validation_fraction, validation_fraction],
+        seed,
+        group_identical=group_identical,
+    )
     return tuple(
-        tuple(indices)
-        for indices in split_components(
-            range(len(dataset.episodes)), keys, validation_fraction, seed
-        )
+        tuple(i for i, part in enumerate(assignments) if part == split)
+        for split in range(2)
     )
 
 

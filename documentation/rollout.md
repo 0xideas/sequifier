@@ -87,7 +87,8 @@ retains algorithm-specific scores and optimizer inputs.
 
 Each decision has an integer `sequenceId` and an `itemPosition`. `sequenceName`
 carries the external episode identity and `__group` associates related samples,
-such as GRPO siblings. A PPO update boundary can split a sequence across shards.
+such as GRPO siblings. For inference rollouts, both trajectory JSON and sequence
+manifests group runs seeded from the same dataset, sequence ID, and item position. A PPO update boundary can split a sequence across shards.
 Rows carry the current observation, static fields, raw reward, recorded successor
 and separate boundary flags. Predictions use `__prediction_<name>`. Policy
 decisions also retain the structured executed action and previous action.

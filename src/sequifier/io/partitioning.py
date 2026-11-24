@@ -1,6 +1,11 @@
 """Leakage-safe connected components and deterministic held-out partitions."""
 
+import hashlib
+import heapq
 import random
+from collections import Counter
+
+from sequifier.helpers import assign_sequence_to_split
 
 
 def split_components(records, leakage_keys, validation_fraction, seed):
@@ -48,3 +53,60 @@ def partition_components(records, leakage_keys, fractions, seed):
     return tuple(
         [item for group in groups for item in group] for groups in reversed(partitions)
     )
+
+
+def sequence_split_overrides(sequence_ids, leakage_keys, fractions, seed):
+    """Use supervised ID hashing unless group constraints require a component split."""
+    if leakage_keys:
+        partitions = partition_components(
+            sorted(sequence_ids), lambda seq: leakage_keys.get(seq, ()), fractions, seed
+        )
+        return {seq: split for split, ids in enumerate(partitions) for seq in ids}
+
+    # Keep only overrides needed to give every named split a sequence.
+    unique_sequence_ids = sorted(set(sequence_ids))
+    if len(unique_sequence_ids) < len(fractions):
+        raise ValueError(
+            "between_sequence splitting needs at least as many sequences as requested "
+            f"splits; found {len(unique_sequence_ids)} sequences for "
+            f"{len(fractions)} splits."
+        )
+
+    counts: Counter[int] = Counter()
+    candidates: dict[int, list[tuple[int, int]]] = {
+        split: [] for split in range(len(fractions))
+    }
+    candidate_limit = len(fractions)
+    for sequence_id in unique_sequence_ids:
+        split = assign_sequence_to_split(sequence_id, fractions, seed)
+        counts[split] += 1
+        digest_value = int.from_bytes(
+            hashlib.sha256(f"{seed}:{sequence_id}".encode("utf-8")).digest(),
+            byteorder="big",
+            signed=False,
+        )
+        candidate = (digest_value, sequence_id)
+        if len(candidates[split]) < candidate_limit:
+            heapq.heappush(candidates[split], candidate)
+        elif candidate > candidates[split][0]:
+            heapq.heapreplace(candidates[split], candidate)
+
+    missing_splits = [split for split in range(len(fractions)) if counts[split] == 0]
+    overrides = {}
+    for missing_split in missing_splits:
+        donor_split = max(
+            (split for split, count in counts.items() if count > 1),
+            key=lambda split: (counts[split], fractions[split], -split),
+        )
+        _, sequence_to_move = heapq.nlargest(1, candidates[donor_split])[0]
+        candidates[donor_split] = [
+            candidate
+            for candidate in candidates[donor_split]
+            if candidate[1] != sequence_to_move
+        ]
+        heapq.heapify(candidates[donor_split])
+        overrides[sequence_to_move] = missing_split
+        counts[donor_split] -= 1
+        counts[missing_split] += 1
+
+    return overrides

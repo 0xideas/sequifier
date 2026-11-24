@@ -88,14 +88,7 @@ def trajectory_rows(trajectory):
     if execution and execution.get("config"):
         policy = ResolvedPolicyBinding.model_validate(execution["config"])
         episode = sequence_from_trajectory(trajectory, policy)
-    origin = trajectory.metadata.get("seed_origin", {})
-    group = (
-        fingerprint(
-            {key: origin[key] for key in ("dataset", "sequenceId", "itemPosition")}
-        )
-        if {"dataset", "sequenceId", "itemPosition"} <= origin.keys()
-        else None
-    )
+    group = trajectory.seed_group
     scalar_policy = trajectory.format in {
         "sequifier.scalar-policy-trajectory",
         "sequifier.policy-trajectory",

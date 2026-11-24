@@ -1,5 +1,3 @@
-import hashlib
-import heapq
 import json
 import math
 import multiprocessing
@@ -63,6 +61,7 @@ from sequifier.io.feature_fitting import (
     validate_cardinality_values,
 )
 from sequifier.io.images import _time_ms, validate_sources
+from sequifier.io.partitioning import sequence_split_overrides
 from sequifier.io.preprocessing_workspace import WORKSPACE_DIR, preprocessing_workspace
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
@@ -266,7 +265,7 @@ def _estimate_window_proportions(
 def _between_sequence_assignments(lengths, plan, seed, assignments=None):
     ratios = list(plan.ratios)
     if assignments is None:
-        assignments = _balanced_sequence_split_assignments(list(lengths), ratios, seed)
+        assignments = sequence_split_overrides(lengths, {}, ratios, seed)
     counts = [0] * len(ratios)
     for sequence, length in lengths.items():
         split = assignments.get(sequence)
@@ -1012,25 +1011,17 @@ class Preprocessor:
                 self.sequence_identities[key] = (episode_identity(key), group)
 
     def _sequence_assignments(self, sequences):
-        from sequifier.io.partitioning import partition_components
-
         groups = {
-            seq: group
+            seq: (group,)
             for seq, (_, group) in self.sequence_identities.items()
             if group is not None
         }
-        ratios = _require_split_ratios(self.config.split_ratios)
-        if not groups:
-            return _balanced_sequence_split_assignments(
-                list(sequences), ratios, self.config.seed
-            )
-        partitions = partition_components(
-            sorted(sequences),
-            lambda seq: [groups[seq]] if seq in groups else [],
-            ratios,
+        return sequence_split_overrides(
+            sequences,
+            groups,
+            _require_split_ratios(self.config.split_ratios),
             self.config.seed,
         )
-        return {seq: index for index, part in enumerate(partitions) for seq in part}
 
     def _process(self, indexed_writer, indexed_prediction) -> None:
         from sequifier.io.preprocessing_output import IndexedOutput, WindowOutput
@@ -3094,59 +3085,6 @@ def _batch_to_arrays(batch: pl.DataFrame, data_columns: list[str]) -> BatchArray
         run_starts=starts,
         run_stops=stops,
     )
-
-
-@beartype
-def _balanced_sequence_split_assignments(
-    sequence_ids: list[int], split_ratios: list[float], seed: int
-) -> dict[int, int]:
-    """Return sparse overrides ensuring deterministic splits are non-empty."""
-    unique_sequence_ids = sorted(set(sequence_ids))
-    if len(unique_sequence_ids) < len(split_ratios):
-        raise ValueError(
-            "between_sequence splitting needs at least as many sequences as requested "
-            f"splits; found {len(unique_sequence_ids)} sequences for "
-            f"{len(split_ratios)} splits."
-        )
-
-    counts: Counter[int] = Counter()
-    candidates: dict[int, list[tuple[int, int]]] = {
-        split: [] for split in range(len(split_ratios))
-    }
-    candidate_limit = len(split_ratios)
-    for sequence_id in unique_sequence_ids:
-        split = assign_sequence_to_split(sequence_id, split_ratios, seed)
-        counts[split] += 1
-        digest_value = int.from_bytes(
-            hashlib.sha256(f"{seed}:{sequence_id}".encode("utf-8")).digest(),
-            byteorder="big",
-            signed=False,
-        )
-        candidate = (digest_value, sequence_id)
-        if len(candidates[split]) < candidate_limit:
-            heapq.heappush(candidates[split], candidate)
-        elif candidate > candidates[split][0]:
-            heapq.heapreplace(candidates[split], candidate)
-
-    missing_splits = [split for split in range(len(split_ratios)) if counts[split] == 0]
-    overrides = {}
-    for missing_split in missing_splits:
-        donor_split = max(
-            (split for split, count in counts.items() if count > 1),
-            key=lambda split: (counts[split], split_ratios[split], -split),
-        )
-        _, sequence_to_move = heapq.nlargest(1, candidates[donor_split])[0]
-        candidates[donor_split] = [
-            candidate
-            for candidate in candidates[donor_split]
-            if candidate[1] != sequence_to_move
-        ]
-        heapq.heapify(candidates[donor_split])
-        overrides[sequence_to_move] = missing_split
-        counts[donor_split] -= 1
-        counts[missing_split] += 1
-
-    return overrides
 
 
 @beartype

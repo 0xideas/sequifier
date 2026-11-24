@@ -16,8 +16,7 @@ from sequifier.io.atomic import atomic_path
 from sequifier.io.episode_corpus import EpisodeCorpus
 from sequifier.io.feature_fitting import FeatureStatistics, FittedColumns, FittingRules
 from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
-from sequifier.io.partitioning import partition_components
-from sequifier.io.policy_dataset import EpisodeDecisions
+from sequifier.io.policy_dataset import EpisodeDecisions, episode_split_assignments
 from sequifier.io.preprocessing_workspace import preprocessing_workspace
 from sequifier.io.sequence import CONTEXT_COLUMN, CONTEXT_RECORDS
 from sequifier.io.window_placement import (
@@ -82,24 +81,16 @@ def _prepare_policy(config, writer):
     )
     assigned = {}
     if config.split_method == "between_sequence":
-
-        def leakage_keys(index):
-            yield ("content", decisions.demonstration_keys[index])
-            if decisions.group_ids[index] is not None:
-                yield ("group", decisions.group_ids[index])
-
-        partitions = partition_components(
-            range(len(decisions.episodes)),
-            leakage_keys,
-            fractions,
-            config.run.reproducibility.seed,
+        assigned = dict(
+            enumerate(
+                episode_split_assignments(
+                    decisions,
+                    list(fractions),
+                    config.run.reproducibility.seed,
+                    group_identical=True,
+                )
+            )
         )
-        assigned = {
-            index: split
-            for split, indices in enumerate(partitions)
-            for index in indices
-        }
-    sequence_ids = {name: index for index, name in enumerate(decisions.all_episode_ids)}
     observations, static = policy.observation_columns, policy.static_columns
     static = [name for name in static if name != PREFIX_IMAGE]
     images = frozen.image_sources if frozen is not None else {}
@@ -204,7 +195,7 @@ def _prepare_policy(config, writer):
 
     def episode_rows(index):
         episode = episodes[index]
-        table = encoder.table(sequence_ids[episode.episode_id], episode)
+        table = encoder.table(decisions.sequence_ids[index], episode)
         return _action_features(
             pl.from_arrow(cast_episode_table(table, schema)), policy
         )
@@ -275,9 +266,7 @@ def _prepare_policy(config, writer):
     for index in range(len(episodes)):
         record = episodes.metadata(index)
         episode_id = record.episode_id
-        sequence_id = episodes[index].sequence_id
-        if sequence_id is None:
-            sequence_id = sequence_ids[episode_id]
+        sequence_id = decisions.sequence_ids[index]
         checkpoint = writer.item_checkpoint(sequence_id)
         static_path = writer.workspace / f"static-{sequence_id}.parquet"
         if checkpoint.is_file():
