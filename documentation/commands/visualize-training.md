@@ -30,7 +30,7 @@ Unlike other commands that rely on a YAML config, `visualize-training` is config
 | `--bucket-training-batches` | `int` | `null` | Smooths the training loss curve by averaging the loss over a specified number of batches. **Must be a multiple of the logged batch interval** used during training. |
 | `--project-root` | `str` | `.` | The root directory of your Sequifier project. |
 
-For a single-dataset model, the command reads `logs/[MODEL_NAME]/[MODEL_NAME]-training-full.csv` and `logs/[MODEL_NAME]/[MODEL_NAME]-validation-full.csv`. The corresponding files without `-full` contain only condensed global-loss records.
+For a single-dataset model, the command reads `logs/[MODEL_NAME]/[MODEL_NAME]-training-full.csv` and adds evaluation results from `[MODEL_NAME]-validation-full.csv` in the same directory when available. Runs with training metrics alone produce a training curve. The corresponding files without `-full` contain only condensed global-loss records.
 
 For a mixed run, pass the parent model name. The report shows a plot for each phase
 so supervised loss and policy metrics retain their own scales. It also reads older

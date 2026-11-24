@@ -876,6 +876,7 @@ class Preprocessor:
                 dependencies=self.sequence_dependencies,
                 mask_column=self.config.mask_column,
                 split_column=self.config.split_column,
+                curriculum_columns=curriculum_columns(self.config.curriculum_column),
                 indexed_passthrough=self.config.indexed_passthrough,
             ) as (
                 table,

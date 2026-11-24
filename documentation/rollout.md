@@ -123,7 +123,10 @@ and an action share a name such as `x`, select `x` for the observation and
 `sequence_view: observations`, each sequence also includes its final successor
 when recorded. For value-cutoff splits, a successor uses its own observed split
 value when the split column is an observation. An auxiliary split column carries
-the final decision's value forward to its successor.
+the final decision's value forward to its successor. Auxiliary columns named by
+`curriculum_column` also carry the final decision's values onto that row. The
+usual requirement that each curriculum value be constant within a generated
+subsequence applies.
 Existing inference trajectory JSON can be read through the same
 interface. Supervised preprocessing extracts the declared static fields into a
 separate table with one row per sequence.

@@ -62,8 +62,6 @@ class PredictionInput(InferenceInput):
 
 class PolicyInput(InferenceInput):
     previous_action_columns: dict[str, str] = Field(default_factory=dict)
-    sequence_id_column: str = "sequenceId"
-    item_position_column: str = "itemPosition"
     desired_return_column: str = "desired_return"
 
 

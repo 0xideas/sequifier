@@ -310,14 +310,14 @@ selection, read/write formats, device, seed, `enforce_determinism` and batch siz
 | `desired_return` | null; fixed budget for return-conditioned policies |
 | `input.desired_return_column` | `desired_return`; per-row budget when no fixed budget is supplied |
 | `input.previous_action_columns` | {}; recorded lagged-action column mappings for fragments |
-| `input.sequence_id_column`, `input.item_position_column` | `sequenceId`, `itemPosition`; raw history ordering |
 | `output.output_probabilities` | false; include joint log probability and write separate target-specific categorical probability files |
 | `rollout` | null; execute in an online policy environment instead of writing prediction rows |
 
-Sequence identifiers must be non-null integers, including a custom
-`input.sequence_id_column`. Fresh raw tables use the preprocessing coordinates
-`sequenceId` and `itemPosition` and may supply additional integer coordinates
-for policy history. Policy predictions and rollouts read available preceding context at split boundaries.
+Policy prediction and rollout group rows by `sequenceId` and order them by
+`itemPosition`, using the same coordinates as preprocessing. Sequence IDs must
+be non-null integers. If your source uses `episode` and `step` for these roles,
+map them to `sequenceId` and `itemPosition` before preprocessing.
+Policy predictions and rollouts read available preceding context at split boundaries.
 Only split-owned decisions get output rows or seed indices. Use
 `rollout.seed_history: current` for a fresh one-observation reset.
 

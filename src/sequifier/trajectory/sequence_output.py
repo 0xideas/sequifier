@@ -321,6 +321,7 @@ def supervised_manifest_input(
     dependencies=None,
     mask_column=None,
     split_column=None,
+    curriculum_columns=(),
     indexed_passthrough=(),
 ):
     """Feed the verified shards to ordinary file preprocessing, including split fitting."""
@@ -409,6 +410,11 @@ def supervised_manifest_input(
             columns = coordinates + observations + list(static)
             if OBSERVATION_MASK in schema:
                 columns.append(OBSERVATION_MASK)
+            for name in curriculum_columns:
+                if name not in schema:
+                    raise ValueError(f"Missing curriculum column {name!r} in {path}")
+                if name not in columns:
+                    columns.append(name)
             if split_column and split_column not in columns:
                 # An auxiliary cutoff belongs to the decision that produced the successor.
                 columns.append(split_column)
@@ -441,7 +447,9 @@ def supervised_manifest_input(
         if static:
             static_path = table.with_suffix(".static.parquet")
             scan.select("sequenceId", *static).unique().sink_parquet(static_path)
-            scan = scan.drop(static)
+            scan = scan.drop(
+                [name for name in static if name not in curriculum_columns]
+            )
         scan = scan.with_columns(
             observation_mask(scan, mask_column).alias(mask_column or OBSERVATION_MASK)
         )

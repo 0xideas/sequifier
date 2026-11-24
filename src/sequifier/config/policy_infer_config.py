@@ -39,8 +39,6 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     desired_return: float | None = Field(default=None, allow_inf_nan=False)
     desired_return_column: str = "desired_return"
     previous_action_columns: dict[str, str] = Field(default_factory=dict)
-    sequence_id_column: str = "sequenceId"
-    item_position_column: str = "itemPosition"
     rollout: PolicyRolloutConfig | None = None
     # Optional assertions against the portable artifact contract.
     input_columns: list[str] | None = None

@@ -306,7 +306,7 @@ def _model_plot_data(args, model):
             all(row["algorithm"] == "supervised" for row in rows)
             or len({row["phase"] for row in rows}) == 1
         ):
-            metrics = parser.parse_rows(rows, evaluations)
+            metrics = parser.parse_rows(rows, evaluations, allow_training_only=True)
             return format_plot_data(metrics, args.bucket_training_batches, model)
 
     phases = {}
