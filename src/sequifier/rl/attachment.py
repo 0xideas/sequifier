@@ -31,12 +31,16 @@ def bind_policy(execution, interface_name, binding=None) -> ResolvedPolicyBindin
             raise ValueError(f"{name}: action type differs from the model")
         if field.type == "categorical" and not field.values:
             inverse = {v: k for k, v in interface.id_maps.get(name, {}).items()}
+            decoder_ids = interface.target_decoder_ids[name]
+            labels = [inverse[i] for i in decoder_ids if i in inverse]
+            # A partial string codec has no domain label for its unused slots.
+            # Numeric codecs can also execute a decoder ID as an integer action.
+            if not any(isinstance(label, str) for label in labels):
+                labels = [inverse.get(i, i) for i in decoder_ids]
             actions[name] = type(field).model_validate(
                 {
                     **field.model_dump(),
-                    "values": [
-                        inverse.get(i, i) for i in interface.target_decoder_ids[name]
-                    ],
+                    "values": labels,
                 }
             )
     static = [

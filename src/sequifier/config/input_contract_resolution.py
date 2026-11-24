@@ -6,7 +6,7 @@ def validate_input_contracts(config, resolved):
         return
     for name, spec in config.model.interfaces.items():
         declaration = spec.input_contract
-        if declaration.cardinality_config is not None:
+        if getattr(declaration, "cardinality_config", None) is not None:
             storage = resolved.execution.interface_storage.get(name)
             interface = resolved.interface(name)
             recorded = (
