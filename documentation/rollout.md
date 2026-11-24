@@ -119,7 +119,10 @@ one row per action, including named action fields when selected. When an observa
 and an action share a name such as `x`, select `x` for the observation and
 `__executed_x` for the action. With
 `sequence_view: observations`, each sequence also includes its final successor
-when recorded. Existing inference trajectory JSON can be read through the same
+when recorded. For value-cutoff splits, a successor uses its own observed split
+value when the split column is an observation. An auxiliary split column carries
+the final decision's value forward to its successor.
+Existing inference trajectory JSON can be read through the same
 interface. Supervised preprocessing extracts the declared static fields into a
 separate table with one row per sequence.
 

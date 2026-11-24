@@ -845,6 +845,7 @@ class Preprocessor:
         self.sequence_manifest_path = None
         self.sequence_view = config.sequence_view
         self.external_static_source = None
+        self.static_cardinality = {}
 
     def run(self, *, indexed_writer=None, indexed_prediction=False) -> None:
         from sequifier.io.indexed_sequences import IndexedSequenceWriter
@@ -860,6 +861,7 @@ class Preprocessor:
                 self.config.sequence_view,
                 dependencies=self.sequence_dependencies,
                 mask_column=self.config.mask_column,
+                split_column=self.config.split_column,
             ) as (
                 table,
                 manifest,
@@ -1043,9 +1045,6 @@ class Preprocessor:
 
         self.data_name_root = Path(config.preprocessing_data_path).stem
         self.target_dir = f"{self.data_name_root}-temp"
-        self.cardinality_config = _normalize_cardinality_config(
-            config.cardinality_config
-        )
         _normalized_split_cutoffs(config.split_values)
         self.n_splits = len(config.window_lengths)
         self.storage_layout = StoredWindowLayout(
@@ -1144,13 +1143,30 @@ class Preprocessor:
 
         self._setup_split_paths(config.write_format, self.n_splits)
         self._static_source = self._load_static_source()
-        if frozen_metadata is not None and self._static_source is not None:
-            supplied = set(self._static_source.columns) - {"sequenceId"}
-            expected = set(frozen_metadata.get("static_columns", []))
-            if not supplied <= expected:
-                raise ValueError(
-                    f"Unexpected static columns: {sorted(supplied - expected)}"
-                )
+        cardinality = _normalize_cardinality_config(config.cardinality_config)
+        static_names = (
+            set(self._static_source.columns) - {"sequenceId"}
+            if self._static_source is not None
+            else set()
+        )
+        if self._frozen_metadata is not None:
+            persisted = _normalize_cardinality_config(
+                self._frozen_metadata.get("cardinality_config")
+            )
+            if cardinality and cardinality != persisted:
+                raise ValueError("cardinality_config must match metadata_config_path")
+            cardinality = persisted
+        self.static_cardinality = {
+            name: rule for name, rule in cardinality.items() if name in static_names
+        }
+        frozen_static = set((self._frozen_metadata or {}).get("static_columns", ()))
+        if frozen_metadata is not None and (unexpected := static_names - frozen_static):
+            raise ValueError(f"Unexpected static columns: {sorted(unexpected)}")
+        self.cardinality_config = {
+            name: rule
+            for name, rule in cardinality.items()
+            if name not in static_names and name not in frozen_static
+        }
         if config.depth_layouts:
             from sequifier.io.depth_preprocess import preprocess_depth
 
@@ -1662,6 +1678,7 @@ class Preprocessor:
                 )
             )
             rules = FittingRules(
+                cardinality=self.static_cardinality,
                 categorical=self.config.static_categorical_columns,
                 real=self.config.static_real_columns,
             )
@@ -1670,7 +1687,9 @@ class Preprocessor:
             maps, stats = features.finish(rules)
             fitted = FittedColumns.resolve(columns, maps, stats, static.schema)
         static = with_domain_record(static, columns, DOMAIN_STATIC)
-        static = fitted.transform(static, self.normalize_real_columns, {})
+        static = fitted.transform(
+            static, self.normalize_real_columns, self.static_cardinality
+        )
         self.output.write_static(static, fitted.metadata())
 
     def _frozen_temporal_features(
@@ -1705,15 +1724,13 @@ class Preprocessor:
             real=self.config.real_columns,
         )
         self.metadata_fitted_on_all_data = metadata.get("normalize_on_all_data", True)
-        persisted = _normalize_cardinality_config(metadata.get("cardinality_config"))
-        if self.cardinality_config and self.cardinality_config != persisted:
-            raise ValueError("cardinality_config must match metadata_config_path")
         if self.indexed_prediction:
-            persisted = {
-                name: rule for name, rule in persisted.items() if name in data_columns
+            self.cardinality_config = {
+                name: rule
+                for name, rule in self.cardinality_config.items()
+                if name in data_columns
             }
-        _validate_cardinality_columns(persisted, data_columns, {})
-        self.cardinality_config = persisted
+        _validate_cardinality_columns(self.cardinality_config, data_columns, {})
         configured = configured_column_types(self.column_data_types, data_columns)
         if self.config.depth_layouts and configured and configured != fitted.col_types:
             raise ValueError("Configured output types differ from reused metadata")
@@ -2186,7 +2203,7 @@ class Preprocessor:
                     else {}
                 ),
                 "use_precomputed_maps": self.config.use_precomputed_maps,
-                "cardinality_config": self.cardinality_config,
+                "cardinality_config": self.cardinality_config | self.static_cardinality,
                 **fitted.metadata(for_resume=True),
                 "normalize_real_columns": self.normalize_real_columns,
                 "normalize_on_all_data": self.config.normalize_on_all_data,
@@ -2300,7 +2317,7 @@ class Preprocessor:
         self.output_features = fitted
         data_driven_config = {
             **fitted.metadata(),
-            "cardinality_config": self.cardinality_config,
+            "cardinality_config": self.cardinality_config | self.static_cardinality,
             "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             "split_names": list(self.config.splits),
             "split_paths": [

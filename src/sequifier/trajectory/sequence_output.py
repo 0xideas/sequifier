@@ -326,7 +326,12 @@ def _validated_mask(scan, column, path):
 
 @contextmanager
 def supervised_manifest_input(
-    path, sequence_view="decisions", *, dependencies=None, mask_column=None
+    path,
+    sequence_view="decisions",
+    *,
+    dependencies=None,
+    mask_column=None,
+    split_column=None,
 ):
     """Feed the verified shards to ordinary file preprocessing, including split fitting."""
     from sequifier.config.policy_train_config import SequenceSourceConfig
@@ -425,6 +430,9 @@ def supervised_manifest_input(
             coordinates = ["sequenceId", "itemPosition", "sequenceName", "__group"]
             static = manifest.get("static_columns", [])
             columns = coordinates + observations + list(static) + [OBSERVATION_MASK]
+            if split_column and split_column not in columns:
+                # An auxiliary cutoff belongs to the decision that produced the successor.
+                columns.append(split_column)
             final = final.with_columns(
                 pl.lit(False).alias(OBSERVATION_MASK),
                 (pl.col("itemPosition") + 1).alias("itemPosition"),

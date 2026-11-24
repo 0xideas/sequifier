@@ -239,13 +239,16 @@ def model_metric_tables(project_root, model_name):
 
 
 def restore_metric_positions(tables, run_id, positions, missing_offset=None):
+    tables = list(tables)
+    sizes = {path.name: path.stat().st_size for path, _ in tables if path.is_file()}
+    for name, offset in positions.items():
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise ValueError(f"Invalid metric checkpoint position for {name}")
+        if sizes.get(name, 0) < offset:
+            raise ValueError(f"Metric table shorter than checkpoint position: {name}")
     for path, fields in tables:
         offset = positions.get(path.name, missing_offset)
-        if offset is not None and (
-            not isinstance(offset, int) or isinstance(offset, bool) or offset < 0
-        ):
-            raise ValueError(f"Invalid metric checkpoint position for {path}")
-        if offset is None or not path.is_file() or path.stat().st_size <= offset:
+        if offset is None or sizes.get(path.name, 0) == offset:
             continue
         with atomic_path(path, durable=True) as temporary:
             with path.open("rb") as source, temporary.open("wb") as target:

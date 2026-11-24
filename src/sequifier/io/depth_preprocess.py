@@ -862,7 +862,6 @@ def preprocess_depth(owner, selected_columns):
     precomputed = load_precomputed_id_maps(
         config.project_root, columns, config.use_precomputed_maps
     )
-    _validate_cardinality_columns(owner.cardinality_config, columns, precomputed)
     sequence_counts = dict(sequence_counts)
     assignments = (
         _between_sequence_assignments(
@@ -890,6 +889,7 @@ def preprocess_depth(owner, selected_columns):
                 "Metadata normalization policy does not match preprocessing"
             )
         fitted = owner._frozen_temporal_features(data_columns=columns)
+    _validate_cardinality_columns(owner.cardinality_config, columns, precomputed)
     rules = FittingRules(
         precomputed,
         owner.cardinality_config,

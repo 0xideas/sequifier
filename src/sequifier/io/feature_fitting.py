@@ -193,10 +193,10 @@ class FeatureStatistics:
             if name in (rules.categorical or ()) or (
                 categorical and name not in (rules.real or ())
             ):
+                if name in rules.precomputed and (categorical or dtype.is_float()):
+                    continue
                 if not categorical:
                     raise ValueError(f"{name}: unsupported categorical dtype {dtype}")
-                if name in rules.precomputed:
-                    continue
                 limit = rules.cardinality.get(name)
                 if limit is None:
                     self.vocabularies.setdefault(name, set()).update(

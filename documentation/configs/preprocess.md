@@ -414,10 +414,12 @@ data; decoded bucket values appear as `[hash_bucket:k]`. Null values retain the
 reserved `[unknown]` ID.
 
 By default, frequencies and retained values are fitted on split 0. Set
-`normalize_on_all_data: true` to fit them on all data. A configured column must
-be categorical, must appear in `selected_columns` when that list is set, and
-cannot also appear in `use_precomputed_maps`. If `categorical_columns` is set,
-include the configured column there. Preprocessing hashing is independent of
+`normalize_on_all_data: true` to fit them on all data. For temporal features,
+include the column in `selected_columns` and `categorical_columns` when those
+lists are set. Declare static features in `static_categorical_columns` and use
+the same `cardinality_config` mapping. Static fitting counts each training
+sequence once. Reusing metadata preserves the fitted vocabulary and hash rules.
+A configured column cannot also appear in `use_precomputed_maps`. Preprocessing hashing is independent of
 the model interface's `categorical_hashing` setting described in the
 [training guide](train.md#categorical-multi-hash-embeddings-and-targets).
 

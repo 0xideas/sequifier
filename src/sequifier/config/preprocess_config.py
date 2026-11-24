@@ -344,18 +344,20 @@ class PreprocessorModel(SequencePreprocessingSettings):
         real = set(self.real_columns or [])
         declared = categorical | real
         cardinality_columns = set(self.cardinality_config)
-        if cardinality_columns & real:
+        real_limits = cardinality_columns & (real | set(self.static_real_columns))
+        if real_limits:
             raise ValueError(
                 "cardinality_config may only reference categorical columns. "
-                f"Real columns: {sorted(cardinality_columns & real)}"
+                f"Real columns: {sorted(real_limits)}"
             )
-        if categorical and cardinality_columns - categorical:
+        temporal_limits = cardinality_columns - set(self.static_categorical_columns)
+        if categorical and temporal_limits - categorical:
             raise ValueError(
                 "When categorical_columns is set, cardinality_config columns must "
-                f"be categorical. Invalid: {sorted(cardinality_columns - categorical)}"
+                f"be categorical. Invalid: {sorted(temporal_limits - categorical)}"
             )
         if self.selected_columns is not None:
-            unselected_cardinality = cardinality_columns - set(self.selected_columns)
+            unselected_cardinality = temporal_limits - set(self.selected_columns)
             if unselected_cardinality:
                 raise ValueError(
                     "cardinality_config columns must be selected columns. "
