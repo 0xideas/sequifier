@@ -26,10 +26,7 @@ from sequifier.artifacts.dependencies import (
     add_backbone_revision,
     add_initialization,
 )
-from sequifier.artifacts.model_artifact import (
-    read_execution_artifact,
-    save_model_artifact,
-)
+from sequifier.artifacts.model_artifact import read_execution_artifact
 from sequifier.artifacts.phase import (
     CommittedPhases,
     PhaseCommit,
@@ -51,7 +48,7 @@ from sequifier.config.components import ResumeConfig
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import file_checksum
 from sequifier.io.atomic import atomic_path, atomic_save
-from sequifier.io.output_paths import validate_training_destinations
+from sequifier.io.output_paths import policy_graph_paths, validate_training_destinations
 from sequifier.runtime.plan import (
     PhaseOutcome,
     RunIdentity,
@@ -477,8 +474,11 @@ def _run_learning_plan(config, prepared, environment):
     )
 
     def publish_final():
+        from sequifier.rl.checkpoint import publish_policy_model
+
         final = read_execution_artifact(completed[-1].model_path)
-        save_model_artifact(final, config.outputs.model_path)
+        graph_paths = policy_graph_paths(config)
+        publish_policy_model(config, final, graph_paths)
         initialization = (
             completed[0]
             .result["provenance"]
@@ -491,6 +491,7 @@ def _run_learning_plan(config, prepared, environment):
             identity,
             completed,
             resume=resume,
+            additional_exports=graph_paths.values(),
             completion_reason=completion_reason,
             source_provenance={
                 **manifest.identity,

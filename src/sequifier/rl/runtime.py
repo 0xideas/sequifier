@@ -9,6 +9,7 @@ import torch
 
 from sequifier.config.policy_infer_config import PolicyRolloutConfig
 from sequifier.config.rollout_config import TrajectoryInputBinding
+from sequifier.io.action_record import action_record_layout
 from sequifier.io.values import numeric_scalar, portable_fields
 from sequifier.rl.collection import PolicyCursor, PolicyDecision
 from sequifier.rl.environment import (
@@ -19,13 +20,13 @@ from sequifier.rl.environment import (
     validate_online_adapter,
     validate_reset,
 )
-from sequifier.rl.policy import Policy
+from sequifier.rl.policy import ExecutablePolicy
 from sequifier.trajectory.recording import TrajectoryRecorder, close_adapter
 from sequifier.trajectory.schema import SeedHistory, Trajectory, validate_policy_seed
 
 
 def collect_policy_rollout(
-    policy: Policy,
+    policy: ExecutablePolicy,
     adapter: OnlineEnvironmentAdapter,
     seed: SeedHistory,
     config: PolicyRolloutConfig,
@@ -37,6 +38,7 @@ def collect_policy_rollout(
     action_selection: Literal["deterministic", "stochastic"] = "deterministic",
     random_seed: int = 1010,
     journal=None,
+    compute_entropy=True,
 ) -> Trajectory:
     """Execute a supplied initial observation, preserving actual episode boundaries."""
     was_training, failed = policy.training, False
@@ -138,7 +140,10 @@ def collect_policy_rollout(
         observation = dict(initial.observation)
 
         def select():
-            decision = cursor.decide(deterministic=action_selection == "deterministic")
+            decision = cursor.decide(
+                deterministic=action_selection == "deterministic",
+                compute_entropy=compute_entropy,
+            )
             return {
                 "decision": asdict(decision),
                 "rng": cursor.generator.get_state().tolist(),
@@ -162,7 +167,8 @@ def collect_policy_rollout(
                 result = cursor.accept_step(decision, response)
             else:
                 decision = cursor.decide(
-                    deterministic=action_selection == "deterministic"
+                    deterministic=action_selection == "deterministic",
+                    compute_entropy=compute_entropy,
                 )
                 result = cursor.step(decision)
 
@@ -176,7 +182,7 @@ def collect_policy_rollout(
                 if result.observation is not None
                 else None
             )
-            latents, components = policy.action_plan.record_layout.unpack_auxiliary(
+            latents, components = action_record_layout(spec).unpack_auxiliary(
                 decision.action
             )
             transition = recorder.append(

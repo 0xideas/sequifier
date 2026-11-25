@@ -46,8 +46,7 @@ sequifier infer --config-path configs/infer.yaml
 > `run.execution.device: cuda` alone does not enable GPU inference. See the
 > [ONNX Runtime CUDA compatibility guide](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html).
 
-PT is the default training export. Supervised runs may explicitly request
-ONNX for deployment-oriented inference.
+PT is the default training export. Supervised and policy runs can also export ONNX graphs.
 Exports embed their execution contract. Select a training route when providing
 model configuration through a training config:
 
@@ -293,7 +292,7 @@ ORT installation. Outputs stay indexed by outer item coordinates.
 ## Policy model interfaces
 
 `task` explicitly selects the operation. `task: policy` requires one
-portable PT model or executable run checkpoint with a policy-bound interface. `task: forecast` requests ordinary predictions,
+policy ONNX graph, portable PT model, or executable run checkpoint with a policy-bound interface. `task: forecast` requests ordinary predictions,
 including from a policy-bound interface with a supported forecast contract.
 `task: embedding` extracts representations. Select `artifact.interface` when ambiguous.
 The artifact validates task support; it never chooses the operation implicitly.

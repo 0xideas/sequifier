@@ -485,17 +485,15 @@ def fresh_view_from_raw(
 
 def export_policy_metadata(config):
     """Export the frozen contract of a policy trained before explicit preparation."""
-    from sequifier.artifacts.model_artifact import read_execution_artifact
-    from sequifier.config.inference_common import resolve_inference_model
+    from sequifier.config.inference_common import ResolvedInferenceModel
 
     root = Path(config.run.project_root)
     path = root / config.model_path
-    artifact = read_execution_artifact(str(path))
-    execution, name = resolve_inference_model(
-        artifact.model_config.values,
-        interface_name=config.model_interface,
-        task="policy",
+    model = ResolvedInferenceModel.load(
+        str(path), interface_name=config.model_interface, task="policy"
     )
+    execution, name = model.execution, model.interface_name
+    assert execution is not None and name is not None
     interface = execution.interface(name)
     if interface.policy is None:
         raise ValueError("Metadata export requires a policy-bound model")

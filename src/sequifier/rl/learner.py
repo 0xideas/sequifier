@@ -25,8 +25,12 @@ from sequifier.artifacts.reports import (
 from sequifier.artifacts.state_dict import weight_fingerprint
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
-from sequifier.io.output_paths import validate_training_destinations
-from sequifier.rl.checkpoint import save_policy, validate_policy_weights
+from sequifier.io.output_paths import policy_graph_paths, validate_training_destinations
+from sequifier.rl.checkpoint import (
+    policy_model_artifact,
+    publish_policy_model,
+    validate_policy_weights,
+)
 from sequifier.rl.compilation import compiled_policies
 from sequifier.rl.preparation import (
     PolicyGroupPreparation,
@@ -562,12 +566,14 @@ def execute_policy(
     def publish_final():
         data.clear()
         prepared.close()
+        graph_paths = policy_graph_paths(config.parent)
         report = run_report(
             config.outputs,
             checkpoint,
             identity,
             recovery.completed,
             resume=config.resume,
+            additional_exports=graph_paths.values(),
             completion_reason=completion_reason,
             plan=plan,
             plan_fingerprint=fingerprint(plan),
@@ -586,7 +592,8 @@ def execute_policy(
             resource_accounting=prepared.accounting.snapshot(),
         )
         results = tuple(PhaseResult.model_validate(phase) for phase in report["phases"])
-        save_policy(actor.eval(), config.outputs.model_path, metadata=report)
+        artifact = policy_model_artifact(actor.eval(), metadata=report)
+        publish_policy_model(config.parent, artifact, graph_paths)
         publish_run_report(report, config)
         return results
 

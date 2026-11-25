@@ -116,4 +116,4 @@ belong to the model artifact. `task: forecast` selects point prediction from a
 policy-bound artifact; `task: policy` selects policy execution. See
 [inference routing](configs/infer.md#policy-model-interfaces).
 Sequifier handles format validation when it loads model artifacts, trajectories,
-and PPO collection records. ONNX remains a prediction export.
+and PPO collection records. Policy and mixed plans can also [export an executable ONNX actor](policy-learning.md#onnx-export).

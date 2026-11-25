@@ -7,7 +7,8 @@ from dataclasses import dataclass, replace
 import torch
 
 from sequifier.contract_versions import ContractVersions
-from sequifier.io.actions import action_record
+from sequifier.io.action_record import action_record_layout
+from sequifier.io.actions import action_record, decode_action
 from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import validate_reset, validate_step
 from sequifier.rl.history import PolicyHistory
@@ -139,10 +140,12 @@ class PolicyCursor:
         )
         if not torch.isfinite(estimate).all():
             raise ValueError("non-finite collection value")
-        decision = actor.action_plan.from_record(record).cpu()
+        if record.keys() - action_record_layout(actor.config).keys:
+            raise ValueError("joint action contains unknown fields")
+        action = action_record(record)
         return PolicyDecision(
-            actor.action_plan.domain_action(decision),
-            action_record(actor.action_plan.to_record(decision)),
+            decode_action(action, actor.config),
+            action,
             float(score[0]),
             float(entropy[0]) if compute_entropy else 0.0,
             float(estimate[0]),

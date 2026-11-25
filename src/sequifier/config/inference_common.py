@@ -240,11 +240,16 @@ class ResolvedInferenceModel:
             from sequifier.model.execution_schema import (
                 EXECUTION_SCHEMA_KEY,
                 MODEL_CONFIG_KEY,
+                POLICY_GRAPH_KEY,
                 ExecutionSchema,
             )
 
             graph = onnx.load(path, load_external_data=False)
             properties = {item.key: item.value for item in graph.metadata_props}
+            if (task == "policy") != (POLICY_GRAPH_KEY in properties):
+                raise ValueError(
+                    "ONNX artifact and requested task disagree about policy execution"
+                )
             schema = ExecutionSchema.from_dict(
                 json.loads(properties.get(EXECUTION_SCHEMA_KEY, "null"))
             )
@@ -254,6 +259,26 @@ class ResolvedInferenceModel:
                 if MODEL_CONFIG_KEY in properties
                 else None
             )
+            if task == "policy":
+                from sequifier.contract_versions import (
+                    ContractVersions,
+                    require_contract_version,
+                )
+
+                policy = json.loads(properties[POLICY_GRAPH_KEY])
+                require_contract_version(
+                    "ONNX policy", policy["version"], ContractVersions.POLICY_ONNX
+                )
+                if interface_name is not None and policy["interface"] != interface_name:
+                    raise ValueError("Requested interface differs from the ONNX policy")
+                interface_name = policy["interface"]
+                if values is None:
+                    raise ValueError("ONNX policy requires a model contract")
+                interface = values["interfaces"][interface_name]
+                interface["id_maps"] = {
+                    column: dict(entries)
+                    for column, entries in interface["id_maps"].items()
+                }
         else:
             raise ValueError(f"Unsupported inference model format: {path}")
         execution = None

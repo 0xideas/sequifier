@@ -1,6 +1,6 @@
 """Versioned execution descriptors shared by PT, ONNX, and warm-up."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 import torch
 
@@ -13,6 +13,7 @@ from sequifier.contract_versions import ContractVersions, require_contract_versi
 
 EXECUTION_SCHEMA_KEY = "sequifier.execution_schema"
 MODEL_CONFIG_KEY = "sequifier.model_config"
+POLICY_GRAPH_KEY = "sequifier.policy_graph"
 DROPOUT_MODE_KEY = "sequifier.dropout_mode"
 
 
@@ -197,8 +198,13 @@ class ExecutionSchema:
             for value in values["inputs"]
         )
         if any(
-            d.role not in {"feature", "static_feature", "image", "metadata"}
-            or d.dtype not in {"float32", "int64", "bool", "uint8"}
+            d.role
+            not in {"feature", "static_feature", "image", "metadata", "policy_control"}
+            or (
+                d.dtype != "float64"
+                if d.role == "policy_control"
+                else d.dtype not in {"float32", "int64", "bool", "uint8"}
+            )
             or not d.shape
             or d.shape[0] != "batch"
             for d in descriptors
@@ -208,7 +214,9 @@ class ExecutionSchema:
             raise ValueError("Duplicate execution input names")
         return cls(
             descriptors,
-            tuple(values["outputs"]),
+            tuple(
+                {**value, "shape": tuple(value["shape"])} for value in values["outputs"]
+            ),
             values["depth_layouts"],
             values["n_classes"],
         )
@@ -219,7 +227,10 @@ class ExecutionSchema:
             shape = tuple(
                 batch_size if size == "batch" else size for size in item.shape
             )
-            if item.role == "metadata":
+            if item.role == "policy_control":
+                value = torch.full(shape, 0.5, dtype=torch.float64, device=device)
+                value[0, 0] = 0.0
+            elif item.role == "metadata":
                 value = torch.ones(shape, dtype=torch.bool, device=device)
                 if len(shape) == 3 and batch_size > 1:
                     value[1, :, 1:] = False
@@ -303,3 +314,35 @@ class ExecutionSchema:
                 n_classes=self.n_classes,
                 attention_valid_mask=metadata.get("attention_valid_mask"),
             )
+
+
+def policy_graph_schema(interface, binding):
+    inputs = ExecutionSchema.from_interface(interface, binding.context_length)
+    names = tuple(binding.actions)
+    outputs = []
+
+    def output(name, key, dtype, *width):
+        outputs.append(dict(name=name, key=key, dtype=dtype, shape=("batch", *width)))
+
+    for index, name in enumerate(names):
+        categorical = binding.actions[name].type == "categorical"
+        output(f"action_{index}", name, "int64" if categorical else "float64")
+    output("joint_log_probability", "joint_log_probability", "float32")
+    for index, name in enumerate(names):
+        field = binding.actions[name]
+        if field.type == "categorical":
+            output(f"probabilities_{index}", name, "float32", len(field.values))
+    for role, dtype in (("latent", "float64"), ("component", "int64")):
+        for index, name in enumerate(names):
+            if binding.actions[name].type == "real":
+                output(f"{role}_{index}", name, dtype)
+    draws = InputDescriptor(
+        "policy_draws",
+        "policy_draws",
+        "policy_control",
+        "float64",
+        ("batch", 1 + 2 * len(names)),
+    )
+    return inputs, replace(
+        inputs, inputs=(*inputs.inputs, draws), outputs=tuple(outputs)
+    )

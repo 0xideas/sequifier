@@ -294,8 +294,11 @@ def _resolve_policy_inference(
     request: PolicyInferenceConfig,
 ) -> ResolvedPolicyInferenceConfig:
     (model_path,) = request.model_paths
-    if not model_path.lower().endswith(".pt"):
-        raise ValueError("Policy inference requires a portable .pt artifact")
+    if model_path.lower().endswith(".onnx") and request.device.split(":")[0] not in {
+        "cpu",
+        "cuda",
+    }:
+        raise ValueError("ONNX policy inference requires CPU or CUDA")
     model = ResolvedInferenceModel.load(
         normalize_path(model_path, request.project_root),
         interface_name=request.model_interface,

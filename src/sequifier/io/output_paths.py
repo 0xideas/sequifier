@@ -67,6 +67,25 @@ def run_manifest_path(config):
     ).resolve()
 
 
+def policy_graph_paths(config):
+    """Place one graph per policy-bound interface beside the canonical model."""
+    prediction = config.run.export.prediction
+    if config.run_mode == "supervised" or not prediction or not prediction.onnx:
+        return {}
+    model = Path(config.outputs.model_path)
+    names = [
+        name
+        for name, interface in config.interfaces.items()
+        if interface.policy is not None
+    ]
+    return {
+        name: model.with_suffix(".onnx")
+        if len(names) == 1
+        else model.with_name(f"{model.stem}-{name}.onnx")
+        for name in names
+    }
+
+
 def validate_training_destinations(
     config, checkpoint, protected, *, phase_offset=0, group=False
 ):
@@ -94,6 +113,9 @@ def validate_training_destinations(
     else:
         phases, resume = config.training_plan, config.run.recovery.resume
         dataset_names = tuple(config.dataset_training)
+    if not group:
+        parent = config.parent if isinstance(config, ResolvedPolicyRun) else config
+        files.extend(policy_graph_paths(parent).values())
     from sequifier.artifacts.phase import PhaseArtifacts
 
     root = Path(config.project_root)

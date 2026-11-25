@@ -79,7 +79,7 @@ class RealPredictionDistribution:
     represent endpoints; continuous samples retain transform latents for replay.
     """
 
-    def __init__(self, location, scale, field=None):
+    def __init__(self, location, scale, field=None, *, validate=True):
         self.dtype = torch.float32 if location.device.type == "mps" else torch.float64
         self.location = location.to(self.dtype)
         self.scale = torch.as_tensor(scale, device=location.device).to(self.dtype)
@@ -88,7 +88,7 @@ class RealPredictionDistribution:
             if field is not None
             else SimpleNamespace(lower=None, upper=None, atoms={})
         )
-        if (
+        if validate and (
             not torch.isfinite(self.location).all()
             or not torch.isfinite(self.scale).all()
             or (self.scale <= 0).any()
@@ -96,7 +96,9 @@ class RealPredictionDistribution:
             raise ValueError(
                 "real prediction locations and positive scales must be finite"
             )
-        self.normal = torch.distributions.Normal(self.location, self.scale)
+        self.normal = torch.distributions.Normal(
+            self.location, self.scale, validate_args=None if validate else False
+        )
 
     def _transform(self, latent):
         lower, upper = self.field.lower, self.field.upper
@@ -148,24 +150,31 @@ class RealPredictionDistribution:
             ).to(self.location.device)
 
         noise = draw(torch.randn, dtype=self.dtype)
-        self.sampled_latent = self.location + self.scale * noise
-        value = self._transform(self.sampled_latent)
-        self.sampled_component = torch.full_like(value, -1, dtype=torch.long)
+        choice = draw(torch.rand) if self.field.atoms else None
+        value, self.sampled_latent, self.sampled_component = self.select_from_noise(
+            noise, choice
+        )
+        return value
+
+    def select_from_noise(self, noise, choice):
+        """Apply the Gaussian transform and choose among any configured point masses."""
+        latent = self.location + self.scale * noise
+        value = self._transform(latent)
+        component = torch.full_like(value, -1, dtype=torch.long)
         if self.field.atoms:
-            choice = draw(torch.rand)
             cumulative = 0.0
             for index, (atom, probability) in enumerate(
                 sorted(self.field.atoms.items())
             ):
                 selected = (choice >= cumulative) & (choice < cumulative + probability)
                 value = torch.where(selected, value.new_tensor(atom), value)
-                self.sampled_component = torch.where(
+                component = torch.where(
                     selected,
-                    self.sampled_component.new_tensor(index),
-                    self.sampled_component,
+                    component.new_tensor(index),
+                    component,
                 )
                 cumulative += probability
-        return value
+        return value, latent, component
 
     def log_prob(self, value, latent=None, component=None):
         value = value.to(self.dtype)
@@ -221,24 +230,31 @@ class RealPredictionDistribution:
             fraction = (safe - lower) / (upper - lower)
             inverse = fraction.log() - torch.log1p(-fraction)
         elif lower is not None or upper is not None:
-            distance = safe - lower if lower is not None else upper - safe
+            if lower is None:
+                assert upper is not None
+                distance = upper - safe
+            else:
+                distance = safe - lower
             inverse = distance + torch.log(-torch.expm1(-distance))
         else:
             inverse = safe
         z = torch.where(supplied, latent, inverse) if latent is not None else inverse
         z = torch.where(atoms, torch.zeros_like(z), z)
+        return torch.where(atoms, atom_score, self.continuous_log_prob(z))
+
+    def continuous_log_prob(self, z):
+        lower, upper = self.field.lower, self.field.upper
         if lower is not None and upper is not None:
             jacobian = math.log(upper - lower) + F.logsigmoid(z) + F.logsigmoid(-z)
         elif lower is not None or upper is not None:
             jacobian = F.logsigmoid(z)
         else:
             jacobian = 0.0
-        score = (
+        return (
             self.normal.log_prob(z)
             - jacobian
             + math.log1p(-sum(self.field.atoms.values()))
         )
-        return torch.where(atoms, atom_score, score)
 
     def entropy(self):
         if (

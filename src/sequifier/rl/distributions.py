@@ -11,17 +11,23 @@ def action_generator(device: torch.device, seed: int) -> torch.Generator:
 
 
 class CategoricalActionDistribution:
-    def __init__(self, logits: Tensor):
+    def __init__(self, logits: Tensor, *, validate=True):
         if logits.dtype != torch.float64:
             logits = logits.float()
-        if logits.ndim < 2 or logits.shape[-1] < 1 or not torch.isfinite(logits).all():
+        if (
+            logits.ndim < 2
+            or logits.shape[-1] < 1
+            or (validate and not torch.isfinite(logits).all())
+        ):
             raise ValueError(
                 "categorical policy logits must be finite with at least one action"
             )
         self.logits = logits
         # Remove the common offset before Categorical computes its log normalizer.
         centered = logits - logits.amax(dim=-1, keepdim=True)
-        self.distribution = torch.distributions.Categorical(logits=centered.float())
+        self.distribution = torch.distributions.Categorical(
+            logits=centered.float(), validate_args=None if validate else False
+        )
 
     def mode(self) -> Tensor:
         return self.logits.argmax(dim=-1)

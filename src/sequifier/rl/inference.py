@@ -42,7 +42,12 @@ from sequifier.trajectory.tables import (
 
 def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
     configure_determinism(config.seed, config.enforce_determinism)
-    policy = load_policy(config._model, device=config.device)
+    if config._model.onnx_schema is None:
+        policy = load_policy(config._model, device=config.device)
+    else:
+        from sequifier.rl.onnx_policy import OnnxPolicy
+
+        policy = OnnxPolicy(config._model, config.device)
     spec = policy.config
     if not spec.return_conditioned and config.desired_return is not None:
         raise ValueError("behavior cloning has no desired-return input")
@@ -309,6 +314,7 @@ def infer_rollout(policy, history, config, identity):
         action_selection=config.action_selection,
         random_seed=config.seed,
         journal=rollout_journal(),
+        compute_entropy=config._model.onnx_schema is None,
     )
     trajectory.metadata.update(
         {
@@ -392,18 +398,12 @@ def _prediction_rows(policy, windows, config, generator):
         inputs = cast(SequifierInputs, collate_model_inputs(histories)).to(
             policy.device
         )
-        distribution = policy.distribution(inputs, input_encoding="model")
-        deterministic = config.action_selection == "deterministic"
-        if config.output_probabilities:
-            selected = distribution.select_and_score(
-                deterministic, generator, include_probabilities=True
-            )
-            sampled = selected.decision
-            scores, probabilities = selected.log_prob, selected.probabilities
-        else:
-            sampled = distribution.select_decision(deterministic, generator)
-            scores, probabilities = None, {}
-        actions = distribution.domain_actions(sampled)
+        actions, scores, probabilities = policy.predict_actions(
+            inputs,
+            config.action_selection == "deterministic",
+            generator,
+            probabilities=config.output_probabilities,
+        )
         for index, (identity, action) in enumerate(
             zip(identities, actions, strict=True)
         ):

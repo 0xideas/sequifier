@@ -262,6 +262,42 @@ are supported. Censored episodes and unavailable metrics are explicit. GRPO uses
 `score_mean`/`max`, including declared horizons and the fixed reward scale.
 Online intervals count completed collection/update iterations.
 
+## ONNX export
+
+To publish the selected actor after imitation, IQL, PPO, GRPO, DPO, or a mixed
+training plan, add this setting to the training YAML.
+
+```yaml
+run:
+  export:
+    prediction:
+      onnx: {}
+```
+
+With the default model path, a single policy interface produces
+`models/<model_name>.onnx` alongside the canonical PT model. Multiple bound
+interfaces produce one graph per interface, named `<model_stem>-<interface>.onnx`.
+The run manifest lists the published files. Select the graph under
+`artifact.paths` in a `task: policy` inference or rollout config. Both
+`action_selection: deterministic` and `action_selection: stochastic` use the
+same evaluation-mode graph. PT and ONNX use different sampling procedures, so
+the same seed can produce different trajectories across backends.
+
+For direct ONNX Runtime use, supply model-encoded histories in the input order
+and types described by `sequifier.execution_schema` in the graph metadata.
+The additional Float64 input `policy_draws` has shape `[batch, 1 + 2 * actions]`.
+For deterministic inference, fill it with zeros. For stochastic inference,
+set column zero to one. For each action at zero-based index `i` in the binding's
+declared order, supply an independent uniform draw in `[0, 1)` at column
+`1 + 2*i` and a standard normal draw at column `2 + 2*i`. Sequifier's CLI
+prepares these inputs automatically.
+
+Output `action_i` is a zero-based index into the field's declared values for a
+categorical action, or a real value in physical units. The graph also emits the
+joint log probability, conditional categorical probability vectors, and real
+latents and mixture components for replay. The model metadata contains the
+binding, field order, units and input transforms.
+
 ## Checkpoints and inference
 
 Policy runs use the shared `RUN_CHECKPOINT` envelope with a `POLICY_RECOVERY`

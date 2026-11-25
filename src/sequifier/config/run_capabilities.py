@@ -28,13 +28,17 @@ def validate_runner_settings(
     if not policy and run.logging.log_interval_iterations is not None:
         raise ValueError("Iteration logging requires a policy phase")
     export = run.export
-    if policy and (
-        export.embedding
-        or not export.prediction
-        or not export.prediction.pt
-        or export.prediction.onnx
-    ):
+    if policy and (export.embedding or not export.prediction):
         raise ValueError("Policy plans publish a portable prediction artifact")
+    if (
+        policy
+        and export.prediction
+        and export.prediction.onnx
+        and export.prediction.onnx.with_dropout
+    ):
+        raise ValueError(
+            "Policy ONNX export uses evaluation mode; stochastic actions use policy draws"
+        )
     if not (export.prediction or export.embedding):
         raise ValueError("Select at least one export artifact")
 
