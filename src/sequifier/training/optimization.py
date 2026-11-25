@@ -55,10 +55,39 @@ class GradientPolicy:
     clip_norm: float | None
 
 
+@dataclass
+class TokenAccumulation:
+    """Weight per-batch means by their global token counts for one update."""
+
+    tokens: int = 0
+    reference_count: int = 1
+    empty_batches: int = 0
+
+    def weight(self, count: int, optimizer: Optimizer) -> float:
+        if not self.tokens:
+            if not count:
+                # An entirely empty window still applies its regularization once.
+                self.empty_batches += 1
+                return 1.0
+            if self.empty_batches:
+                optimizer.zero_grad(set_to_none=True)
+            # Work in units of one microbatch to avoid scaling ordinary AMP
+            # gradients up by the full number of tokens before backward.
+            self.reference_count = count
+        self.tokens += count
+        return count / self.reference_count
+
+    @property
+    def divisor(self) -> float:
+        if self.tokens:
+            return self.tokens / self.reference_count
+        return float(max(1, self.empty_batches))
+
+
 @dataclass(frozen=True)
 class UpdatePolicy:
     frozen_parameter_ids: frozenset[int] = frozenset()
-    gradient_divisor: int = 1
+    gradient_divisor: float = 1.0
 
 
 @dataclass(frozen=True)

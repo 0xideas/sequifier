@@ -8,14 +8,25 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from sequifier.artifacts.dependencies import add_initialization
+from sequifier.artifacts.backbone_repository import (
+    load_revision,
+    publish_selected_backbone,
+    select_revision,
+)
+from sequifier.artifacts.dependencies import add_backbone_revision, add_initialization
 from sequifier.artifacts.phase import CommittedPhases, PhaseArtifacts, PhasePublication
-from sequifier.artifacts.reports import PhaseResult, publish_run_report, run_report
+from sequifier.artifacts.reports import (
+    PhaseResult,
+    completed_run_report,
+    publish_run_report,
+    run_report,
+)
 from sequifier.artifacts.state_dict import weight_fingerprint
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
 from sequifier.io.output_paths import validate_training_destinations
 from sequifier.rl.checkpoint import save_policy, validate_policy_weights
+from sequifier.rl.compilation import compiled_policies
 from sequifier.rl.preparation import (
     PolicyGroupPreparation,
     build_actor,
@@ -42,6 +53,7 @@ from sequifier.runtime.plan import (
     validate_continuation,
 )
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
+from sequifier.training.metrics import progress_after
 
 if TYPE_CHECKING:
     from sequifier.config.train_config import ResolvedSequifierConfig, SequifierConfig
@@ -136,7 +148,12 @@ def run_policy_training(
     if isinstance(config, SequifierConfig):
         config = resolve_training_run(config)
     if not isinstance(config, ResolvedSequifierConfig) or any(
-        phase.algorithm == "supervised" for phase in config.training_plan
+        phase.algorithm == "supervised"
+        for phase in (
+            config._rollout_plan.ordered_phases
+            if config._rollout_plan
+            else config.training_plan
+        )
     ):
         raise TypeError("policy training requires a resolved policy-only training plan")
     return run_policy_plan(config)
@@ -149,6 +166,7 @@ def execute_policy(
     identity=None,
     publication: PhasePublication = PhasePublication(),
     preparation=None,
+    backbone_revision=None,
 ):
     torch.set_float32_matmul_precision("highest")
     configure_determinism(
@@ -171,11 +189,28 @@ def execute_policy(
         run_id=identity.run_id if identity is not None else None,
     )
     resuming = recovery is not None
+    terminal = recovery is not None and (
+        recovery.phase_index == len(config.phases) or recovery.stopped
+    )
+    if publication.standalone and not config.initialize_from:
+        if recovery is None:
+            backbone_revision = select_revision(
+                config.parent.execution.backbone, config.project_root
+            )
+        elif pinned := recovery.initialization.get("backbone_parent_revision_id"):
+            backbone_revision = select_revision(
+                config.parent.execution.backbone,
+                config.project_root,
+                revision_id=pinned,
+            )
+    parent_revision_id = backbone_revision["revision_id"] if backbone_revision else None
     if preparation is None:
         preparation = PolicyGroupPreparation.build(
             config,
             prepared,
+            backbone_revision_id=parent_revision_id,
             saved=recovery.data_identity if recovery is not None else None,
+            known_adapters=recovery.adapter_contract if recovery and terminal else None,
             committed_reference_count=(
                 recovery.phase_index + int(recovery.phase_state is not None)
                 if recovery is not None
@@ -185,6 +220,9 @@ def execute_policy(
     else:
         # The selected handoff only exists once the preceding group has committed.
         add_initialization(preparation.dependencies, config)
+        add_backbone_revision(
+            preparation.dependencies, config.parent, parent_revision_id
+        )
         validate_training_destinations(
             config,
             config.checkpoint_path,
@@ -196,7 +234,7 @@ def execute_policy(
     data_identity = dependencies.identity
     adapter_contract = preparation.adapters
     data = preparation.data
-    configure_logger(config.project_root, config.model_name, 0)
+    identity = identity or RunIdentity.start(recovery.run_id if recovery else None)
     if recovery is not None:
         recovery.validate_dependencies(config, data_identity)
         require_equal(
@@ -205,8 +243,20 @@ def execute_policy(
         representation = recovery.representation
         actor = build_actor(config)
         recovery.validate_actor(actor)
+        actor.transfer_report = recovery.initialization["transfer"]
+        for phase, commit in zip(config.phases, recovery.completed):
+            clocks = commit.result["clocks"]
+            if phase.algorithm == "ppo":
+                width = phase.collection.env_steps_per_iteration
+                actor.ppo_policy_version = (clocks["env_steps"] + width - 1) // width
+            elif phase.algorithm == "grpo":
+                width = phase.collection.groups_per_iteration
+                actor.grpo_policy_version = (clocks["groups"] + width - 1) // width
     else:
         actor = _initialize_actor(config)
+        if backbone_revision and not config.initialize_from:
+            load_revision(actor.backbone, backbone_revision)
+            validate_policy_weights(actor)
         representation = ActorRepresentation.from_actor(actor)
     normalization = config.parent.normalization_by_interface.get(
         config.policy.interface_name
@@ -221,6 +271,23 @@ def execute_policy(
     data_contract = [item.contract if item is not None else None for item in data]
     if recovery is not None:
         require_equal(data_contract, recovery.data_contract, "resume.partitions")
+        if publication.standalone and terminal:
+            report = completed_run_report(
+                config, checkpoint, recovery.run_id, recovery.completed
+            )
+            if report is not None:
+                return PolicyRunResult(
+                    actor.eval(),
+                    tuple(
+                        PhaseResult.model_validate(phase) for phase in report["phases"]
+                    ),
+                    representation,
+                    config.outputs.model_path,
+                    config.outputs.report_path,
+                    config.checkpoint_path,
+                )
+    logger = configure_logger(config.project_root, config.model_name, 0)
+    logger.info(f"Starting training for {config.model_name}, run {identity.run_id}")
     if recovery is None:
         recovery = RunCheckpoint(
             plan,
@@ -231,23 +298,26 @@ def execute_policy(
             {
                 "path": config.initialize_from,
                 "transfer": actor.transfer_report,
+                "backbone_parent_revision_id": parent_revision_id,
                 "weight_hash": weight_fingerprint(actor.network.state_dict()),
             },
             clone_weights(actor.network),
             capture_rng_state(actor.device),
             completed=CommittedPhases(config.phases, config.phase_offset),
+            run_id=identity.run_id,
         )
     from sequifier.rl.metrics import PolicyMetrics
 
-    identity = identity or RunIdentity.start(recovery.run_id)
-    recovery.run_id = identity.run_id
     metrics = PolicyMetrics(config, identity)
+    if resuming:
+        metrics.writer.restore_positions(identity.run_id, recovery.metric_positions)
     references = PolicyReferences(config, recovery, resuming=resuming)
     saved_random = capture_rng_state(actor.device)
     optimizations = preflight_optimization(config, actor, data)
     restore_rng_state(actor.device, recovery.random if resuming else saved_random)
 
     def save_checkpoint(state=None, *, commit=None):
+        recovery.metric_positions = metrics.writer.checkpoint_positions()
         recovery.save(checkpoint, actor.device, state)
         publication.after_checkpoint(checkpoint, commit)
 
@@ -259,7 +329,27 @@ def execute_policy(
         position, phase = transition.index, transition.phase
         phase_identity = phase_identities[position]
         phase_index = phase_identity.index
+        logger.info(f"Starting phase {phase.name} ({phase.algorithm})")
         current_state = recovery.phase_state
+        step_offset = progress_after(
+            recovery.completed,
+            publication.global_step_offset,
+            config.project_root,
+            config.model_name,
+            identity.run_id,
+        )
+        if current_state:
+            if "global_step_offset" in current_state:
+                step_offset = current_state["global_step_offset"]
+            else:
+                # Earlier metric tables used the sum of this phase's role updates.
+                legacy_step = sum(
+                    role["steps"] for role in current_state["optimization"].values()
+                )
+                step_offset = max(
+                    step_offset, legacy_step - current_state["transaction"]
+                )
+
         dependencies.revalidate()
         incoming_weight_hash = weight_fingerprint(actor.network.state_dict())
         initialization = {}
@@ -281,7 +371,13 @@ def execute_policy(
 
         def commit(state):
             representation.validate_actor(actor, f"phases.{phase.name}.actor")
-            save_checkpoint({**state, "telemetry_path": str(artifacts.telemetry)})
+            save_checkpoint(
+                {
+                    **state,
+                    "telemetry_path": str(artifacts.telemetry),
+                    "global_step_offset": step_offset,
+                }
+            )
 
         artifacts = PhaseArtifacts.for_phase(
             config.outputs.phase_directory, phase_index, phase.name
@@ -306,12 +402,16 @@ def execute_policy(
                 telemetry,
                 adapter_contract,
                 metrics=metrics,
+                global_step_offset=step_offset,
                 continuation=recovery.continuation
                 if transition.continues_optimizer
                 else None,
                 preserve_optimizer=transition.preserves_optimizer,
             )
-            execution = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
+            with compiled_policies(
+                config.parent.run.execution.policy_compile_mode, actor, reference
+            ):
+                execution = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
             telemetry_position = telemetry.commit()
         representation.validate_actor(
             execution.actor, f"phases.{phase.name}.selected_actor"
@@ -381,11 +481,20 @@ def execute_policy(
             source_provenance=data_identity,
             reference_provenance=recovery.reference_contract,
             initialization=recovery.initialization,
+            backbone_parent_revision_id=parent_revision_id,
+            backbone_publication=publish_selected_backbone(
+                config.parent,
+                recovery.incoming_actor,
+                parent_revision_id,
+                identity.run_id,
+                recovery.completed[-1].result,
+            ),
             resource_accounting=prepared.accounting.snapshot(),
         )
         results = tuple(PhaseResult.model_validate(phase) for phase in report["phases"])
         save_policy(actor.eval(), config.outputs.model_path, metadata=report)
-        publish_run_report(report, config.outputs.report_path)
+        publish_run_report(report, config)
+    logger.info(f"Training complete ({completion_reason})")
     return PolicyRunResult(
         actor,
         results,

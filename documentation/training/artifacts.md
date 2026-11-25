@@ -15,7 +15,8 @@ All paths are relative to `run.project_root` unless absolute.
 | `run.outputs.phase_directory` | `outputs/training/<model_name>/phases` |
 | `run.recovery.resume.checkpoint_path` | `checkpoints/runs/<model_name>/<model_name>-latest.pt` |
 
-Every runner publishes a final portable PT model, independently of the optional
+The final model and recovery checkpoint paths must have a `.pt` extension. Every runner publishes this
+portable model independently of the optional
 best/last, embedding and ONNX exports controlled by `run.export`. Supervised
 training retains its existing `<model>-best-<epoch>` and `<model>-last-<epoch>`
 exports. The canonical final model follows the final executed phase's
@@ -29,7 +30,7 @@ its own `checkpoints/` directory. Policy snapshots use `transaction-NNNNNNNN.pt`
 and supervised snapshots use model/epoch filenames. The rolling run checkpoint
 uses the configured checkpoint path.
 
-Phase trees, logging directories and collection archive directories are reserved
+Phase trees, logging directories and collection output directories are reserved
 output namespaces. Model, report, checkpoint and manifest files must be distinct
 and cannot overlap reserved namespaces or source data. Validation runs before
 publication, including generated phase destinations and symlink escapes.
@@ -62,9 +63,11 @@ checkpoint contains in-phase progress.
 ## Reports and discovery
 
 Sequifier writes a run manifest at the configured report path and at
-`manifest.json` beside
-the rolling checkpoint. Common fields identify the logical run, current session,
+`checkpoints/<model_name>.json` under the project root, including when the rolling
+checkpoint uses a custom path. Common fields identify the logical run, current session,
 status, completion reason, final model, checkpoint, exports and completed phases.
+Ordinary budget completion uses `completion_reason: normal_completion` for all
+runners and phase reports. Earlier reports can also contain `completed` for this outcome.
 Additional fields contain runner-specific provenance.
 
 Each phase report includes phase index, name, algorithm,
@@ -75,19 +78,62 @@ and units; a reward monitor is not represented as a loss.
 
 ## Logging and scalar metrics
 
-Every native runner configures the model-scoped logger under `logs/<model_name>`.
+Every native runner logs training start, progress and completion to stderr and
+the model-scoped log under `logs/<model_name>`. Policy phases also log their
+name and algorithm when they start.
 Structured scalar observations use the supervised writer's `*-training.csv`,
 `*-training-full.csv`, `*-validation.csv` and `*-validation-full.csv` tables.
-Full tables include phase, algorithm and
-iteration identity, run/session IDs, UTC timestamps and progress. Named scalar
+Condensed and full tables identify the phase, algorithm, iteration and run-wide
+`global_step`. Full tables also include session IDs and UTC timestamps. When
+continuing a log with the older condensed header, new condensed rows go to
+`<prefix>.phases-training.csv` and `<prefix>.phases-validation.csv`. The original
+files retain the byte positions referenced by older recovery checkpoints. Named scalar
 observations use `metric`, `target`, `value` and `is_primary`; policy observations
-use `target: __total__`. Nested diagnostic records remain in phase reports.
+use `target: __total__`. Policy rows name the dataset and view in `dataset` and
+`part` when the observation can be attributed to each. Online observations leave
+both empty. The phase report records the policy interface in `provenance.model_interface`. Imitation rows record the sampler epoch (zero at initial evaluation, then one-based).
+Within a `run_id`, `global_step` advances once per supervised training batch or
+completed policy iteration. It carries across phase transitions, optimizer resets,
+and checkpoint recovery. Metrics from the same training position share a step,
+including an evaluation before the next update. Sparse logging can skip step
+numbers. Phase reports record the final value in `clocks.global_step`, alongside
+the algorithm's own training counters.
+
+Run `python tools/extract_validation_losses_to_table.py <model-validation-full.csv>`
+to write a sibling `-wide.csv` with one row per evaluation. It keeps the run,
+phase, algorithm, dataset, progress and timing fields. Each recorded metric and
+target has a column. The primary metric, target and value also appear together.
+
+| Phase | Validation measures available in the wide table |
+|---|---|
+| Supervised | Total and per-target loss, baseline loss, and per-target accuracy when recorded |
+| Policy imitation | Held-out action negative log likelihood |
+| IQL | Held-out action negative log likelihood, Bellman residual, value estimate and minimum Q estimate |
+| DPO | Preference accuracy, margin, DPO loss and chosen/rejected sequence lengths |
+| PPO and GRPO | Completed return and length, return spread and range, censoring, timeouts, success rate when available, and GRPO score when evaluated |
+
+An evaluation with an unavailable policy monitor retains its diagnostics and
+leaves the primary value empty. An empty metric cell in a mixed run means the
+evaluation has no recorded value for that measure.
+
+Iteration-budgeted policy phases leave `epoch` empty. Policy plots use the
+committed iteration for progress. Nested diagnostic records remain in phase reports.
 
 `run.logging.log_interval_batches` controls supervised training observations;
 `run.logging.log_interval_iterations` controls policy training observations and
 defaults to 10. Mixed plans may configure both. Evaluations are written whenever
 the phase evaluation schedule runs, and final policy training progress is always
-written. Policy iteration clocks count committed updates, even when an iteration
+written. Each policy training observation describes one sampled iteration.
+New tables use `seconds_per_iteration` for the elapsed policy iteration, including
+collection and optimization. Policy rows use `iteration` and `iterations_total`
+for progress. Their batch fields are empty. Supervised training rows use
+`seconds_per_batch`, `batch`, `batches_total` and `window_batches`.
+Resuming an existing table with the previous header preserves its original columns
+and timing convention so checkpoint byte offsets remain valid. Validation `elapsed_seconds` measures the
+evaluation itself. Condensed policy tables contain the primary training metric
+or available evaluation monitor. Full tables include secondary metrics, numeric
+status flags and non-actor optimizer learning rates. An unavailable evaluation
+monitor is identified in the operational log. Policy iteration clocks count committed updates, even when an iteration
 contains several optimizer steps. Policy visualizations display the actual
 monitor names on a linear scale and do not invent baseline measurements.
 
@@ -99,22 +145,25 @@ sampled run.
 ## Inference and collection outputs
 
 Forecast and policy predictions share `sequenceId`, `subsequenceId`,
-`windowStartOffset`, `itemPosition` and named prediction columns. Independent
-policy rows receive synthetic sequence/item identities. Categorical probabilities
+`windowStartOffset`, `itemPosition` and named prediction columns. Independent policy rows use distinct sequence IDs and item position zero. `windowStartOffset` is
+relative to the subsequence. Each policy decision materializes a single window
+in its subsequence, so its offset is zero. Categorical probabilities
 are separate target-specific files under
 `outputs/probabilities/<model>/<target>/part-NNN.<format>`, with decoded category
 labels as column names. Policy predictions additionally include
 `action_log_probability` when probabilities are requested. Conditional policy
 probabilities remain conditional on the selected preceding actions.
 
-All inference routes accept `output_path` for one model. It overrides the first
+All inference routes accept `output.path` for one model. A relative path resolves
+under `run.project_root`. An absolute path is used directly. It overrides the first
 prediction/embedding file; later chunks append `-part-NNN` to its stem. Probability
-files keep their canonical target-specific destinations.
+files keep their canonical target-specific destinations. Policy prediction writes
+up to 256 decisions per part, the same chunk size as indexed forecast windows.
+Every categorical probability part follows its prediction part’s row order.
+The inference batch size controls model execution independently of file boundaries.
 
 Forecast and policy rollout use the shared validated trajectory record.
-Training-time PPO and GRPO archives instead use the common
-`sequifier.collection-archive` envelope with `algorithm` and
-`collection` fields. The collection payload contains algorithm-specific replay
-and diagnostic information. `read_collection_archive` reads the envelope;
-`load_collection_record` additionally validates PPO collections. These archives
-are diagnostics, not interchangeable offline training trajectories.
+Training-time PPO and GRPO publish a sequence manifest with a single Parquet
+decision table. The `__collection` struct holds algorithm-specific diagnostics.
+The manifest, supervised preprocessing and policy import share the same row
+coordinates.

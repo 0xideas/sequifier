@@ -25,7 +25,7 @@ def load_trajectory(path: str | Path) -> Trajectory:
     kind = values.get("format") if isinstance(values, dict) else None
     if not isinstance(kind, str) or kind not in _TRAJECTORY_VERSIONS:
         raise ValueError("Unsupported trajectory format")
-    require_contract_version(
-        kind, values.pop("version", None), _TRAJECTORY_VERSIONS[kind]
-    )
+    version = values.pop("version", None)
+    expected = _TRAJECTORY_VERSIONS[kind]
+    require_contract_version(kind, version, expected)
     return validate_trajectory(values)

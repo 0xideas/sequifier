@@ -6,7 +6,13 @@ from dataclasses import replace
 import polars as pl
 
 from sequifier.config.policy_inputs import PolicyFittingSpec
-from sequifier.io.feature_fitting import FeatureStatistics, create_id_map
+from sequifier.io.feature_fitting import (
+    FeatureStatistics,
+    FittingRules,
+    create_id_map,
+    validate_cardinality_values,
+    vocabulary_sizes,
+)
 from sequifier.io.policy_window import encode_feature
 from sequifier.trajectory.returns import return_to_go
 
@@ -34,11 +40,18 @@ class EpisodeFeatures:
             raise ValueError("duplicate episode IDs in fitting view")
 
     def values(self, episode, length, column):
-        return (
-            episode.observations[column][:length]
-            if column in episode.observations
-            else [episode.static_inputs[column]]
-        )
+        if column in episode.static_inputs:
+            return [episode.static_inputs[column]]
+        values = episode.observations[column][:length]
+        if any(episode.observation_masks[:length]):
+            return [
+                value
+                for value, masked in zip(
+                    values, episode.observation_masks[:length], strict=True
+                )
+                if not masked
+            ]
+        return values
 
     def fit_categorical_config(self) -> PolicyFittingSpec:
         """Fit only declared raw categorical features, using the training episodes."""
@@ -48,6 +61,21 @@ class EpisodeFeatures:
         n_classes = self.config.categorical_n_classes.copy()
         for column in self.config.categorical_columns:
             if column in id_maps or column in n_classes:
+                continue
+            storage = self.config.raw_inputs
+            if storage and column in storage.cardinality_config:
+                limits = {column: storage.cardinality_config[column]}
+                rules = FittingRules(cardinality=limits, categorical=[column])
+                statistics = FeatureStatistics()
+                for episode, length in zip(self.episodes, self.lengths, strict=True):
+                    values = self.values(episode, length, column)
+                    if values:
+                        frame = pl.DataFrame({column: values})
+                        validate_cardinality_values(frame, limits)
+                        statistics.observe(frame, [column], rules)
+                maps, _ = statistics.finish(rules)
+                id_maps.update(maps)
+                n_classes.update(vocabulary_sizes(maps))
                 continue
             vocabulary = set()
             for episode, length in zip(self.episodes, self.lengths):
@@ -72,7 +100,7 @@ class EpisodeFeatures:
         self._features_validated = True
 
     def validate_normalization(self, interface):
-        """Check FP32 transforms for decisions in the selected episode prefixes."""
+        """Check fitted transforms at the input columns' stored precision."""
         statistics = interface.selected_columns_statistics
         signature = (interface.normalize_real_columns, statistics)
         if self._validated_statistics == signature:
@@ -100,7 +128,8 @@ class EpisodeFeatures:
                 if column in self.config.categorical_n_classes:
                     continue
                 values = self.values(episode, length, column)
-                statistics.observe_real(pl.Series(column, values))
+                if values:
+                    statistics.observe_real(pl.Series(column, values))
         return {
             column: {"mean": values["mean"], "std": values["std"]}
             for column, values in statistics.moments.items()

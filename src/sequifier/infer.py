@@ -1,6 +1,7 @@
 import json
 import os
 import warnings
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -27,8 +28,13 @@ from sequifier.helpers import (
     resolve_window_sampling_plan,
     subset_to_input_columns,
     validate_stored_window_width,
-    write_data,
 )
+from sequifier.io.inference_workspace import (
+    bind_inference_inputs,
+    probability_table,
+    rollout_journal,
+)
+from sequifier.io.inference_workspace import write_inference_data as write_data
 from sequifier.io.output_paths import require_file_destinations, unique_paths
 from sequifier.io.preprocessing import denormalize_values
 from sequifier.model.execution_schema import ExecutionSchema
@@ -151,8 +157,16 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     )
 
     skip_metadata = args_config.get("skip_metadata", False)
-    config = load_inferer_config(config_path, args_config, skip_metadata)
+    with ExitStack() as stack:
+        config = load_inferer_config(
+            config_path, args_config, skip_metadata, workspace_stack=stack
+        )
+        if config is not None:
+            bind_inference_inputs(config)
+            _execute_inference(config)
 
+
+def _execute_inference(config):
     from sequifier.config.policy_infer_config import ResolvedPolicyInferenceConfig
 
     if isinstance(config, ResolvedPolicyInferenceConfig):
@@ -163,7 +177,9 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
 
     configure_determinism(config.seed, config.enforce_determinism)
     # Seed once for this CLI run, before creating any ORT sessions.
-    onnxruntime.set_seed(config.seed)
+    # ORT takes a signed int32. Preserve all 32 bits of the authored seed.
+    ort_seed = config.seed if config.seed < 2**31 else config.seed - 2**32
+    onnxruntime.set_seed(ort_seed)
 
     infer_worker(config)
 
@@ -817,38 +833,44 @@ def inference_output_path(
 
 def validate_probability_destinations(config, model_id, target_types, part_count):
     """Reserve all prediction and probability files before writing either."""
-    output_path = config.output_path
-    if config.task == "policy" and output_path is not None:
-        output_path = str(
-            Path(normalize_path(output_path, config.project_root)).absolute()
+    reserved, existing_files = set(), set()
+    for part in range(part_count):
+        reserve_prediction_part(
+            config, model_id, target_types, part, reserved, existing_files
         )
-    paths = []
-    for index in range(part_count):
-        paths.append(
-            _inference_destination(
-                config.project_root,
-                config.write_format,
-                "predictions",
-                model_id,
-                index,
-                output_path=output_path,
-            )[0]
-        )
-        paths.extend(
+
+
+def reserve_prediction_part(
+    config, model_id, target_types, part, reserved, existing_files
+):
+    paths = [
+        _inference_destination(
+            config.project_root,
+            config.write_format,
+            "predictions",
+            model_id,
+            part,
+            output_path=config.output_path,
+        )[0],
+        *(
             _inference_destination(
                 config.project_root,
                 config.write_format,
                 "probabilities",
                 model_id,
-                index,
+                part,
                 target,
             )[0]
             for target, kind in target_types.items()
             if kind == "categorical"
-        )
-    paths = unique_paths(paths, "prediction and probability outputs must be distinct")
+        ),
+    ]
+    message = "prediction and probability outputs must be distinct"
+    paths = unique_paths(paths, message)
+    if reserved.intersection(paths):
+        raise ValueError(message)
+    reserved.update(paths)
     require_file_destinations(paths)
-    existing_files = set()
     for path in paths:
         try:
             stat = path.stat()
@@ -1143,18 +1165,12 @@ def infer_generative(
                         config=config,
                     )
                     logger.info(f"Writing probabilities to '{probabilities_path}'")
-                    # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
+                    decoder_ids = inferer.target_decoder_ids.get(
+                        target_column, range(probs[target_column].shape[1])
+                    )
+                    labels = [inferer.index_map[target_column][i] for i in decoder_ids]
                     write_data(
-                        pl.DataFrame(
-                            probs[target_column],
-                            schema=[
-                                str(inferer.index_map[target_column][global_id])
-                                for global_id in inferer.target_decoder_ids.get(
-                                    target_column,
-                                    range(probs[target_column].shape[1]),
-                                )
-                            ],
-                        ),
+                        probability_table(labels, probs[target_column]),
                         probabilities_path,
                         config.write_format,
                     )
@@ -1196,24 +1212,8 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
     from sequifier.rollout.coordinator import collect_rollout
     from sequifier.rollout.factories import load_adapter
     from sequifier.rollout.preprocessing import FixedNumericPreprocessing
-    from sequifier.trajectory.store import save_trajectory
 
     rollout = config.rollout
-    remaining = rollout.seed_window_index
-    selected = None
-    for data_id, data in enumerate(dataset):
-        windowed = _windowed_inference_batch(config, data, column_data_types)
-        count = windowed.sequence_ids.numel()
-        if remaining >= count:
-            remaining -= count
-            continue
-        selected = (data_id, windowed, remaining)
-        break
-    if selected is None:
-        raise ValueError(
-            f"rollout seed_window_index {rollout.seed_window_index} is outside the prepared dataset windows"
-        )
-    data_id, windowed, row = selected
     metadata = config.dataset_metadata
     columns = list(
         dict.fromkeys(
@@ -1229,13 +1229,47 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
             for column in columns
         },
     )
-    seed_inputs = {
-        key: value[row : row + 1].numpy() for key, value in windowed.inputs.items()
-    }
-    seed_mask = windowed.metadata["attention_valid_mask"][row : row + 1].numpy()
-    seed = codec.seed_from_model(
-        seed_inputs, seed_mask, config.input_columns, config.static_columns
+    from sequifier.rollout.seeds import (
+        forecast_coordinate_seed,
+        forecast_window_seed,
+        seed_origin,
     )
+
+    if rollout.seed is not None:
+        seed = forecast_coordinate_seed(config, dataset)
+        origin = seed_origin(config, rollout.seed.sequenceId, rollout.seed.itemPosition)
+    else:
+        remaining = rollout.seed_window_index
+        selected = None
+        for data_id, data in enumerate(dataset):
+            windowed = _windowed_inference_batch(config, data, column_data_types)
+            count = windowed.sequence_ids.numel()
+            if remaining >= count:
+                remaining -= count
+                continue
+            selected = (data_id, windowed, remaining)
+            break
+        if selected is None:
+            raise ValueError(
+                f"rollout seed_window_index {rollout.seed_window_index} is outside the prepared dataset windows"
+            )
+        data_id, windowed, row = selected
+        start = int(windowed.model_start_positions[row])
+        sequence = int(windowed.sequence_ids[row])
+        stop = start + config.window_view.context_length
+        valid = int(windowed.metadata["attention_valid_mask"][row].sum())
+        seed = forecast_window_seed(config, sequence, stop - valid, stop)
+        origin = {
+            **seed_origin(
+                config, sequence, start + config.window_view.context_length - 1
+            ),
+            "data_id": data_id,
+            "seed_window_index": rollout.seed_window_index,
+            "sequence_id": sequence,
+            "subsequence_id": int(windowed.subsequence_ids[row]),
+            "model_start_position": start,
+            "window_start_offset": int(windowed.window_start_offsets[row]),
+        }
     schema = (
         ExecutionSchema.from_interface(
             inferer.inference_model.interface, config.window_view.context_length
@@ -1280,6 +1314,8 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
         rollout.max_steps,
         random_seed=config.seed,
         history_validator=validate_history,
+        journal=rollout_journal(),
+        replay_predictor_rng=config.infer_with_dropout,
         metadata={
             "model_id": model_id,
             "model_paths": config.model_paths,
@@ -1292,22 +1328,12 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
             "collection_budget": rollout.max_steps,
             "seed": config.seed,
             "enforce_determinism": config.enforce_determinism,
-            "seed_origin": {
-                "data_id": data_id,
-                "seed_window_index": rollout.seed_window_index,
-                "sequence_id": int(windowed.sequence_ids[row]),
-                "subsequence_id": int(windowed.subsequence_ids[row]),
-                "model_start_position": int(windowed.model_start_positions[row]),
-                "window_start_offset": int(windowed.window_start_offsets[row]),
-            },
+            "seed_origin": origin,
         },
     )
-    path = normalize_path(rollout.trajectory_path, config.project_root)
-    config.validate_output_destination(path, label="trajectory_path")
-    save_trajectory(trajectory, path)
-    logger.info(
-        f"Wrote {len(trajectory.transitions)} rollout transitions to '{path}'; return={trajectory.total_return}"
-    )
+    from sequifier.trajectory.sequence_output import publish_inference_rollout
+
+    publish_inference_rollout(trajectory, config)
 
 
 @beartype

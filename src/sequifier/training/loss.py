@@ -9,8 +9,8 @@ import torch.distributed as dist
 from torch import Tensor
 
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.tensors import transfer_tensor
 from sequifier.model.network import ComposableTransformerNetwork, ModelOutput
-from sequifier.training.accurate_cross_entropy import AccurateCrossEntropyLoss
 from sequifier.training.runtime import DatasetRuntime
 
 
@@ -30,6 +30,7 @@ class LossResult:
     accounting_sums: dict[str, Tensor]
     accounting_count: Tensor
     component_losses: dict[str, tuple[Tensor, ...]] | None = None
+    global_count: Tensor | None = None
 
 
 class LossService:
@@ -59,29 +60,28 @@ class LossService:
             else []
         )
         static_features = {
-            key: value.to(device, non_blocking=True)
+            key: transfer_tensor(value, device)
             for key, value in batch.inputs.items()
             if key in static_columns
         }
         image_features = {
-            key: value.to(device, non_blocking=True)
+            key: transfer_tensor(value, device)
             for key, value in batch.inputs.items()
             if key.startswith("__image:") or key == "__preconditioning_image"
         }
         features = {
-            key: value.to(device, non_blocking=True)
+            key: transfer_tensor(value, device)
             for key, value in batch.inputs.items()
             if key in interface.input_columns
         }
         features.update(image_features)
         targets = {
-            key: value.to(device, non_blocking=True)
+            key: transfer_tensor(value, device)
             for key, value in batch.targets.items()
             if key in interface.target_column_types
         }
         metadata = {
-            key: value.to(device, non_blocking=True)
-            for key, value in batch.metadata.items()
+            key: transfer_tensor(value, device) for key, value in batch.metadata.items()
         }
         features, targets, metadata = dataset.objective.prepare_batch(
             features, targets, metadata, eval_seed=eval_seed
@@ -197,19 +197,9 @@ class LossService:
                                 f"Loss/mask size mismatch for {target!r}"
                             )
                         criterion = dataset.criteria[target]
-                        if isinstance(criterion, AccurateCrossEntropyLoss):
-                            # Exclude masked rows before evaluating the loss so
-                            # their logits cannot enter the backward graph.
-                            component_sums.append(
-                                criterion(
-                                    flat_logits[flat_mask], label[flat_mask]
-                                ).sum()
-                            )
-                        else:
-                            raw_component = criterion(flat_logits, label)
-                            component_sums.append(
-                                raw_component.reshape(-1).masked_select(flat_mask).sum()
-                            )
+                        component_sums.append(
+                            criterion(flat_logits[flat_mask], label[flat_mask]).sum()
+                        )
                     sums[target] = sum(component_sums) / len(component_sums)
                     for index, value in enumerate(component_sums):
                         sums[f"@hash/{target}/{index}"] = value
@@ -236,8 +226,8 @@ class LossService:
                     -1, dataset.interface.target_n_classes[target]
                 )
             elif kind == "real":
-                logits_for_loss = logits.float().reshape(-1)
-                target_for_loss = target_values.to(logits_for_loss.dtype)
+                logits_for_loss = logits.reshape(-1)
+                target_for_loss = target_values
             else:
                 raise ValueError(f"Unknown target column type {kind!r}.")
             output_count = logits_for_loss.shape[0]
@@ -258,8 +248,11 @@ class LossService:
                     )
                 target_for_loss = target_for_loss.masked_fill(excluded, 0)
             criterion = dataset.criteria[target]
+            # Invalid rows must be outside the criterion's backward graph.
+            predictions = logits_for_loss[flat_mask]
+            labels = target_for_loss[flat_mask]
             if isinstance(criterion, torch.nn.GaussianNLLLoss):
-                from sequifier.io.preprocessing import denormalize_values
+                from sequifier.io.preprocessing import NORMALIZATION_EPSILON
                 from sequifier.model.prediction_distribution import (
                     RealPredictionDistribution,
                 )
@@ -269,31 +262,37 @@ class LossService:
                     raise ValueError(
                         f"{target}: GaussianNLLLoss requires a real prediction_distributions entry"
                     )
-                route = network.resolve_interface(dataset.interface_name)
-                location, observed = (
-                    logits_for_loss[flat_mask],
-                    target_for_loss[flat_mask],
+                dtype = (
+                    torch.float32 if predictions.device.type == "mps" else torch.float64
                 )
+                residual = labels.to(dtype) - predictions.to(dtype)
                 statistics = interface.selected_columns_statistics.get(target)
                 if statistics is not None and interface.normalize_real_columns:
-                    location = denormalize_values(location, statistics)
-                    observed = denormalize_values(observed, statistics)
+                    # Translation cancels in a Gaussian density. Scale the residual
+                    # directly to preserve small differences at large physical offsets.
+                    residual = residual * (statistics["std"] + NORMALIZATION_EPSILON)
+                scale = output.prediction_scales.get(target)
+                if scale is None:
+                    # Fixed scales and callers supplying their own ModelOutput.
+                    route = network.resolve_interface(dataset.interface_name)
+                    scale = route.prediction_scale(target)
                 distribution = RealPredictionDistribution(
-                    location, route.prediction_scale(target)
+                    torch.zeros_like(residual), scale
                 )
-                sums[target] = -distribution.log_prob(observed).sum()
-            elif isinstance(criterion, AccurateCrossEntropyLoss):
-                sums[target] = criterion(
-                    logits_for_loss[flat_mask], target_for_loss[flat_mask]
-                ).sum()
+                sums[target] = -distribution.log_prob(residual).sum()
             else:
-                raw = criterion(logits_for_loss, target_for_loss)
-                if raw.numel() != flat_mask.numel():
+                predictions = predictions.float()
+                if kind == "real":
+                    labels = labels.to(predictions.dtype)
+                elif isinstance(criterion, torch.nn.NLLLoss):
+                    predictions = predictions.log_softmax(dim=-1)
+                raw = criterion(predictions, labels)
+                if raw.numel() != labels.numel():
                     raise RuntimeError(
                         f"Loss/mask size mismatch for {target!r}: "
-                        f"{raw.numel()} != {flat_mask.numel()}."
+                        f"{raw.numel()} != {labels.numel()}."
                     )
-                sums[target] = raw.reshape(-1).masked_select(flat_mask).sum()
+                sums[target] = raw.sum()
             weight = float((dataset.learning.loss_weights or {}).get(target, 1.0))
             if weight == 0.0:
                 components[target] = sums[target].detach().new_zeros(())
@@ -320,6 +319,7 @@ class LossService:
             },
             accounting_count=local_count.detach(),
             component_losses=hash_component_losses,
+            global_count=global_count,
         )
 
     def finalize_accounting(

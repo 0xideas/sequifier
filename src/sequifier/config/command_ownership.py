@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr, model_validator
 
 from sequifier.config.naming import RunSeed
 from sequifier.config.ownership import ReproducibilitySettings, Settings
@@ -28,6 +28,15 @@ class InferenceRunSettings(CommandRunSettings):
 
 class PreprocessingSeed(Settings):
     seed: RunSeed = 1010
+    _requested_random: bool = PrivateAttr(default=False)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def remember_random_request(cls, values, handler):
+        result = handler(values)
+        if isinstance(values, dict):
+            result._requested_random = values.get("seed") == "random"
+        return result
 
 
 class SeededPreprocessingRun(CommandRunSettings):

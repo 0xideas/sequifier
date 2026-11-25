@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.column_names import TRANSITION_COLUMNS, validate_column_names
 from sequifier.config.metadata import FeatureTransforms, RawInputMetadata
 from sequifier.config.naming import ConfigModel
 from sequifier.io.values import DomainValue
@@ -58,6 +59,8 @@ class ActionFieldConfig(PolicyConfigBase):
             raise ValueError(
                 "categorical actions cannot configure real scale, bounds, or atoms"
             )
+        if len({type(value) for value in self.values}) > 1:
+            raise ValueError("categorical action values must all have the same type")
         if len(set(self.values)) != len(self.values):
             raise ValueError("action labels must be unique")
         if (
@@ -102,6 +105,28 @@ class PolicyBinding(PolicyConfigBase):
     initial_desired_return: float | None = Field(default=None, allow_inf_nan=False)
     returns: ReturnDefinition = Field(default_factory=ReturnDefinition)
     units: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("actions", "feedback")
+    @classmethod
+    def validate_column_names(cls, values, info):
+        validate_column_names(
+            values,
+            info.field_name,
+            allowed=("__policy_previous_action",)
+            if info.field_name == "feedback"
+            else (),
+        )
+        if conflicts := set(values).intersection(TRANSITION_COLUMNS):
+            raise ValueError(
+                f"{info.field_name} uses reserved transition columns: {sorted(conflicts)}"
+            )
+        return values
+
+    def validate_source_units(self, units):
+        if units is not None and units != self.units:
+            raise ValueError(
+                f"source units {units!r} differ from policy units {self.units!r}"
+            )
 
     @property
     def previous_action_inputs(self):

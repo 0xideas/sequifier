@@ -26,6 +26,7 @@ from sequifier.config.phase_controls import (
     PhaseControls,
 )
 from sequifier.config.policy_optimization import OptimizationConfig
+from sequifier.config.rollout_config import SequenceOutput
 from sequifier.config.sources import TrainingSourceSpecModel
 
 
@@ -177,21 +178,19 @@ class OnlineEnvironmentConfig(ConfigModel):
 
 
 class OnlineCollection(ConfigModel):
+    output: SequenceOutput | None = None
     environment: str | SkipJsonSchema[OnlineEnvironmentConfig]
-    archive_directory: str | None = Field(default=None, min_length=1)
     max_buffer_bytes: int = Field(default=536870912, gt=0)
 
 
+class PPOSequenceOutput(SequenceOutput):
+    include_scores: bool = False
+
+
 class PPOCollection(OnlineCollection):
+    output: PPOSequenceOutput | None = None
     env_steps_per_iteration: int = Field(gt=0)
     allow_partial_rollout: bool = True
-    archive_scores: bool = False
-
-    @model_validator(mode="after")
-    def require_archive(self):
-        if self.archive_scores and self.archive_directory is None:
-            raise ValueError("collection.archive_scores requires an archive_directory")
-        return self
 
 
 class PPOBudget(ConfigModel):
@@ -260,10 +259,6 @@ class OnlinePhaseConfig(PhaseConfig, Generic[CollectionT, EvaluationT]):
     source_kind = "none"
     collection: CollectionT
     evaluation: EvaluationT
-
-    @property
-    def rollout_archive_directory(self) -> str | None:
-        return self.collection.archive_directory
 
     @property
     def training_environment(self):

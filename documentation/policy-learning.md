@@ -49,7 +49,7 @@ manifests and prepared histories. An authored manifest that lists trajectory
 files declares `format: sequifier.trajectory-source` and an `episodes`
 list with a `path` per entry. At row `t`, observations and lagged actions form
 inputs; the recorded current action is the label, and reward/successor describe
-its resulting transition. Tables use `sequenceId` and `itemPosition`.
+its resulting transition. Tables use integer `sequenceId` and `itemPosition` coordinates. Use `sequenceName` for a string episode label.
 Observations and static inputs use the same names in the table, metadata and model.
 When importing without a model, declare those names in the
 `source.columns.observations` and `source.columns.static_inputs` lists.
@@ -58,7 +58,7 @@ Current actions use their policy field names or a structured `__executed_action`
 column. Previous actions use `__previous_action_<action>` scalar columns or a
 structured `__previous_action` column. Optional transition columns are `reward`,
 `terminated`, `truncated`, and `bootstrap_allowed`. When successors are present,
-provide `__next_<observation>` for every observation. Use `episodeId` for a
+provide `__next_<observation>` for every observation. Use `sequenceName` for a
 stable episode ID and `__group` for a collection group.
 Rename external table columns to these names before importing or training.
 Fragments require an explicit preceding action; file boundaries alone imply no
@@ -68,8 +68,8 @@ Setting `partition.validation_fraction` generates explicit train and validation 
 together and requires at least two components. Explicit `evaluation.sources`
 undergo the same overlap checks. Codecs and moments are fitted only on training
 coverage. Indexed storage and bounded episode caches are shared across phases;
-windows are constructed on demand. `import_sequences` exports canonical raw
-Parquet shards and a checksummed manifest; see the
+windows are constructed on demand. `import_sequences` exports a canonical raw
+Parquet decision table and its checksummed manifest. See the
 [import example](example_inputs/configs/import-policy-sequences.yaml).
 
 Imitation minimizes joint action NLL. Return conditioning requires rewards and
@@ -112,6 +112,16 @@ Embedded checkpoint references survive removal of their original files;
 a still-present changed reference is rejected.
 
 ## Online adapters
+
+For direct training from raw sequences, declare bounded categorical observation or
+static inputs under `model.interfaces.<name>.input_contract.cardinality_config`.
+For example, `{place: {min_count: 3, hashing: {num_buckets: 16}}}` keeps frequent
+labels and hashes the rest. The first offline fitting phase owns the vocabulary.
+Prepared sources carry their fitted rules in metadata.
+
+Every label in a categorical action's `values` must have the same scalar type.
+An explicit sequence source `units` mapping must match the policy binding, including
+an explicitly empty mapping. Rollout data carries the producing policy's units.
 
 Declare each training adapter in `environments.<name>` with `factory`, `config` and `units`. PPO and GRPO select an adapter by name in `collection.environment` and `evaluation.environment`. A standalone inference rollout supplies the adapter declaration in `rollout.environment`.
 Factories receive `config` as keyword arguments. Adapter-reported units must match
@@ -181,8 +191,9 @@ Defaults: `optimization_epochs: 4`, `batch_size: 64`, `accumulation_batches: 1`,
 `entropy_coefficient: 0.01`, `normalize_advantages: true`, `reward_scale: 1`.
 Optional `value_clip_delta` clips V changes; `old_policy_target_kl` stops old-policy drift.
 `allow_partial_rollout: true` executes the remaining budget exactly; false requires
-divisibility. Optional `archive_directory` writes independent collection records;
-`archive_scores` defaults to false. Archives are not update sources.
+divisibility. Set `collection.output.manifest_path` to publish the decision table.
+Set `collection.output.include_scores: true` to include PPO scores in its
+`__collection` column.
 
 GRPO seals complete same-start groups before updating an actor-only model.
 Scores sum scaled rewards through termination, truncation or `max_steps`.

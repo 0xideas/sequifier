@@ -7,9 +7,7 @@ from dataclasses import asdict, dataclass
 import torch
 
 from sequifier.config.policy_config import ResolvedPolicyBinding
-from sequifier.contract_versions import ContractVersions
-from sequifier.io.actions import action_batch, decode_action
-from sequifier.io.atomic import write_json_atomic
+from sequifier.io.actions import action_batch
 from sequifier.rl.history import frame_storage_bytes, history_inputs
 from sequifier.rl.window_storage import collated_windows
 
@@ -110,81 +108,6 @@ class PPORolloutBuffer:
                     device=device,
                 ),
             )
-
-    def archive(self, path, *, include_scores):
-        """A separate versioned collection record, never an offline update source."""
-        decisions = []
-        for index, step in enumerate(self.decisions):
-            record = asdict(step)
-            boundary = step.terminated or step.truncated
-            cut = index == len(self) - 1 and not boundary
-            record["cutoff_reason"] = (
-                "terminated"
-                if step.terminated
-                else "truncated"
-                if step.truncated
-                else "collection_cut"
-                if cut
-                else None
-            )
-            if not include_scores:
-                for key in (
-                    "old_log_probability",
-                    "old_value",
-                    "entropy",
-                    "successor_value",
-                ):
-                    record.pop(key)
-            decisions.append(record)
-        payload = {
-            "format": "sequifier.ppo-collection",
-            "version": ContractVersions.PPO_COLLECTION,
-            "policy_version": self.policy_version,
-            "policy": self.spec.model_dump(mode="json"),
-            "frames": [frame.state_dict() for frame in self.frames],
-            "decisions": decisions,
-        }
-        from sequifier.trajectory.archives import collection_archive
-
-        write_json_atomic(path, collection_archive("ppo", payload))
-
-
-def load_collection_record(path):
-    """Read and validate a current PPO collection record."""
-    from sequifier.trajectory.archives import read_collection_archive
-
-    payload = read_collection_archive(path, "ppo")
-    from sequifier.config.policy_config import ResolvedPolicyBinding
-    from sequifier.rl.history import PolicyFrame
-
-    spec = ResolvedPolicyBinding.model_validate(payload["policy"])
-    frames = [PolicyFrame.from_state_dict(frame) for frame in payload["frames"]]
-    for frame in frames:
-        history_inputs(spec, [frame])
-    for step in payload["decisions"]:
-        frame = frames[step["frame"]]
-        if (
-            step["policy_version"] != payload["policy_version"]
-            or (step["episode_id"], step["step_id"])
-            != (frame.episode_id, frame.step_id)
-            or step["domain_action"] != (decode_action(step["action"], spec))
-            or step["bootstrap"] != (not step["terminated"])
-        ):
-            raise ValueError("collection record violates the decision contract")
-        if step["successor"] is None:
-            if step["bootstrap"]:
-                raise ValueError("collection record lacks a bootstrap successor")
-        else:
-            successor = frames[step["successor"]]
-            if (
-                successor.episode_id != frame.episode_id
-                or successor.step_id != frame.step_id + 1
-                or successor.previous_action != step["action"]
-            ):
-                raise ValueError("collection record successor is discontinuous")
-        if not torch.isfinite(torch.tensor(step["reward"], dtype=torch.float32)):
-            raise ValueError("collection record reward must be finite FP32")
-    return payload
 
 
 def compute_gae(decisions, gamma, gae_lambda, normalize):

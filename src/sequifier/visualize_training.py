@@ -4,6 +4,7 @@ import html
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -37,6 +38,7 @@ class TrainingMetrics:
         default_factory=dict
     )
     train_window_batches: dict[float, dict[int, int]] = field(default_factory=dict)
+    use_iterations: bool = False
     training_label: str = "Training Loss"
     validation_label: str = "Validation Loss"
 
@@ -52,6 +54,9 @@ class StructuredMetricsParser:
     def parse_files(self, training_file: str, validation_file: str) -> TrainingMetrics:
         training_rows = self._read_rows(training_file)
         validation_rows = self._read_rows(validation_file)
+        return self.parse_rows(training_rows, validation_rows)
+
+    def parse_rows(self, training_rows, validation_rows, *, allow_training_only=False):
         total_training_rows = [
             row
             for row in training_rows
@@ -92,24 +97,35 @@ class StructuredMetricsParser:
                 primary_validation[-1].get("metric") if primary_validation else None
             )
         else:
+            supervised = {None, "", "supervised"}
+            total_training_rows = [
+                row for row in total_training_rows if row.get("algorithm") in supervised
+            ]
+            validation_rows = [
+                row for row in validation_rows if row.get("algorithm") in supervised
+            ]
             validation_metric = "loss"
-        metrics = TrainingMetrics()
+        metrics = TrainingMetrics(use_iterations=policy_rows)
         if total_training_rows[-1].get("algorithm") not in {None, "", "supervised"}:
             metrics.training_label = total_training_rows[-1].get("metric", "Training")
 
         for row in total_training_rows:
             if row.get("run_id") != run_id:
                 continue
-            epoch = int(row["epoch"])
-            batch = int(row["batch"])
-            batches_total = int(row["batches_total"])
+            epoch = 0 if policy_rows else int(row["epoch"])
+            batch = int(row["iteration"] if policy_rows else row["batch"])
+            batches_total = int(row.get("iterations_total") or row["batches_total"])
             metrics.train_losses.setdefault(epoch, {})[batch] = (
                 batches_total,
                 float(row["value"]),
             )
             previous_batches = metrics.train_window_batches.setdefault(epoch, {})
             fallback_window_batches = batch - max(previous_batches, default=0)
-            window_batches = int(row.get("window_batches") or fallback_window_batches)
+            window_batches = (
+                1
+                if policy_rows
+                else int(row.get("window_batches") or fallback_window_batches)
+            )
             if window_batches <= 0:
                 raise DataContinuityError(
                     f"[{self.model} Epoch {epoch} Batch {batch}]: "
@@ -118,9 +134,11 @@ class StructuredMetricsParser:
             previous_batches[batch] = window_batches
 
         for row in validation_rows:
-            if row.get("run_id") != run_id:
+            if row.get("run_id") != run_id or row["value"] == "":
                 continue
-            epoch_position = self._epoch_position(row)
+            epoch_position = (
+                int(row["iteration"]) if policy_rows else self._epoch_position(row)
+            )
             metric = row.get("metric")
             target = row.get("target")
             value = float(row["value"])
@@ -140,6 +158,10 @@ class StructuredMetricsParser:
             elif metric == "loss" and target:
                 metrics.var_losses.setdefault(target, {})[epoch_position] = value
 
+        if (allow_training_only and not validation_rows) or (
+            policy_rows and validation_metric and not metrics.val_losses
+        ):
+            return metrics
         if not metrics.val_losses:
             raise DataContinuityError(
                 f"[{self.model}]: No valid validation loss data found."
@@ -174,7 +196,7 @@ class StructuredMetricsParser:
         batch = int(row["batch"])
         batches_total = int(row["batches_total"])
         if row.get("evaluation_kind") == "initial":
-            return float(epoch - 1) if row.get("algorithm") != "supervised" else 0.0
+            return 0.0
         if batch > 0 and batches_total > 0:
             return round(epoch - 1 + batch / batches_total, 8)
         return float(epoch)
@@ -229,6 +251,83 @@ def get_metrics_filepaths(args: argparse.Namespace, model: str) -> tuple[str, st
     return training_file, validation_file
 
 
+def _model_plot_data(args, model):
+    """Match native phase tables to the same logical run before plotting them."""
+    parser = StructuredMetricsParser(model)
+    logs = Path(args.project_root) / "logs"
+    phase_directory = re.compile(re.escape(model) + r"-phase-\d{3,}")
+    parent = logs / model
+    tables = []
+    directories = [
+        parent,
+        *sorted(
+            path for path in logs.iterdir() if phase_directory.fullmatch(path.name)
+        ),
+    ]
+    for directory in directories:
+        for path in sorted(directory.glob("*-training-full.csv")):
+            prefix = path.name.removesuffix("-training-full.csv")
+            if prefix != directory.name and not prefix.startswith(directory.name + "-"):
+                continue
+            rows = parser._read_rows(str(path))
+            if rows:
+                tables.append((directory, prefix, rows))
+
+    parent_rows = [rows[-1] for directory, _, rows in tables if directory == parent]
+    if not parent_rows:
+        training, validation = get_metrics_filepaths(args, model)
+        return format_plot_data(
+            parser.parse_files(training, validation),
+            args.bucket_training_batches,
+            model,
+        )
+    run_id = max(parent_rows, key=lambda row: row["timestamp_utc"])["run_id"]
+    series = []
+    for directory, prefix, rows in tables:
+        rows = [row for row in rows if row["run_id"] == run_id]
+        if not rows:
+            continue
+        validation = directory / f"{prefix}-validation-full.csv"
+        evaluations = (
+            [
+                row
+                for row in parser._read_rows(str(validation))
+                if row["run_id"] == run_id
+            ]
+            if validation.is_file()
+            else []
+        )
+        dataset = prefix[len(directory.name) :].removeprefix("-")
+        series.append((dataset, rows, evaluations))
+
+    if len(series) == 1:
+        _, rows, evaluations = series[0]
+        if (
+            all(row["algorithm"] == "supervised" for row in rows)
+            or len({row["phase"] for row in rows}) == 1
+        ):
+            metrics = parser.parse_rows(rows, evaluations, allow_training_only=True)
+            return format_plot_data(metrics, args.bucket_training_batches, model)
+
+    phases = {}
+    for dataset, rows, evaluations in series:
+        for phase in dict.fromkeys(row["phase"] for row in rows):
+            label = " / ".join(filter(None, (model, phase, dataset)))
+            training = [row for row in rows if row["phase"] == phase]
+            validation = [row for row in evaluations if row["phase"] == phase]
+            metrics = parser.parse_rows(training, validation, allow_training_only=True)
+            phases[label] = (
+                training[0]["timestamp_utc"],
+                format_plot_data(metrics, args.bucket_training_batches, label),
+            )
+    return {
+        "phases": {
+            label: data
+            for label, (_, data) in sorted(phases.items(), key=lambda item: item[1][0])
+        }
+    }
+
+
 @beartype
 def format_plot_data(
     metrics: TrainingMetrics, bucket_batches: Optional[int], model: str
@@ -243,6 +342,9 @@ def format_plot_data(
     )
 
     train_x, train_y = [], []
+
+    def position(epoch, batch, total):
+        return batch if metrics.use_iterations else round(epoch - 1 + batch / total, 8)
 
     for epoch in sorted(list(metrics.train_losses.keys())):
         epoch_dict = metrics.train_losses[epoch]
@@ -275,7 +377,7 @@ def format_plot_data(
                     / chunk_batches
                 )
                 last_batch, num_batches = chunk[-1][0], chunk[-1][1]
-                train_x.append(round(epoch - 1 + last_batch / num_batches, 8))
+                train_x.append(position(epoch, last_batch, num_batches))
                 train_y.append(avg_loss)
                 chunk = []
                 chunk_batches = 0
@@ -303,7 +405,7 @@ def format_plot_data(
                 append_chunk()
         else:
             for batch, num_batches, loss, _ in epoch_data:
-                train_x.append(round(epoch - 1 + batch / num_batches, 8))
+                train_x.append(position(epoch, batch, num_batches))
                 train_y.append(loss)
 
     if not train_x:
@@ -312,6 +414,7 @@ def format_plot_data(
         )
 
     return {
+        "progress_label": "Iteration" if metrics.use_iterations else "Epoch",
         "val_x": val_x,
         "val_y": val_y,
         "base_y": base_y,
@@ -343,14 +446,14 @@ def _add_invalid_runs(fig: go.Figure, invalid_runs: dict[str, str]) -> None:
 
 
 @beartype
-def _generate_single_model_plot(
+def _single_model_figure(
     model: str,
     data: dict[str, Any],
     yaxis_type: str,
-    out_path: str,
     invalid_runs: Optional[dict[str, str]] = None,
-) -> None:
-    """Write a single-model training report."""
+) -> go.Figure:
+    """Build the training plot for a model or one phase of a mixed run."""
+    progress_label = data.get("progress_label", "Epoch")
     policy_metrics = data.get("training_label", "Training Loss") != "Training Loss"
     if policy_metrics:
         yaxis_type = "linear"
@@ -372,7 +475,7 @@ def _generate_single_model_plot(
             y=data["val_y"],
             mode="lines",
             name=data.get("validation_label", "Validation Loss"),
-            hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+            hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
         ),
         row=1,
         col=1,
@@ -383,7 +486,7 @@ def _generate_single_model_plot(
             y=data["train_y"],
             mode="lines",
             name=data.get("training_label", "Training Loss"),
-            hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+            hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
         ),
         row=1,
         col=1,
@@ -397,13 +500,13 @@ def _generate_single_model_plot(
                 mode="lines",
                 name="Baseline Loss",
                 line=dict(dash="dash"),
-                hovertemplate=f"<b>{model}</b><br>Baseline Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+                hovertemplate=f"<b>{model}</b><br>Baseline Loss: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
             ),
             row=1,
             col=1,
         )
 
-    fig.update_xaxes(title_text="Epoch", dtick=1, row=1, col=1)
+    fig.update_xaxes(title_text=progress_label, dtick=1, row=1, col=1)
     fig.update_yaxes(title_text="Loss", type=yaxis_type, row=1, col=1)
 
     if has_var_losses:
@@ -424,13 +527,13 @@ def _generate_single_model_plot(
                     y=y_norm,
                     mode="lines",
                     name=var,
-                    hovertemplate=f"<b>{var}</b>: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+                    hovertemplate=f"<b>{var}</b>: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
                 ),
                 row=1,
                 col=2,
             )
 
-        fig.update_xaxes(title_text="Epoch", dtick=1, row=1, col=2)
+        fig.update_xaxes(title_text=progress_label, dtick=1, row=1, col=2)
         fig.update_yaxes(
             title_text="Loss / Epoch 0 Loss", type=yaxis_type, row=1, col=2
         )
@@ -442,8 +545,7 @@ def _generate_single_model_plot(
     fig.update_layout(title_text=f"Training Visualization: {model}")
     if invalid_runs is not None:
         _add_invalid_runs(fig, invalid_runs)
-    fig.write_html(out_path, include_plotlyjs="cdn")
-    logger.info(f"Visualization HTML generated and saved successfully to {out_path}")
+    return fig
 
 
 @beartype
@@ -468,6 +570,7 @@ def _generate_multi_model_plot(
 
     for i, model in enumerate(models):
         data = all_data[model]
+        progress_label = data.get("progress_label", "Epoch")
         color = colors[i % len(colors)]
 
         fig.add_trace(
@@ -479,7 +582,7 @@ def _generate_multi_model_plot(
                 legendgroup=model,
                 line=dict(color=color),
                 showlegend=True,
-                hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+                hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
             ),
             row=1,
             col=1,
@@ -494,7 +597,7 @@ def _generate_multi_model_plot(
                 legendgroup=model,
                 line=dict(color=color),
                 showlegend=False,
-                hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+                hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>{progress_label}: %{{x}}<extra></extra>",
             ),
             row=1,
             col=2,
@@ -530,9 +633,11 @@ def _generate_multi_model_plot(
             col=1,
         )
 
-    fig.update_xaxes(title_text="Epoch", dtick=1, row=1, col=1)
+    labels = {data.get("progress_label", "Epoch") for data in all_data.values()}
+    progress_label = " / ".join(sorted(labels))
+    fig.update_xaxes(title_text=progress_label, dtick=1, row=1, col=1)
     fig.update_yaxes(title_text="Loss", type=yaxis_type, row=1, col=1)
-    fig.update_xaxes(title_text="Epoch", dtick=1, row=1, col=2)
+    fig.update_xaxes(title_text=progress_label, dtick=1, row=1, col=2)
     fig.update_yaxes(title_text="Loss", type=yaxis_type, row=1, col=2)
 
     fig.update_layout(title_text="Multi-Model Training Visualization")
@@ -555,15 +660,40 @@ def generate_html_report(
 
     yaxis_type = "log" if args.log_scale else "linear"
 
-    if len(models) == 1 and report_name is None:
-        model = models[0]
-        out_path = os.path.join(output_dir, f"{model}-training-visualization.html")
-        _generate_single_model_plot(model, all_data[model], yaxis_type, out_path)
+    if any("phases" in data for data in all_data.values()):
+        filename = report_name or (
+            f"{models[0]}-training-visualization"
+            if len(models) == 1
+            else "multi-model-training-visualization"
+        )
+        figures = [
+            _single_model_figure(label, data, yaxis_type)
+            for model in models
+            for label, data in all_data[model]
+            .get("phases", {model: all_data[model]})
+            .items()
+        ]
+        if invalid_runs:
+            _add_invalid_runs(figures[-1], invalid_runs)
+        with open(
+            os.path.join(output_dir, f"{filename}.html"), "w", encoding="utf-8"
+        ) as file:
+            file.write("<!doctype html><html><head><meta charset='utf-8'></head><body>")
+            for index, figure in enumerate(figures):
+                file.write(
+                    figure.to_html(
+                        full_html=False, include_plotlyjs="cdn" if index == 0 else False
+                    )
+                )
+            file.write("</body></html>")
     elif len(models) == 1:
         model = models[0]
-        out_path = os.path.join(output_dir, f"{report_name}.html")
-        _generate_single_model_plot(
-            model, all_data[model], yaxis_type, out_path, invalid_runs or {}
+        filename = report_name or f"{model}-training-visualization"
+        figure = _single_model_figure(
+            model, all_data[model], yaxis_type, invalid_runs if report_name else None
+        )
+        figure.write_html(
+            os.path.join(output_dir, f"{filename}.html"), include_plotlyjs="cdn"
         )
     else:
         filename = (
@@ -584,7 +714,6 @@ def visualize_training(args: argparse.Namespace) -> None:
     if not models:
         raise ValueError("No models provided to visualize.")
 
-    bucket_batches = args.bucket_training_batches
     all_data: dict[str, Any] = {}
     invalid_runs: dict[str, str] = {}
 
@@ -594,11 +723,7 @@ def visualize_training(args: argparse.Namespace) -> None:
 
         logger.info(f"Parsing structured metrics for model: {model}")
         try:
-            training_file, validation_file = get_metrics_filepaths(args, model)
-            metrics = StructuredMetricsParser(model).parse_files(
-                training_file, validation_file
-            )
-            all_data[model] = format_plot_data(metrics, bucket_batches, model)
+            all_data[model] = _model_plot_data(args, model)
         except (DataContinuityError, FileNotFoundError) as error:
             invalid_runs[model] = str(error).removeprefix(f"[{model}]: ")
             logger.warning(f"Skipping invalid training run '{model}': {error}")

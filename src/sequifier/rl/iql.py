@@ -8,6 +8,7 @@ from torch import nn
 
 from sequifier.config.policy_plan import IQLPhaseConfig
 from sequifier.io.iql_dataset import IQLTransitionDataset
+from sequifier.io.tensors import gather_tensor
 from sequifier.rl.offline_data import OfflineData
 from sequifier.rl.run_state import PhaseContext, PhaseSession
 from sequifier.rl.window_storage import collated_windows
@@ -40,7 +41,7 @@ def build_iql_roles(actor, phase, *, metadata_only, restoring):
 
 def _select(inputs, mask):
     return type(inputs)(
-        {name: value[mask] for name, value in inputs.inputs.items()},
+        {name: gather_tensor(value, mask) for name, value in inputs.inputs.items()},
         {name: value[mask] for name, value in inputs.metadata.items()},
     )
 
@@ -162,19 +163,20 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         session.step()
         _polyak(targets[0], q1, phase.target_update_rate)
         _polyak(targets[1], q2, phase.target_update_rate)
+        training_losses = {
+            f"{role}_loss": float(loss.detach()) for role, loss in losses.items()
+        }
         session.complete_update(
             final=update == phase.budget.iterations,
             training={
-                f"{role}_loss": float(loss.detach()) for role, loss in losses.items()
-            },
-            evaluate=evaluate,
-            evaluation_record=lambda: {
+                **training_losses,
                 "advantage_mean": float(advantage.mean()),
                 "weight_mean": float(weight.mean()),
                 "weight_cap_fraction": float(
                     (weight >= phase.max_advantage_weight).float().mean()
                 ),
             },
+            evaluate=evaluate,
         )
     return session.finish(
         session.optimizer_clocks(),

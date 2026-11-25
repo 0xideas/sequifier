@@ -59,7 +59,7 @@ run:
       episode_cache_size: 8
   recovery:
     resume:
-      policy: never
+      policy: if_exists
 datasets:
   demonstrations:
     model_interface: actor

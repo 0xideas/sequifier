@@ -9,21 +9,23 @@ from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.fingerprints import fingerprint
 from sequifier.io.episode_cache import EpisodeCache
 from sequifier.io.policy_window import action_index
-from sequifier.io.sequence import SequenceEpisode
+from sequifier.io.sequence import SequenceEpisode, register_sequence_name
 from sequifier.trajectory.importers import source_episodes
+from sequifier.trajectory.sequence_output import sequence_coordinate
 from sequifier.trajectory.sources import ResolvedSequenceSource
 from sequifier.trajectory.tables import TableEpisodeReference
 
 
 def _load(source) -> SequenceEpisode:
     if isinstance(source, SequenceEpisode):
-        return SequenceEpisode.model_validate(source.model_dump())
+        return type(source).model_validate(source.model_dump())
     return source.load()
 
 
 @dataclass(frozen=True)
 class EpisodeMetadata:
     episode_id: str
+    sequence_id: int
     group_id: str | None
     length: int
     content_key: str
@@ -42,7 +44,14 @@ class EpisodeCorpus:
     """Own one bounded decoded cache over immutable source records."""
 
     def __init__(
-        self, sources, config, cache_size=8, *, cache_owner=None, records=None
+        self,
+        sources,
+        config,
+        cache_size=8,
+        *,
+        cache_owner=None,
+        records=None,
+        sequence_names=None,
     ):
         if cache_size < 1:
             raise ValueError("episode_cache_size must be positive")
@@ -52,6 +61,9 @@ class EpisodeCorpus:
             else EpisodeCache(cache_size)
         )
         self.records = records if records is not None else self._index(sources, config)
+        names = {} if sequence_names is None else sequence_names
+        for record in self.records.metadata:
+            register_sequence_name(names, record.sequence_id, record.episode_id)
 
     def _index(self, sources, config):
         sources = tuple(
@@ -83,11 +95,16 @@ class EpisodeCorpus:
             metadata.append(
                 EpisodeMetadata(
                     episode.episode_id,
+                    episode.sequence_id
+                    if episode.sequence_id is not None
+                    else sequence_coordinate(episode.episode_id),
                     episode.group_id,
                     len(episode.actions),
                     getattr(sources[index], "content_key", None)
                     or episode_content_key(episode),
-                    fingerprint(episode.model_dump(mode="json")),
+                    fingerprint(
+                        episode.model_dump(mode="json", exclude={"sequence_id"})
+                    ),
                 )
             )
         return EpisodeRecords(sources, tuple(metadata))
@@ -125,6 +142,10 @@ class EpisodeView:
         corpus, position = self.entries[index]
         return corpus.records.metadata[position]
 
+    def source(self, index):
+        corpus, position = self.entries[index]
+        return corpus.records.sources[position]
+
     def used_for_fitting(self, index):
         corpus, position = self.entries[index]
         source = corpus.records.sources[position]
@@ -156,6 +177,7 @@ def episode_content_key(episode, *, length=None, returns=None) -> str:
             column: entries[:length] for column, entries in episode.observations.items()
         },
         "actions": episode.actions[:length],
+        "observation_masks": episode.observation_masks[:length],
         "static_inputs": episode.static_inputs,
         "previous_action": episode.previous_action,
         "starts_episode": episode.starts_episode,

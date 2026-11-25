@@ -3,10 +3,17 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.io.action_record import action_record_layout
-from sequifier.io.sequence import SequenceEpisode, TransitionColumns
+from sequifier.io.actions import decode_action
+from sequifier.io.sequence import (
+    ContextObservation,
+    PreparedEpisode,
+    SequenceEpisode,
+    TransitionColumns,
+)
 from sequifier.trajectory.schema import Trajectory, validate_trajectory
 from sequifier.trajectory.sources import ResolvedSequenceSource, resolve_source
 from sequifier.trajectory.store import load_trajectory
@@ -16,6 +23,8 @@ from sequifier.trajectory.tables import table_episodes
 def sequence_from_trajectory(
     trajectory: Trajectory, policy: PolicyEpisodeSpec, action_semantics="policy"
 ) -> SequenceEpisode:
+    from sequifier.trajectory.sequence_output import sequence_coordinate
+
     episode = validate_trajectory(trajectory)
     if (
         episode.format
@@ -29,13 +38,54 @@ def sequence_from_trajectory(
         raise ValueError("recorded actions do not match the policy action column")
     layout = action_record_layout(policy)
     steps = episode.transitions
-    return SequenceEpisode(
+    execution = episode.metadata.get("policy_execution", {})
+    recording_policy = (
+        ResolvedPolicyBinding.model_validate(execution["config"])
+        if execution.get("seed_previous_action_ids") is not None
+        else policy
+    )
+    policy.validate_source_units(execution.get("config", {}).get("units"))
+    seed_actions = execution.get("seed_previous_action_ids")
+    if seed_actions is None:
+        count = (
+            1
+            if policy.previous_action_inputs or policy.return_conditioned
+            else sum(episode.seed.attention_valid_mask)
+        )
+        seed_actions = [None] * count
+    seed_returns = execution.get("seed_returns") or [None] * len(seed_actions)
+    context = tuple(
+        ContextObservation(
+            observation={
+                name: values[i - len(seed_actions)]
+                for name, values in episode.seed.observations.items()
+            },
+            masked=episode.seed.observation_mask[i - len(seed_actions)],
+            previous_action=decode_action(action, recording_policy)
+            if action is not None
+            else None,
+            desired_return=seed_returns[i],
+        )
+        for i, action in enumerate(seed_actions[:-1])
+    )
+    previous = seed_actions[-1]
+    result = SequenceEpisode(
+        sequence_id=sequence_coordinate(episode.episode_id),
         episode_id=episode.episode_id,
+        group_id=episode.seed_group,
         item_positions=tuple(step.step_id for step in steps),
+        starts_episode=previous is None,
+        previous_action=decode_action(previous, recording_policy)
+        if previous is not None
+        else None,
         observations={
             column: tuple(step.observation[column] for step in steps)
             for column in episode.seed.observations
         },
+        observation_masks=(
+            episode.seed.observation_mask[-1],
+            *([False] * (len(steps) - 1)),
+        ),
         actions=tuple(
             layout.pack(step.predictions, step.action_latents, step.action_components)
             for step in steps
@@ -48,6 +98,10 @@ def sequence_from_trajectory(
             successors=tuple(step.successor_observation for step in steps),
             bootstrap_allowed=tuple(step.bootstrap_allowed for step in steps),
         ),
+    )
+
+    return (
+        PreparedEpisode(**result.model_dump(), context=context) if context else result
     )
 
 
@@ -74,6 +128,9 @@ def source_episodes(
         resolve_source(source) if isinstance(source, SequenceSourceConfig) else source
     )
     source_config = resolved.declaration
+    policy.validate_source_units(source_config.units)
+    provenance = (resolved.manifest or {}).get("provenance", {})
+    policy.validate_source_units(provenance.get("policy_binding", {}).get("units"))
     if resolved.kind == "trajectory":
         return [
             TrajectoryReference(

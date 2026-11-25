@@ -562,11 +562,18 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
     @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         output = self.base_ingestion(src, metadata)
+        valid = metadata.get("attention_valid_mask")
+        padding = None if valid is None else ~valid.bool().unsqueeze(-1)
+        if padding is not None:
+            output = output.masked_fill(padding, 0)
         for layer, dilation in zip(self.layers, self.dilation_schedule):
             conv_input = output.transpose(1, 2).to(dtype=layer.weight.dtype)
             conv_input = F.pad(conv_input, self._temporal_padding(dilation))
             output = layer(conv_input).transpose(1, 2)
             output = self.drop(self.activation(output))
+            # A convolution can repopulate padding through its bias or its neighbors.
+            if padding is not None:
+                output = output.masked_fill(padding, 0)
         return self._apply_post_conv_norm(output)
 
 

@@ -288,16 +288,19 @@ def _validate_noop(
 
 @beartype
 def resolve_ingestion_plan(
-    hparams: ResolvedModelInterface, architecture: BackboneArchitectureConfig
+    hparams: ResolvedModelInterface,
+    architecture: BackboneArchitectureConfig,
+    *,
+    causal_attention: bool | None = None,
 ) -> ResolvedIngestionBranch:
     """Lower the public union/dictionary syntax into one validated plan."""
     ingestion_spec = hparams.ingestion
-    objective_name = hparams.window_view.objective
-    uses_causal_attention = (
-        get_objective_class(objective_name).uses_causal_attention
-        if objective_name is not None
-        else False
-    )
+    if causal_attention is None:
+        objective = hparams.window_view.objective
+        causal_attention = (
+            objective is not None
+            and get_objective_class(objective).uses_causal_attention
+        )
     transformer_input_width = architecture.model_dim - int(
         architecture.position_encoding.type == "range_concat"
     )
@@ -356,16 +359,15 @@ def resolve_ingestion_plan(
         handler = INGESTION_HANDLERS.get(config.type)
         if handler is None:
             raise ValueError(f"Unknown ingestion type: {config.type}")
-        if config.type == "temporal_conv" and uses_causal_attention:
+        if config.type == "temporal_conv" and causal_attention:
             if not config.causal:
                 raise ValueError(
-                    f"{path}: temporal_conv must be causal for "
-                    f"{objective_name!r} training"
+                    f"{path}: temporal_conv must be causal for causal attention"
                 )
             if config.orientation == "within_column":
                 raise ValueError(
                     f"{path}: temporal_conv orientation 'within_column' "
-                    f"is incompatible with {objective_name!r} training"
+                    "is incompatible with causal attention"
                 )
         columns, layout = handler.resolve_columns(hparams, config, root)
         _validate_ingestion_columns(hparams, path, columns)
@@ -657,8 +659,11 @@ def compile_feature_ingestion(
     direct_real_dtype_provider: Callable[[], torch.dtype],
     max_concat_tensors: int,
     load_pretrained: bool = True,
+    causal_attention: bool | None = None,
 ) -> BuiltIngestion:
-    root = resolve_ingestion_plan(hparams, architecture)
+    root = resolve_ingestion_plan(
+        hparams, architecture, causal_attention=causal_attention
+    )
     context = IngestionBuildContext(
         hparams=hparams,
         direct_real_dtype_provider=direct_real_dtype_provider,

@@ -23,9 +23,10 @@ from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import file_checksum
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES, StoredWindowLayout
+from sequifier.io.atomic import atomic_path
 from sequifier.io.preprocessing import normalization_statistics
 from sequifier.io.pt_payload import StoredTensorBatch
-from sequifier.io.sequence import ordered_sequence_rows
+from sequifier.io.sequence import ordered_sequence_rows, validate_sequence_ids
 from sequifier.io.window_placement import (
     PredictionAlignment,
     WindowPlacement,
@@ -127,14 +128,21 @@ class SplitIndexWriter:
 class IndexedSequenceWriter:
     """Commit one ordered item store and its split views as a directory."""
 
-    def __init__(self, output_path):
+    def __init__(self, output_path, *, workspace=None):
         self.destination = Path(output_path).absolute()
         self.destination.parent.mkdir(parents=True, exist_ok=True)
         if self.destination.exists():
             raise FileExistsError(self.destination)
-        self.root = Path(
-            mkdtemp(prefix=f".{self.destination.name}-", dir=self.destination.parent)
-        )
+        self.workspace = workspace
+        if workspace is None:
+            self.root = Path(
+                mkdtemp(
+                    prefix=f".{self.destination.name}-", dir=self.destination.parent
+                )
+            )
+        else:
+            self.root = workspace / "publication"
+            self.root.mkdir()
         self.files = []
         self.sequences = {}
         self.views = {}
@@ -147,6 +155,11 @@ class IndexedSequenceWriter:
             for view in self.views.values():
                 view.close()
             rmtree(self.root)
+
+    def item_checkpoint(self, sequence_id):
+        if self.workspace is None:
+            raise ValueError("Item checkpoints require a preprocessing workspace")
+        return self.workspace / f"items-{sequence_id}.parquet"
 
     def add(self, items, windows, *, episode_id=None, group_id=None, content_key=None):
         items = ordered_sequence_rows(items)
@@ -162,7 +175,14 @@ class IndexedSequenceWriter:
             raise ValueError(f"Duplicate indexed sequence {sequence_id}")
         positions = items["itemPosition"]
         path = self.root / f"items-{len(self.sequences):08d}.parquet"
-        items.write_parquet(path, row_group_size=ROW_GROUP_SIZE)
+        if self.workspace is None:
+            items.write_parquet(path, row_group_size=ROW_GROUP_SIZE)
+        else:
+            checkpoint = self.item_checkpoint(sequence_id)
+            if not checkpoint.exists():
+                with atomic_path(checkpoint) as temporary:
+                    items.write_parquet(temporary, row_group_size=ROW_GROUP_SIZE)
+            os.link(checkpoint, path)
         self.files.append(path)
         offsets = [0]
         with pq.ParquetFile(path) as file:
@@ -278,7 +298,6 @@ class IndexedView:
     manifest_path: Path
     view: dict
     dataset: dict
-    sequence_labels: dict[int, str] | None = None
 
     @classmethod
     def load(cls, path):
@@ -362,6 +381,16 @@ class IndexedView:
         return ImageStore(sources, prefix, project_root or str(self.root))
 
     def validate_resources(self):
+        for sequence in self.dataset["sequences"]:
+            if str(int(sequence)) != sequence or not -(2**63) <= int(sequence) < 2**63:
+                raise ValueError(
+                    f"{self.path}: invalid integer sequenceId {sequence!r}"
+                )
+        if any(
+            (isinstance(sequence, int) is False)
+            for sequence, _, _ in self.view["ranges"]
+        ):
+            raise ValueError(f"{self.path}: split ranges require integer sequence IDs")
         metadata = self._metadata
         normalization_statistics(metadata.selected_columns_statistics)
         for column, mapping in metadata.id_maps.items():
@@ -429,7 +458,7 @@ class IndexedView:
                 f"{self.path}: static table lacks sequence IDs: {sorted(missing)[:10]}"
             )
 
-    def validate_item_columns(self, required):
+    def validate_item_columns(self, required, *, struct_fields=None):
         required = set(required)
         metadata = self._metadata
         masks = {depth_mask_metadata_key(name) for name in metadata.depth_layouts.root}
@@ -439,6 +468,12 @@ class IndexedView:
             schema = pl.scan_parquet(self.root / record["path"]).collect_schema()
             if missing := required - set(schema.names()):
                 raise ValueError(f"{location} lacks stored features: {sorted(missing)}")
+            for name, fields in (struct_fields or {}).items():
+                dtype = schema[name]
+                if not isinstance(dtype, pl.Struct) or set(fields) - set(
+                    dtype.to_schema()
+                ):
+                    raise ValueError(f"{location}: {name} lacks required record fields")
             for column in required:
                 dtype = schema[column]
                 if column in masks or metadata.depth_layouts.is_deep_column(column):
@@ -460,6 +495,49 @@ class IndexedView:
 
     def split_bounds(self):
         return {sequence: (low, high) for sequence, low, high in self.view["ranges"]}
+
+    def history_start(self, sequence, low, high, requested):
+        split = int(self.view["view"])
+        metadata = self._metadata
+        alignment = PredictionAlignment.for_split(metadata, split)
+        if alignment is None:
+            return max(low, requested)
+        width = metadata.width_for_split(split)
+        placement = WindowPlacement.for_split(
+            self.dataset["sequences"][str(sequence)]["position"],
+            low,
+            high,
+            width,
+            getattr(metadata, "window_stride", None) or width,
+            alignment,
+            end=1,
+        )
+        return max(requested, int(placement.starts[0] + placement.padding[0]))
+
+    def covered_intervals(self, sequence, low, high):
+        """Contiguous physical rows represented by the preprocessing windows."""
+        split = int(self.view["view"])
+        width = self._metadata.width_for_split(split)
+        stride = self._metadata.window_stride or width
+        alignment = PredictionAlignment.for_split(self._metadata, split)
+        if alignment is not None or stride <= width:
+            yield self.history_start(sequence, low, high, low - width), high
+            return
+        placement = WindowPlacement.for_split(
+            self.dataset["sequences"][str(sequence)]["position"],
+            low,
+            high,
+            width,
+            stride,
+        )
+        start, stop = low, low
+        for offset, padding in placement:
+            first = offset + padding
+            if first > stop:
+                yield start, stop
+                start = first
+            stop = offset + width
+        yield start, stop
 
     @property
     def is_fitting_split(self) -> bool:
@@ -546,7 +624,10 @@ class IndexedView:
             stop_group = bisect_right(offsets, high - 1)
             groups = range(first_group, stop_group)
             table = file.read_row_groups(list(groups), columns=columns)
-            return pl.DataFrame(table.slice(low - offsets[first_group], high - low))
+            frame = pl.DataFrame(table.slice(low - offsets[first_group], high - low))
+            if "sequenceId" in frame.columns:
+                validate_sequence_ids(frame)
+            return frame
 
     def tensor_batches(self, metadata, columns, width, entries=None):
         if entries is None:

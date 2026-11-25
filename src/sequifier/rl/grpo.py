@@ -2,15 +2,12 @@
 
 import statistics
 from contextlib import ExitStack
-from pathlib import Path
 from time import perf_counter
 
 import torch
 from loguru import logger
 
 from sequifier.config.policy_plan import GRPOPhaseConfig
-from sequifier.contract_versions import ContractVersions
-from sequifier.io.atomic import write_json_atomic
 from sequifier.model.frozen_image_cache import (
     frozen_image_cache_scope,
     image_cache_statistics,
@@ -24,8 +21,8 @@ from sequifier.rl.environment import (
 from sequifier.rl.grpo_collector import collect_groups
 from sequifier.rl.grpo_update import update_grpo
 from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
+from sequifier.rl.sequence_output import CollectedSequences
 from sequifier.runtime.resource_accounting import allocation
-from sequifier.trajectory.archives import collection_archive
 
 
 def validate_grpo_adapter(adapter, phase, exact):
@@ -50,6 +47,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     actor, phase = context.actor.eval(), context.phase
     session = PhaseSession(context)
     state = session.state
+    sequences = CollectedSequences(context, state)
     groups, env_steps = state.get("groups", 0), state.get("env_steps", 0)
     restart_stream = state.get("restart_stream", 0)
     if (
@@ -134,31 +132,13 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 )
                 collection_seconds = perf_counter() - collection_start
                 update_start = perf_counter()
+                sequences.grpo(buffer)
                 record = update_grpo(session, buffer)
                 if actor.device.type == "cuda":
                     torch.cuda.synchronize(actor.device)
                 update_seconds = perf_counter() - update_start
                 env_steps += executed
                 groups += count
-                if phase.collection.archive_directory:
-                    with allocation("rollout_archive") as archive:
-                        archive.resize(buffer.estimated_bytes)
-                        write_json_atomic(
-                            Path(phase.collection.archive_directory)
-                            / f"groups-{actor.grpo_policy_version:08d}.json",
-                            collection_archive(
-                                "grpo",
-                                {
-                                    "format": "sequifier.grpo-archive",
-                                    "version": ContractVersions.GRPO_ARCHIVE,
-                                    "reference_identity": context.reference_identity,
-                                    "generation": buffer.generation,
-                                    "trajectories": [
-                                        t.as_dict() for t in buffer.trajectories
-                                    ],
-                                },
-                            ),
-                        )
                 scores = [t.score for t in buffer.trajectories]
                 record.update(
                     {
@@ -209,9 +189,10 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                     env_steps=env_steps,
                     adapter_identity=identity,
                     restart_stream=restart_stream,
+                    **sequences.checkpoint(),
                 ),
             )
-            logger.info(
+            logger.debug(
                 "GRPO iteration {}: {} steps, collection {:.2f}s ({:.1f} steps/s), "
                 "update {:.2f}s, evaluation {:.2f}s",
                 session.transaction,
@@ -233,6 +214,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             "env_steps": env_steps,
         },
         {
+            **sequences.publish(),
             "reference_weight_hash": context.reference_identity,
             "adapter": identity,
         },

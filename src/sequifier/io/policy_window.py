@@ -103,11 +103,12 @@ class PolicyWindowView:
             ]
         else:
             previous += action_ids[max(0, start - 1) : step]
-        return self.inputs(
+        return self._with_context(
+            episode,
             [episode.observation(position) for position in range(start, step + 1)],
             previous,
             returns[start : step + 1] if returns is not None else None,
-            episode.static_inputs,
+            list(episode.observation_masks[start : step + 1]),
         )
 
     def successor_inputs(self, episode, step: int, successor) -> SequifierInputs:
@@ -141,7 +142,32 @@ class PolicyWindowView:
                 self.config.returns.gamma,
             )
             budgets = returns[start : step + 1] + [following]
-        return self.inputs(observations, previous, budgets, episode.static_inputs)
+        masks = list(episode.observation_masks[start : step + 2])
+        if len(masks) < len(observations):
+            masks.append(False)
+        return self._with_context(episode, observations, previous, budgets, masks)
+
+    def _with_context(self, episode, observations, previous, budgets, masks):
+        context = getattr(episode, "context", None)
+        needed = self.config.context_length - len(observations)
+        if context is not None and needed > 0:
+            prefix = context[-needed:]
+            observations = [step.observation for step in prefix] + observations
+            masks = [step.masked for step in prefix] + masks
+            lagged = [step.previous_action for step in prefix]
+            previous = [
+                action_index(a, self.config) if a is not None else None for a in lagged
+            ] + previous
+            if budgets is not None:
+                earlier = []
+                remaining = budgets[0]
+                for step in reversed(prefix):
+                    remaining = step.return_before(remaining, self.config.returns.gamma)
+                    earlier.append(remaining)
+                budgets = earlier[::-1] + list(budgets)
+        return self.inputs(
+            observations, previous, budgets, episode.static_inputs, masks=masks
+        )
 
     def inputs(
         self,
@@ -149,6 +175,8 @@ class PolicyWindowView:
         previous_actions: Sequence[int | dict[str, int | float] | None],
         desired_returns: Sequence[float] | None,
         static_inputs: Mapping,
+        *,
+        masks=None,
     ) -> SequifierInputs:
         config = self.config
         if config.return_conditioned:
@@ -167,4 +195,5 @@ class PolicyWindowView:
             previous_actions,
             static_inputs,
             codecs=self._categorical_codecs,
+            masks=masks,
         )

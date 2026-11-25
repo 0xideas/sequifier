@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -34,8 +35,11 @@ def read_training_plan(saved: dict):
 
 
 def phase_contract(phase):
+    values = phase.model_dump(mode="json", exclude={"optimization"})
+    if "collection" in values and values["collection"].get("output") is None:
+        values["collection"].pop("output", None)
     return {
-        **phase.model_dump(mode="json", exclude={"optimization"}),
+        **values,
         "optimization": {
             name: role.compatibility_settings()
             for name, role in phase.optimization.items()
@@ -50,7 +54,11 @@ def training_plan_identity(config):
     values = config.model_dump(
         mode="json",
         exclude={
-            "run": {"recovery": {"resume"}},
+            "run": {
+                "retrain": True,
+                "recovery": {"resume"},
+                "execution": {"policy"},  # Policy compilation is runtime-only.
+            },
             "training_plan": True,
         },
     )
@@ -260,6 +268,21 @@ def checkpoint_path(training_config: Any, *, resume=None) -> Path:
             / f"{training_config.model_name}-latest.pt"
         )
     return path.resolve()
+
+
+@contextmanager
+def training_lock(checkpoint: Path):
+    """Serialize training owners sharing a checkpoint publication directory."""
+    import fcntl
+    import os
+
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(checkpoint.parent, os.O_RDONLY)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
 
 
 def select_run_checkpoint(path: Path, resume) -> Path | None:

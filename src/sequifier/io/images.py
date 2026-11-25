@@ -18,6 +18,7 @@ import torch
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import normalize_path
+from sequifier.io.sequence import validate_sequence_ids
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
@@ -41,6 +42,18 @@ def _media_signature(path: Path) -> dict[str, int]:
 def _civil_milliseconds(value: datetime) -> int:
     delta = value.replace(tzinfo=None) - datetime(1970, 1, 1)
     return delta.days * 86_400_000 + delta.seconds * 1000 + delta.microseconds // 1000
+
+
+def item_time_mode(value: Any) -> str:
+    if value is None:
+        raise ValueError("time_alignment_column cannot contain null")
+    if isinstance(value, (date, datetime)):
+        return "absolute"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return "absolute" if len(str(value)) == 17 else "relative"
+    if isinstance(value, str):
+        return "relative" if len(value) == 9 and value.isdigit() else "absolute"
+    raise ValueError(f"Invalid time_alignment_column value: {value!r}")
 
 
 def _time_ms(value: Any, *, absolute: bool) -> int:
@@ -528,6 +541,7 @@ class ImageStore:
                     data = pl.read_parquet(
                         normalize_path(source.time_index_path, project_root)
                     )
+                    validate_sequence_ids(data)
                     self.item_times = {}
                     for sequence_id, frame in data.partition_by(
                         "sequenceId", as_dict=True

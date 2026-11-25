@@ -28,6 +28,7 @@ class RunState:
     plan_stopped: bool = False
     initial_evaluated_phases: list[int] = field(default_factory=list)
     phase_index: int = 0  # Position within the native plan.
+    metric_positions: dict = field(default_factory=dict)
     phase_offset: int = 0  # Original index of the first phase in the plan.
     phase_epoch: int = 0
     phase_epoch_complete: bool = False
@@ -37,10 +38,15 @@ class RunState:
     epoch: int = 0
     batch: int = 0
     last_snapshot_batch_step: int = 0
+    global_step_offset: int = 0
     global_batch_step: int = 0
     optimizer_step: int = 0
     accumulation_index: int = 0
     backbone_parent_revision_id: str | None = None
+
+    @property
+    def global_step(self) -> int:
+        return self.global_step_offset + self.global_batch_step
 
     def snapshot(self) -> RunStateSnapshot:
         values = {

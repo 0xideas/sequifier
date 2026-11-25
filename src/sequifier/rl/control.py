@@ -17,6 +17,7 @@ from sequifier.rl.environment import (
 
 
 class CategoricalControlAdapter(OnlineEnvironmentAdapterBase):
+    inference_isolated_snapshot = True
     implementation_id = (
         f"sequifier.categorical-control.v{ContractVersions.CATEGORICAL_CONTROL}"
     )

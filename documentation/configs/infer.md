@@ -223,7 +223,7 @@ available for forecast and embedding requests.
 
 `<model>` is the model artifact filename without its extension. Prediction and
 embedding outputs contain sequence and window identifiers. Probability files
-contain only the class-probability columns for their target. Categorical
+contain one column per class in decoder order. Forecast and policy Parquet probability files store these columns as Float64. Categorical
 predictions are decoded when `output.decode_categories` is enabled, and normalized
 real predictions are restored to their original scale. Every input writes one
 or more numbered parts.
@@ -293,13 +293,13 @@ ORT installation. Outputs stay indexed by outer item coordinates.
 ## Policy model interfaces
 
 `task` explicitly selects the operation. `task: policy` requires one
-policy-bound portable PT artifact. `task: forecast` requests ordinary predictions,
+portable PT model or executable run checkpoint with a policy-bound interface. `task: forecast` requests ordinary predictions,
 including from a policy-bound interface with a supported forecast contract.
 `task: embedding` extracts representations. Select `artifact.interface` when ambiguous.
 The artifact validates task support; it never chooses the operation implicitly.
 The CLI uses `--task forecast|policy|embedding`.
 
-Policy input accepts raw observation rows or an indexed prediction view. History alignment, codecs and
+Policy input accepts observation rows, indexed views, and stored preprocessing splits. History alignment, codecs and
 normalization come from the artifact. Common fields cover model/interface/data
 selection, read/write formats, device, seed, `enforce_determinism` and batch size.
 
@@ -310,27 +310,34 @@ selection, read/write formats, device, seed, `enforce_determinism` and batch siz
 | `desired_return` | null; fixed budget for return-conditioned policies |
 | `input.desired_return_column` | `desired_return`; per-row budget when no fixed budget is supplied |
 | `input.previous_action_columns` | {}; recorded lagged-action column mappings for fragments |
-| `input.sequence_id_column`, `input.item_position_column` | `sequenceId`, `itemPosition`; raw history ordering |
 | `output.output_probabilities` | false; include joint log probability and write separate target-specific categorical probability files |
 | `rollout` | null; execute in an online policy environment instead of writing prediction rows |
 
-Optional assertions `input.metadata_config_path`, `assertions.input_columns`, `assertions.static_columns`,
+Policy prediction and rollout group rows by `sequenceId` and order them by
+`itemPosition`, using the same coordinates as preprocessing. Sequence IDs must
+be non-null integers. If your source uses `episode` and `step` for these roles,
+map them to `sequenceId` and `itemPosition` before preprocessing.
+Policy predictions and rollouts read available preceding context at split boundaries.
+Only split-owned decisions get output rows or seed indices. Use
+`rollout.seed_history: current` for a fresh one-observation reset.
+
+Optional assertions `assertions.input_columns`, `assertions.static_columns`,
 `assertions.target_columns`, `assertions.column_data_types`, `assertions.target_column_types`, `assertions.training_objective`,
 `assertions.context_length`, `assertions.target_offset`, `assertions.prediction_length` and `assertions.decoder_support_length` must
 match the selected artifact. Unknown/cross-route options fail even at default values.
 Policy rejects external per-column sampling, dropout, category decoding,
-training-route selection, autoregression and `generation_steps`.
+autoregression and `generation_steps`. Policy accepts `input.training_route` to select a
+prepared dataset view. For an in-memory training partition, select `input.layout: raw` and supply the inference table and its original preprocessing metadata.
 Forecast rejects policy-only output/return/action/history options; embeddings also
 reject generative sampling, decoding, probabilities, autoregression and rollout.
 
-Policy rollout declares `environment: {factory: module:factory, config: {},
-units: {}}`, required `max_steps`, `seed_row_index` and
-`trajectory_path`, plus optional `max_episode_steps`. It rejects forecast `bindings`.
-Forecast rollout uses the forecast rollout adapter protocol, requires bindings and
-selects `seed_window_index`. Neither accepts `rollout.type` or `seed_index`.
-Both indices are zero-based and validated before environment creation. Trajectory
-metadata uses the same route-specific index name. See the [rollout guide](../rollout.md) and
-[policy template](../../src/sequifier/templates/infer-policy.yaml).
+Policy rollout requires an environment and `max_steps`. Forecast rollout also
+requires bindings for temporal inputs. Both accept `rollout.seed` with
+`sequenceId` and `itemPosition`. As an alternative, policies accept a zero-based
+`seed_row_index` and forecasts accept a zero-based `seed_window_index`.
+Set `rollout.output.manifest_path` to publish sequence data,
+`rollout.trajectory_path` to publish a trajectory JSON, or both. The seed origin
+records the selected coordinates. [Rollout guide](../rollout.md)
 
 Execution determinism, action selection and seed are independent. A seeded
 stochastic policy can reproduce its actions under the same supported runtime,
@@ -341,7 +348,22 @@ meaning and the training run's execution-determinism setting.
 
 Point `input.path` at an indexed split manifest to run inference for that split.
 For example, point it at `data/events-indexed/2.split.json` for a third split. The
-manifest resolves its sequence shards and preprocessing metadata.
+manifest resolves its sequence shards and preprocessing metadata. Forecast, embedding,
+policy prediction, and both rollout routes also accept a preprocessing split by name:
+
+```yaml
+input:
+  metadata_config_path: data/events-indexed/metadata.json
+  split: validation
+```
+
+With a named split, the metadata selects the physical input. An indexed view
+supplies its own fitted metadata for artifact validation. A policy prediction on
+a within-sequence split uses the stored preceding action when available and
+writes one row per split-owned decision. A fragment without a stored predecessor
+can supply `input.previous_action_columns`. When supplied, these columns provide the
+lagged actions after episode position zero. A row with empty lag columns can use
+the preceding recorded action. At position zero the policy uses its initial feedback.
 
 To infer directly from fresh data in the original preprocessing input layout,
 use the training metadata config and select the raw input layout.
@@ -362,16 +384,72 @@ input: {path: data/new-events-indexed/predict.split.json}
 
 Both paths apply the same frozen maps, casting rules, and statistics. The
 prepared manifest carries a snapshot of the original metadata.
+Rollout manifests also work with `input.layout: raw` and the original metadata.
+Use `input.format: sequence` for a manifest without a `.json` suffix.
+Set `input.sequence_view: observations` to include recorded final successors.
 
 For policy prediction, the direct and prepared paths use the same categorical
 lookup and numeric normalization. An unseen category in an ordinary vocabulary
 maps to `[other]` (ID 1). When preparing a policy view explicitly, list recorded
 action columns used for lagged feedback in `passthrough_columns` to preserve
-their original values. Raw policy inference keeps these columns automatically
-when they are present. Older hashed actors can load the original categorical
+their original values. Raw policy inference preserves named actions and the canonical
+`__executed_action` and `__previous_action` structs when feedback is used.
+Both routes preserve those structs automatically when reading a rollout manifest.
+For a standalone table, list the needed structs in `passthrough_columns` during
+explicit preparation. Both forecast and policy inference treat automatic-layout
+tables as prepared windows. For fresh rows, use `input.layout: raw`, integer
+`sequenceId` and `itemPosition`, and the original metadata. For an actor trained
+directly on demonstrations, `sequifier preprocess` with `operation: export_metadata`
+writes its frozen preprocessing metadata. For example, the PPO toy prediction
+and rollout configs use the file produced by this preprocessing config.
+
+```yaml
+operation: export_metadata
+model_path: models/online-ppo.pt
+output_path: configs/metadata_configs/online-ppo.json
+```
+
+Older hashed actors can load the original categorical
 settings through `load_policy(..., metadata_config_path=...)`.
 
 For a folder of raw files, set `input.format` to their source format.
 Fresh forward forecasts default to the right edge of each sequence. Set
 `input.fresh_prediction_positions: observed` to select predictions within the supplied
 data. Supply prior items when a new batch contains only a sequence fragment.
+
+## Repeating an inference command
+
+A completed forecast, embedding, policy prediction, or rollout is reused when
+the request and destination match. This includes probability tables and every
+output part. Concurrent copies of the command share the execution. A
+`seed: random` request keeps the seed chosen on its first execution.
+File references identify inputs and models. Use a new destination when
+replacing their contents in place and requesting fresh inference.
+
+Sequifier keeps run records under `.sequifier-inference` beside the outputs.
+Interrupted prediction work can restart as a whole. Publication can resume
+from staged files. A completed rollout keeps a copy of its trajectory so a
+missing output can be restored without contacting the environment.
+
+### Recovering an interrupted rollout
+
+External adapters can implement
+`inference_operation(episode_id, step, payload)`. The first operation uses
+`step="reset"`. Subsequent operations use zero-based integer steps. The
+adapter must attach to the same episode across process restarts. Apply an
+operation at most once and return its original response on retry. Persist the
+key, payload, response, and environment change together at the point where
+the effect occurs. Reject a different payload under an existing key.
+
+| Route | Reset payload and response | Step payload and response |
+| --- | --- | --- |
+| Forecast | JSON fields of `ResetRequest`, returning `None` | JSON fields of `StepRequest`, returning `StepResult` |
+| Policy | `{"initial": ..., "seed": ...}` with the fields of `OnlineResetResult`, returning `OnlineResetResult` | Domain action mapping, returning `OnlineStepResult` |
+
+An isolated, in-process simulator can instead declare
+`inference_isolated_snapshot = True` and implement `snapshot_state()` and
+`restore_state(state)` with a complete JSON-compatible snapshot, including
+its random state. This requires all effects to be private to the simulator.
+Adapters using the original reset and step methods still run normally on
+the first invocation. An interrupted episode using those methods requires
+manual reconciliation before starting a fresh rollout at a new destination.

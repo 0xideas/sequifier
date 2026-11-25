@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from torch import Tensor
 
 from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.io.tensors import gather_tensor
 from sequifier.logging_paths import (
     dataset_artifact_prefix,
     model_artifact_path,
@@ -437,7 +438,7 @@ class ModelWindowSamplingPlan:
         positions = (
             input_starts[:, None] + position_offset + relative_positions[None, :]
         )
-        return tensor[stored_row_indices[:, None], positions]
+        return gather_tensor(tensor, (stored_row_indices[:, None], positions))
 
     @beartype
     def build_masks(
@@ -811,9 +812,10 @@ def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Tensor:
 @beartype
 def normalize_path(path: str, project_root: str) -> str:
     """Return path rooted under project_root."""
+    if os.path.isabs(path):
+        return path
     project_root_normalized = (project_root + os.sep).replace(os.sep + os.sep, os.sep)
-    path2 = os.path.join(project_root, path.replace(project_root_normalized, ""))
-    return path2
+    return os.path.join(project_root, path.removeprefix(project_root_normalized))
 
 
 @beartype
@@ -896,6 +898,9 @@ def configure_logger(
         path.parent.mkdir(parents=True, exist_ok=True)
         logger.add(
             str(path),
+            # Preflight also runs for completed checkpoints. Keep its diagnostics
+            # on the console without appending to a finished training log.
+            filter=lambda record: not record["extra"].get("training_preflight", False),
             level="DEBUG",
             format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
             enqueue=True,

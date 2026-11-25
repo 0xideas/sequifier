@@ -33,6 +33,34 @@ Bounds change the deterministic prediction and count as adaptation. Samples reta
 transform latents; external endpoints need declared atoms. `active_when` references
 earlier action fields; inactive fields use `inactive_value` with zero likelihood cost.
 
+### Reuse a backbone with new inputs and targets
+
+Configure the same repository and backbone architecture in the producing and
+consuming runs. In the downstream model, declare the ingestion, decoder, and
+policy binding for the new task. For example, add this under `model.backbone`:
+
+```yaml
+repository:
+  backbone_id: shared-control
+  path: checkpoints/backbones/shared-control
+  load_policy: required
+  publish: true
+```
+
+Use `if_exists` for the first producer to allow an empty repository. A fresh
+run with `required` fails if the revision is missing. The run loads the backbone
+weights and initializes its own interfaces. An explicit `initialize_from` takes
+precedence. PPO and IQL retain their phase-level `history_initialization` setting.
+
+Policy and mixed plans pin the starting revision. Later phases receive the
+selected model from the preceding phase, and recovery uses the checkpoint even
+if the repository advances. On completion, `publish: true` publishes the
+backbone of the final executed phase’s selected model, including a best or
+early-stopped handoff. The run report records `backbone_parent_revision_id` and
+`backbone_publication`. A competing publication leaves the newer revision in
+place and records a compare-and-swap conflict. Use `publish: false` for a
+read-only consumer.
+
 ### Initialize a fresh action decoder
 
 When the artifact predicts different targets, use these run-level fields with an

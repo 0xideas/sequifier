@@ -42,6 +42,7 @@ class RunCheckpoint:
     incoming_actor: dict
     random: dict
     completed: CommittedPhases
+    metric_positions: dict = field(default_factory=dict)
     reference_contract: dict = field(default_factory=dict)
     phase_state: dict | None = None
     continuation: OptimizerContinuation | None = None
@@ -87,8 +88,9 @@ class RunCheckpoint:
                 **{
                     f.name: payload[f.name]
                     for f in fields(cls)
-                    if f.name not in {"representation", "completed"}
+                    if f.name not in {"representation", "completed", "metric_positions"}
                 },
+                metric_positions=payload.get("metric_positions", {}),
                 representation=ActorRepresentation(
                     ModelArtifact.from_state_dict(envelope["model"]).model_config,
                     payload["interface"],

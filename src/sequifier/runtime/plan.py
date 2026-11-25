@@ -7,6 +7,7 @@ from uuid import uuid4
 
 Phase = TypeVar("Phase")
 Result = TypeVar("Result")
+NORMAL_COMPLETION = "normal_completion"
 
 
 def new_run_id() -> str:
@@ -87,7 +88,7 @@ def run_phases(
     *,
     start: int = 0,
     stopped: bool = False,
-    completion_reason: str = "completed",
+    completion_reason: str = NORMAL_COMPLETION,
     replay: Callable[[], None] | None = None,
     terminal_reason: str | None = None,
     optimizer_continues: Callable[[Phase], bool] | None = None,

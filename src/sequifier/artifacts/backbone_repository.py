@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 import torch
 from pydantic import BaseModel
@@ -73,6 +73,14 @@ def _read_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def _valid_revision_id(value: object) -> TypeGuard[str]:
+    return (
+        isinstance(value, str)
+        and value not in {"", ".", ".."}
+        and Path(value).name == value
+    )
+
+
 @beartype
 def latest_pointer(repository_path: Path) -> dict[str, Any] | None:
     path = repository_path / "latest.json"
@@ -82,7 +90,7 @@ def latest_pointer(repository_path: Path) -> dict[str, Any] | None:
     if not isinstance(pointer.get("revision_id"), str):
         raise ValueError(f"Backbone latest pointer {path} has no revision_id.")
     revision_id = pointer["revision_id"]
-    if not revision_id or Path(revision_id).name != revision_id:
+    if not _valid_revision_id(revision_id):
         raise ValueError(f"Backbone latest pointer {path} has an unsafe revision_id.")
     parent = pointer.get("parent_revision_id")
     if parent is not None and not isinstance(parent, str):
@@ -111,7 +119,7 @@ def select_revision(
 
     if pointer is not None:
         revision_id = pointer["revision_id"]
-    if not revision_id or Path(revision_id).name != revision_id:
+    if not _valid_revision_id(revision_id):
         raise ValueError("Invalid backbone revision identity")
     revision_path = repository_path / "revisions" / revision_id
     manifest_path = revision_path / "manifest.json"
@@ -170,6 +178,18 @@ def select_revision(
     }
 
 
+def _validate_dtypes(state_dict: dict[str, Tensor]) -> None:
+    invalid_dtypes = {
+        key: str(value.dtype)
+        for key, value in state_dict.items()
+        if value.dtype not in SUPPORTED_DTYPES
+    }
+    if invalid_dtypes:
+        raise ValueError(
+            f"Backbone state dict contains unsupported dtypes: {invalid_dtypes}"
+        )
+
+
 @beartype
 def _validate_state_dict(backbone: nn.Module, state_dict: Any) -> None:
     if not isinstance(state_dict, dict) or not all(
@@ -188,15 +208,7 @@ def _validate_state_dict(backbone: nn.Module, state_dict: Any) -> None:
             "Backbone state-dict keys do not match exactly: "
             f"missing={missing}, unexpected={unexpected}."
         )
-    invalid_dtypes = {
-        key: str(value.dtype)
-        for key, value in state_dict.items()
-        if value.dtype not in SUPPORTED_DTYPES
-    }
-    if invalid_dtypes:
-        raise ValueError(
-            f"Backbone state dict contains unsupported dtypes: {invalid_dtypes}"
-        )
+    _validate_dtypes(state_dict)
     shape_mismatches = {
         key: (tuple(value.shape), tuple(expected[key].shape))
         for key, value in state_dict.items()
@@ -237,6 +249,16 @@ def _publication_lock(repository_path: Path) -> Iterator[None]:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
+def _publication_result(directory, parent_revision_id):
+    return {
+        "success": True,
+        "revision_id": directory.name,
+        "parent_revision_id": parent_revision_id,
+        "manifest_path": str(directory / "manifest.json"),
+        "weights_path": str(directory / "weights.pt"),
+    }
+
+
 @beartype
 def publish_revision(
     backbone: nn.Module,
@@ -247,9 +269,59 @@ def publish_revision(
     source_run_id: str,
     source_epoch: int,
 ) -> dict[str, Any]:
+    return _publish_state(
+        backbone.state_dict(),
+        backbone_config,
+        project_root,
+        parent_revision_id,
+        source_run_id,
+        {"source_epoch": source_epoch},
+    )
+
+
+def publish_selected_backbone(config, model_state, parent_revision_id, run_id, phase):
+    """Publish the backbone of the committed handoff, including on recovery replay."""
+    state = {
+        name.removeprefix("backbone."): tensor
+        for name, tensor in model_state.items()
+        if name.startswith("backbone.")
+    }
+    return _publish_state(
+        state,
+        config.execution.backbone,
+        config.project_root,
+        parent_revision_id,
+        run_id,
+        {
+            "source_phase_index": phase["index"],
+            "selected_transaction": phase["selected_transaction"],
+            "selected_weight_hash": phase["selected_weight_hash"],
+        },
+    )
+
+
+def _committed_ancestors(revisions_path, revision_id, stop):
+    """A replay may follow newer writers. Only revisions reached from latest count."""
+    visited = set()
+    while revision_id is not None and revision_id != stop:
+        if not _valid_revision_id(revision_id) or revision_id in visited:
+            raise ValueError("Invalid backbone repository revision ancestry")
+        visited.add(revision_id)
+        directory = revisions_path / revision_id
+        manifest = _read_json(directory / "manifest.json")
+        yield directory, manifest
+        revision_id = manifest["parent_revision_id"]
+
+
+def _publish_state(
+    state, backbone_config, project_root, parent_revision_id, source_run_id, selection
+):
     repository = backbone_config.repository
     if repository is None:
         return {"success": False, "reason": "repository_not_configured"}
+
+    if not repository.publish:
+        return {"success": False, "reason": "publication_disabled"}
 
     repository_path = resolve_repository_path(repository.path, project_root)
     revisions_path = repository_path / "revisions"
@@ -259,6 +331,18 @@ def publish_revision(
         pointer = latest_pointer(repository_path)
         current_revision_id = pointer["revision_id"] if pointer else None
         if current_revision_id != parent_revision_id:
+            for directory, previous in _committed_ancestors(
+                revisions_path, current_revision_id, parent_revision_id
+            ):
+                if (
+                    previous["parent_revision_id"] == parent_revision_id
+                    and previous.get("source_run_id") == source_run_id
+                    and previous.get("backbone_id") == repository.backbone_id
+                    and all(
+                        previous.get(key) == value for key, value in selection.items()
+                    )
+                ):
+                    return _publication_result(directory, parent_revision_id)
             return {
                 "success": False,
                 "reason": "compare_and_swap_conflict",
@@ -266,15 +350,14 @@ def publish_revision(
                 "current_revision_id": current_revision_id,
             }
 
+        if not state:
+            raise ValueError("Cannot publish an empty backbone state dictionary")
+        _validate_dtypes(state)
         revision_id = _new_revision_id()
         revision_path = revisions_path / revision_id
         revision_path.mkdir(exist_ok=False)
         weights_path = revision_path / "weights.pt"
-        state_dict = {
-            key: value.detach().cpu().clone()
-            for key, value in backbone.state_dict().items()
-        }
-        _validate_state_dict(backbone, state_dict)
+        state_dict = {key: value.detach().cpu().clone() for key, value in state.items()}
         atomic_save(weights_path, state_dict)
 
         architecture = canonical_architecture(backbone_config.architecture)
@@ -287,7 +370,7 @@ def publish_revision(
             "architecture_fingerprint": architecture_fingerprint(architecture),
             "architecture": architecture,
             "source_run_id": source_run_id,
-            "source_epoch": source_epoch,
+            **selection,
         }
         write_json_atomic(revision_path / "manifest.json", manifest)
         write_json_atomic(
@@ -297,10 +380,4 @@ def publish_revision(
                 "parent_revision_id": parent_revision_id,
             },
         )
-        return {
-            "success": True,
-            "revision_id": revision_id,
-            "parent_revision_id": parent_revision_id,
-            "manifest_path": str(revision_path / "manifest.json"),
-            "weights_path": str(weights_path),
-        }
+        return _publication_result(revision_path, parent_revision_id)

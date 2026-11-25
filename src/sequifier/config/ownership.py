@@ -2,10 +2,11 @@
 
 from typing import Annotated, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, StrictInt, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.cardinality import CardinalityLimitModel
 from sequifier.config.components import ResumeConfig
-from sequifier.config.naming import ConfigModel, RunSeed
+from sequifier.config.naming import ConfigModel, RunSeed, SeedInteger
 from sequifier.config.normalization_config import FrozenNormalizationConfig
 from sequifier.model.execution_options import DEFAULT_MAX_CONCAT_TENSORS, ConcatLimit
 
@@ -47,8 +48,21 @@ class PrecisionSettings(Settings):
     float32_matmul_precision: Literal["highest", "high", "medium"] = "highest"
 
 
+CompileMode = Literal["outer", "inner", "none"]
+
+
 class CompilationSettings(Settings):
-    torch_compile: Literal["outer", "inner", "none"] = "outer"
+    torch_compile: CompileMode = "outer"
+
+
+class PolicyCompilationSettings(Settings):
+    torch_compile: CompileMode = "none"
+
+
+class PolicyExecution(Settings):
+    compilation: PolicyCompilationSettings = Field(
+        default_factory=PolicyCompilationSettings
+    )
 
 
 class DataLoadingSettings(Settings):
@@ -83,6 +97,11 @@ class ExecutionSettings(Settings):
     device: str = "cpu"
     supervised: SupervisedExecution | None = None
     offline: OfflineExecution | None = None
+    policy: PolicyExecution | None = None
+
+    @property
+    def policy_compile_mode(self) -> CompileMode:
+        return self.policy.compilation.torch_compile if self.policy else "none"
 
     @property
     def supervised_settings(self) -> SupervisedExecution:
@@ -91,12 +110,15 @@ class ExecutionSettings(Settings):
         return self.supervised
 
 
-class TrainingReproducibilitySettings(Settings):
-    seed: StrictInt | Literal["random"] = 1010
+class _DeterminismSettings(Settings):
     enforce_determinism: bool = False
 
 
-class ReproducibilitySettings(TrainingReproducibilitySettings):
+class TrainingReproducibilitySettings(_DeterminismSettings):
+    seed: SeedInteger | Literal["random"] = 1010
+
+
+class ReproducibilitySettings(_DeterminismSettings):
     seed: RunSeed = 1010
 
 
@@ -156,6 +178,7 @@ def portable_export():
 
 
 class RunSettings(Settings):
+    retrain: bool = False
     project_root: str = "."
     model_name: str
     execution: ExecutionSettings = Field(default_factory=ExecutionSettings)
@@ -166,6 +189,11 @@ class RunSettings(Settings):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     outputs: OutputSettings = Field(default_factory=OutputSettings)
     export: ExportSettings = Field(default_factory=portable_export)
+
+    def effective_resume_policy(self):
+        if self.retrain:
+            return "never"
+        return "required" if self.recovery.resume.policy == "required" else "if_exists"
 
     @field_validator("model_name")
     @classmethod
@@ -187,6 +215,14 @@ class ModelExecutionSettings(Settings):
 class InputContract(Settings):
     metadata_config_path: str | None = None
     normalization: FrozenNormalizationConfig | None = None
+    cardinality_config: dict[str, CardinalityLimitModel] | None = None
+
+    @property
+    def cardinality_rules(self):
+        return {
+            name: rule.model_dump(exclude_none=True)
+            for name, rule in (self.cardinality_config or {}).items()
+        }
 
 
 class SplitSettings(Settings):

@@ -193,10 +193,10 @@ class FeatureStatistics:
             if name in (rules.categorical or ()) or (
                 categorical and name not in (rules.real or ())
             ):
+                if name in rules.precomputed and (categorical or dtype.is_float()):
+                    continue
                 if not categorical:
                     raise ValueError(f"{name}: unsupported categorical dtype {dtype}")
-                if name in rules.precomputed:
-                    continue
                 limit = rules.cardinality.get(name)
                 if limit is None:
                     self.vocabularies.setdefault(name, set()).update(
@@ -423,4 +423,8 @@ class FittedColumns:
                 value = pl.when(mask).then(pl.lit(fill)).otherwise(value)
             expressions.append(value.cast(transform.output_dtype).alias(name))
         data = data.with_columns(expressions)
+        from sequifier.io.sequence import DOMAIN_OBSERVATIONS, OBSERVATION_MASK
+
+        if mask_column == OBSERVATION_MASK and DOMAIN_OBSERVATIONS in data.columns:
+            return data
         return data.drop(mask_column) if mask_column is not None else data

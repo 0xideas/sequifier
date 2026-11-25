@@ -74,6 +74,8 @@ Evaluation owns its episode seeds, monitor and cadence.
 `run.execution.supervised` for distribution, precision, compilation, data
 loading and concatenation limits. Distribution selects `local`, `ddp` or
 `fsdp`. FSDP also requires `cpu_offload`. Mixed plans use local execution.
+Policy phases select `none` (the default), `inner`, or `outer` with
+`run.execution.policy.compilation.torch_compile`.
 Offline policy phases consume `run.execution.offline.episode_cache_size`.
 Batch and iteration logging have separate intervals. A random run seed resolves
 once and is recorded for recovery. See [training resource controls](../training/resource-controls.md).

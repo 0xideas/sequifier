@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import Field, RootModel, model_validator
 
+from sequifier.config.column_names import validate_column_names
 from sequifier.config.identifiers import validate_module_dict_key
 from sequifier.config.naming import ConfigModel
 
@@ -21,6 +22,7 @@ class DepthLayoutModel(ConfigModel):
 
     @model_validator(mode="after")
     def validate_columns(self):
+        validate_column_names([self.position_column, *self.columns], "depth_layouts")
         if len(set(self.columns)) != len(self.columns):
             raise ValueError("Depth layout columns must be unique")
         if set(self.columns) & {"sequenceId", "itemPosition"}:

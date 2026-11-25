@@ -1,5 +1,7 @@
 """Window coordinates shared by dense and indexed sequence storage."""
 
+import os
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import accumulate, pairwise
@@ -70,12 +72,56 @@ def split_intervals(length: int, ratios: Sequence[float]) -> list[tuple[int, int
     return list(pairwise((0, *cuts, length)))
 
 
+def cutoff_intervals(values, cutoffs):
+    if np.any(values[1:] < values[:-1]):
+        raise ValueError(
+            "split_column values must be non-decreasing within each sequence"
+        )
+    cuts = [0, *np.searchsorted(values, cutoffs, side="left").tolist(), len(values)]
+    return list(pairwise(cuts))
+
+
 @dataclass(frozen=True)
 class SplitWindowPlan:
     widths: tuple[int, ...]
     stride: int
     ratios: tuple[float, ...]
     alignment: PredictionAlignment | None
+
+    @classmethod
+    def from_settings(cls, settings):
+        return cls(
+            tuple(settings.window_lengths),
+            settings.resolved_window_stride,
+            tuple(settings.split_ratios or ()),
+            PredictionAlignment.from_settings(settings),
+        )
+
+    def validate_training_share(self, row_counts: Sequence[float]):
+        """Estimate window shares using each split's configured spacing."""
+        weights = [
+            count
+            / (
+                self.alignment.spacing
+                if self.alignment and i in self.alignment.splits
+                else self.stride
+            )
+            for i, count in enumerate(row_counts)
+        ]
+        total = sum(weights)
+        if not total or weights[0] / total >= 0.5:
+            return
+        details = ", ".join(
+            f"split{i}: {weight / total:.1%}" for i, weight in enumerate(weights)
+        )
+        message = (
+            "Split 0 is estimated to have less than 50% of the windows written to disk: "
+            f"{details}. Set ALLOW_LARGE_SPLITS=1 to allow this."
+        )
+        if os.environ.get("ALLOW_LARGE_SPLITS") == "1":
+            warnings.warn(message, UserWarning, stacklevel=2)
+        else:
+            raise ValueError(message)
 
     def placements(self, first, count, *, assigned=None, bounds=None):
         """Place windows in an assigned split, cutoff intervals, or ratio-based intervals."""

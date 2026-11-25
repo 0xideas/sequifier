@@ -4,7 +4,11 @@ from dataclasses import dataclass, replace
 
 import torch
 
-from sequifier.artifacts.dependencies import DependencyManifest, policy_dependencies
+from sequifier.artifacts.dependencies import (
+    DependencyManifest,
+    add_backbone_revision,
+    policy_dependencies,
+)
 from sequifier.io.output_paths import validate_training_destinations
 from sequifier.io.prepared_policy_data import PreparedPolicyData
 from sequifier.model.factory import build_transformer_network, validate_hash_contracts
@@ -62,7 +66,17 @@ class PolicyGroupPreparation:
     data: list[PreparedPolicyData | None]
 
     @classmethod
-    def build(cls, config, prepared, *, saved, committed_reference_count, group=False):
+    def build(
+        cls,
+        config,
+        prepared,
+        *,
+        saved,
+        committed_reference_count,
+        group=False,
+        backbone_revision_id=None,
+        known_adapters=None,
+    ):
         inputs = prepared.resolve(config.parent.policy_data)
         inputs.dependencies.revalidate()
         dependencies = policy_dependencies(
@@ -72,6 +86,7 @@ class PolicyGroupPreparation:
             saved=saved,
             committed_reference_count=committed_reference_count,
         )
+        add_backbone_revision(dependencies, config.parent, backbone_revision_id)
         validate_training_destinations(
             config,
             config.checkpoint_path,
@@ -79,7 +94,9 @@ class PolicyGroupPreparation:
             phase_offset=config.phase_offset,
             group=group,
         )
-        adapters = preflight_environments(config)
+        adapters = (
+            preflight_environments(config) if known_adapters is None else known_adapters
+        )
         data = prepared.prepare(
             config.parent.policy_data, config.phases, config.policy, inputs
         )

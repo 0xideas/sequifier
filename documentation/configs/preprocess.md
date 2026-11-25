@@ -15,7 +15,7 @@ Values passed on the command line override the YAML before validation.
 | Flag | Overrides / Action |
 | :--- | :--- |
 | `--seed` | Integer run seed, or `random` to resolve a fresh seed once. Affects `between_sequence` split assignment. |
-| `--preprocessing-data-path` | Overrides `preprocessing_data_path`. |
+| `--preprocessing-data-path` | Overrides `preprocessing_data_path`. For `import_sequences` and `prepare_policy`, replaces the configured source location while preserving feature bindings. A committed sequence manifest supplies its own encoding and episode boundaries. |
 | `--selected-columns` | Overrides `selected_columns` with a space-separated list. Use `None` to process all columns. |
 
 ## Composable Configuration Files
@@ -43,7 +43,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | `read_format` | `str` | No | `csv` | Format of input data (`csv`, `parquet`). |
 | `write_format` | `str` | No | `parquet` | Format of output data (`csv`, `parquet`, `pt`). |
 | `merge_output` | `bool` | No | `true` | Whether to merge split files into single files or keep them sharded. |
-| `continue_preprocessing`| `bool` | No | `false` | If `true`, resumes from an existing preprocessing temp folder created by an interrupted run. |
+| `reprocess` | `bool` | No | `false` | By default, reuse completed intermediate work after an interruption. Set to `true` to discard checkpoints and start from scratch. |
 
 
 > **Important Constraint on `write_format`:**
@@ -180,7 +180,7 @@ indexes remains readable through a worker-local scan.
 | `normalize_on_all_data` | `bool` | No | `false` | If `false`, numeric statistics and dynamic categorical vocabularies are fitted only on split 0; values seen only in later splits map to `[other]` or a configured hash bucket. Set to `true` to fit on all splits. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
 | `metadata_config_path` | `Optional[str]` | No | `null` | Use a preexisting metadata config for tokenizing discrete columns and, when enabled, standardizing real-valued columns. |
-| `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set, and it cannot also be `split_column`. |
+| `mask_column` | `Optional[str]` | No | `null` | Row-level observation mask. First-time fitting excludes masked observations from temporal feature statistics and vocabularies. Use a separate column for `split_column`. |
 | `curriculum_column` | `Optional[str \| list[str]]` | No | `null` | One or more optional integer input columns to preserve as per-subsequence curriculum metadata. |
 | `use_precomputed_maps`| `list[str]` | No | `null` | If not `null`, enforces the use of precomputed maps for the variables in the list. |
 
@@ -202,7 +202,7 @@ depth feature/position column. Names beginning with
 | `splits.<name>.window_length` | `int` | **Yes** | - | Physical widths in split order, with one entry per split. Required for every split; widths from split 2 onward must equal the first width plus `prediction_alignment_steps - 1`. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
 | `splits.<name>.fraction` | `float`| Conditional | `null` | Ordered split proportions for `within_sequence` and `between_sequence`. Must sum to 1.0 and must be omitted for `value_cutoff`. |
-| `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
+| `split_method` | `str` | No | `between_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
 | `split_column` | `str` | Conditional | `null` | Required for `value_cutoff`. Names the integer, Date, or Datetime column compared with each split cutoff; it cannot be a mask, curriculum, sequence ID, or item-position column. |
 | `splits.<name>.cutoff` | integer or timestamp | Conditional | `null` | Required for `value_cutoff`. Set increasing upper boundaries on every split except the last. Values must all be integers or all be ISO timestamp values. |
 | `window_stride` | `int` | No | First split width | Stored-window stride for distributed splits. |
@@ -282,6 +282,14 @@ PT output.
 | `process_by_file` | `bool` | No | `true` | Memory optimization. If `true`, processes one input file at a time. |
 
 -----
+
+Prepared datasets retain the source observations used for environment resets and
+action feedback. Indexed views store them alongside encoded items. Materialized
+window datasets write one additional Parquet table, referenced by
+`source_observations_path` in the generated metadata, with one row per
+`sequenceId` and `itemPosition`. Keep that file with the dataset when moving
+it for rollout or offline policy learning. Static source values are stored in the
+per-sequence static table. These outputs are generated automatically.
 
 ## Key Trade-offs and Decisions
 
@@ -406,10 +414,12 @@ data; decoded bucket values appear as `[hash_bucket:k]`. Null values retain the
 reserved `[unknown]` ID.
 
 By default, frequencies and retained values are fitted on split 0. Set
-`normalize_on_all_data: true` to fit them on all data. A configured column must
-be categorical, must appear in `selected_columns` when that list is set, and
-cannot also appear in `use_precomputed_maps`. If `categorical_columns` is set,
-include the configured column there. Preprocessing hashing is independent of
+`normalize_on_all_data: true` to fit them on all data. For temporal features,
+include the column in `selected_columns` and `categorical_columns` when those
+lists are set. Declare static features in `static_categorical_columns` and use
+the same `cardinality_config` mapping. Static fitting counts each training
+sequence once. Reusing metadata preserves the fitted vocabulary and hash rules.
+A configured column cannot also appear in `use_precomputed_maps`. Preprocessing hashing is independent of
 the model interface's `categorical_hashing` setting described in the
 [training guide](train.md#categorical-multi-hash-embeddings-and-targets).
 
@@ -549,14 +559,28 @@ features from it. See [the training guide](train.md#depth-encoders-and-nested-co
 ## Import sequence demonstrations
 
 `operation: import_sequences` selects the explicit policy-data import operation.
-It accepts a `source`, a model-independent `policy` data schema, an `output_path`
-(new dataset directory) and optional `episodes_per_shard` (default 64). Sources
+It accepts a `source`, a model-independent `policy_binding`, an `output_path`
+(dataset directory) and optional `episodes_per_shard` (episodes per intermediate checkpoint, default 64). Sources
 can be raw CSV/Parquet tables, existing scalar prepared histories with their
 metadata, or JSON rollout recordings. Import preserves domain values and missing
 transition information; it does not fit vocabularies/statistics or create padded
 windows. Raw tables can also be used directly by policy training without this step.
 
-The operation atomically publishes Parquet shards and a checksummed manifest.
+For table sources, set `passthrough_columns: [tick]` on `import_sequences` to
+retain an auxiliary column in the published decision table. A later preprocessing
+step can then use `split_column: tick` without treating it as a model feature.
+
+Both `import_sequences` and `prepare_policy` accept `initialize_from` to resolve
+the authored `policy_binding` against a model artifact. When the artifact has
+multiple interfaces, set `model_interface` to the actor's interface name. A
+single-interface artifact selects its sole interface automatically.
+
+```yaml
+initialize_from: models/mixed.pt
+model_interface: actor
+```
+
+The operation atomically publishes one Parquet decision table and its checksummed manifest.
 See [policy learning](../policy-learning.md#optional-committed-import) and
 [import-policy-sequences.yaml](../example_inputs/configs/import-policy-sequences.yaml).
 
@@ -570,7 +594,11 @@ generated `metadata.json` as the original preprocessing metadata for that model.
 For a store shared with policy phases, use `indexed_passthrough` to keep auxiliary
 columns such as `reward`, `terminated`, `truncated`, and `bootstrap_allowed` in
 their original representation. Training and evaluation phases can reference
-the recorded split views directly.
+the recorded split views directly. Both pathways retain the integer `sequenceId` for joins.
+Use a distinct signed 64-bit integer for each sequence across sources you combine.
+Rows for the same sequence share its ID. IDs may have gaps and arrive in any order.
+An optional `sequenceName` labels that sequence across its rows and must be unique
+across sequences. Its default is the string representation of `sequenceId`.
 
 ```yaml
 preprocessing_data_path: data/events.csv
@@ -587,16 +615,87 @@ splits:
 
 Use `operation: prepare_policy` for policy demonstrations. It takes the same
 `source` and `policy_binding` declarations as `import_sequences`, and adds
-named `splits.train` and `splits.validation` with fractions and window lengths, `window_stride`, and optional overrides
-for categorical and real feature roles. It writes the same indexed format and
-chooses disjoint episode/group/content components for training and validation.
+named splits, per-split window lengths, `window_stride`, prediction alignment, and optional overrides
+for categorical and real feature roles. Set `indexed_output_path` for the indexed store.
+Use `selected_columns` to choose temporal features, `static_data_path` and
+the static column roles for per-sequence features, and `curriculum_column` to
+retain curriculum positions on supervised windows read from the same store.
+`column_data_types` accepts `Float32` for real policy features and integer
+dtypes for categorical IDs. Unspecified real columns are stored as `Float32`
+when fitting a new policy dataset. A supplied dtype must agree with the
+original dtype when reusing frozen preprocessing metadata.
+`depth_layouts` accepts the same repeated child rows as supervised preprocessing.
+Policy sequence tables may also provide one list and depth mask per item.
+Image configuration uses `image_sources`, `preconditioning_image`, and
+`time_alignment_column`. Prepared policy stores write aligned media with the
+items and preconditioning images with the static values.
+Set `mask_column` to the raw observation mask, for example `hide`. Either that
+column or the canonical `__observation_mask` can hide a row. Masked observations
+are excluded from feature fitting. Set `indexed_passthrough` to retain auxiliary
+decision columns such as a timestamp or a rollout's `__collection` struct.
+These columns keep their recorded types and are available in the indexed view.
+Trajectory JSON carries the standard transition fields. Additional passthrough
+columns require a tabular source, including Parquet rollout manifests.
+For a single input, `preprocessing_data_path` can supply the location in YAML
+or Python while `source.columns` supplies feature roles when needed.
+The CLI's `--preprocessing-data-path` replaces the source location. In a training
+plan, the producing phase supplies its committed manifest to the same preparation.
+Use `cardinality_config` to fit bounded observation or static-feature vocabularies,
+for example `{place: {max_categories: 100, hashing: {num_buckets: 16, seed: 7}}}`.
+Policy preparation uses the same count thresholds, ranking and hashing as supervised
+preprocessing. A supplied rule must agree with reused preprocessing metadata.
+The policy binding defines the action and feedback vocabularies.
+List `train` first in both modes. It owns fitting by default. Set `normalize_on_all_data: true` to fit on all splits.
+Omitting `window_stride` or setting it to `null` uses the training split’s window length
+for every split. Policy preparation writes the same indexed format and
+uses the same between-sequence assignment as supervised preprocessing and direct
+policy training. For table inputs, assignment compares recorded rows by item position
+and includes static data. Sequence IDs, episode names, collection groups and collection
+diagnostics are excluded from the content comparison. Matching records and explicit
+collection groups stay together, including when a group links several duplicates.
+Given the same records, eligible IDs, fractions and seed, each mode fits its features
+on the same training sequences. Give differently annotated copies of the same policy demonstration a common `__group` to keep them together after policy feature selection. Use `within_sequence` for fractional temporal
+ranges or `value_cutoff` with a monotonic source column as `split_column`.
+For example, set `split_column: tick` and declare only `obs` as a policy
+observation to split by time while fitting only `obs`.
+Both preprocessors require an estimated training-window share of at least 50%.
+Set `ALLOW_LARGE_SPLITS=1` to allow a smaller share with a warning.
+Declared categorical and real roles must agree with the frozen metadata in both modes.
+Offline policy training requires independent training and evaluation episodes. Temporal
+ranges are also available for inference or for training with independently sourced evaluation data.
+When a split starts mid-episode, earlier observations and lagged actions can fill
+the model context. Only owned decisions contribute targets.
 Rewards, action records, and transition flags retain their domain values.
+When a target and its own action feedback share a name, the feature column holds
+the executed action at each item. Policy windows use the previous-action record
+and the configured initial feedback at an episode boundary.
 Set `metadata_config_path` to reuse an established feature contract. Structured
 depth demonstrations use that frozen metadata and supply the corresponding
 per-item depth masks.
 Image demonstrations can reuse frozen image metadata by supplying the matching
 frames and masks as observations. The indexed store keeps those aligned frames
 with the item data and keeps preconditioning images with the static data.
+
+For `import_sequences`, `prepare_policy`, and supervised `indexed_output_path`,
+a published dataset at the same path is reused with either setting of
+`reprocess`. Interrupted work resumes by default. Set `reprocess: true`
+to discard partial work and start over. Import resumes
+after the last completed shard. Policy preparation reuses the saved episode
+schema, fitted feature metadata, and completed episodes. Supervised indexed
+preprocessing reuses completed item files and repeats feature fitting and window
+placement. Both indexed routes rebuild their split indexes before publication.
+
+Both indexed preprocessors record the inputs, settings, and resolved seed used for
+each new store. A repeated invocation checks them before reusing completed or
+partial work. With `seed: random`, retries reuse the recorded draw.
+For a changed or older partial preparation, `reprocess: true` starts a fresh
+build. Older published policy stores have no input fingerprint and can only be
+checked against their recorded metadata.
+
+Keep inputs and settings consistent when resuming. The output path identifies
+the run. To build a different dataset after publication, choose a new output
+path. Checkpoints live under `.sequifier-preprocessing` beside the destination
+until publication succeeds.
 
 To prepare fresh model inputs explicitly, reuse the JSON that was generated for
 training. Give the fresh data its own output location.
@@ -611,8 +710,20 @@ output_path: data/new-events-indexed
 Pass `static_data_path` and media locations when the raw layout requires them.
 Use `passthrough_columns` for auxiliary policy inputs such as a desired-return
 column that is absent from the training feature metadata.
+You can point `preprocessing_data_path` at a rollout manifest and reuse the same
+frozen metadata. Use `read_format: sequence` for a manifest without a `.json`
+suffix. The default `sequence_view: decisions` keeps its decision rows.
+`sequence_view: observations` also includes each recorded final successor.
 
 For a policy artifact created before explicit preprocessing was available,
 `operation: export_metadata` takes `model_path`, optional `model_interface`,
 and `output_path`. It exports the artifact's frozen feature transforms to a
 metadata JSON that can be used with both fresh-data inference routes.
+
+## Rollout inputs
+
+Set `preprocessing_data_path` to the rollout manifest. The default `sequence_view: decisions` retains action-aligned rows. Use `sequence_view: observations` for observation histories including a recorded final successor. For `operation: prepare_policy`, use `source.manifest_path`. [Rollout configuration and examples](../rollout.md#reusing-rollout-data)
+
+Keep prediction coordinates and generated columns such as `action_log_probability`
+out of feature and action declarations. Dedicated mask, policy feedback, and
+passthrough options can refer to the recorded fields they consume.

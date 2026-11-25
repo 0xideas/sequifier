@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
+from sequifier.config.column_names import validate_column_names
 from sequifier.config.policy_config import NonemptyStr, PolicyConfigBase
 
 
@@ -15,6 +16,16 @@ class PolicyTableColumns(PolicyConfigBase):
 
     @model_validator(mode="after")
     def validate_distinct_columns(self):
+        validate_column_names(
+            self.observations,
+            "source.columns.observations",
+            prefixes=("__image:", "__image_mask:", "depth_valid_mask:"),
+        )
+        validate_column_names(
+            self.static_inputs,
+            "source.columns.static_inputs",
+            allowed=("__preconditioning_image",),
+        )
         names = self.observations + self.static_inputs
         if len(names) != len(set(names)):
             raise ValueError("observation and static columns must be distinct")

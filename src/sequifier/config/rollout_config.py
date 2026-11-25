@@ -4,15 +4,28 @@ from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.column_names import validate_column_names
 from sequifier.config.naming import ConfigModel
 
 
-class InputBinding(ConfigModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class TrajectoryInputBinding(ConfigModel):
+    """A recorded input producer, including model-generated input names."""
+
+    model_config = ConfigDict(frozen=True, revalidate_instances="subclass-instances")
 
     input: str = Field(min_length=1)
     source: Literal["prediction", "environment"]
     key: str = Field(min_length=1)
+
+
+class InputBinding(TrajectoryInputBinding):
+    @field_validator("input")
+    @classmethod
+    def validate_input(cls, value):
+        validate_column_names(
+            [value], "rollout bindings input", prefixes=("__executed_",)
+        )
+        return value
 
 
 class AdapterConfig(ConfigModel):
@@ -30,13 +43,40 @@ class AdapterConfig(ConfigModel):
         return value
 
 
-class RolloutConfig(ConfigModel):
+class CoordinateSeed(ConfigModel):
+    sequenceId: int = Field(strict=True)
+    itemPosition: int = Field(strict=True, ge=0)
+
+
+class SequenceOutput(ConfigModel):
+    manifest_path: str = Field(min_length=1)
+
+
+class RolloutSelection(ConfigModel):
+    seed: CoordinateSeed | None = None
+    output: SequenceOutput | None = None
+    trajectory_path: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        index = getattr(
+            self, "seed_window_index", getattr(self, "seed_row_index", None)
+        )
+        if (index is None) == (self.seed is None):
+            raise ValueError(
+                "Select exactly one rollout seed coordinate or legacy index"
+            )
+        if self.output is None and self.trajectory_path is None:
+            raise ValueError("Select a sequence output or trajectory_path")
+        return self
+
+
+class RolloutConfig(RolloutSelection):
     max_steps: int = Field(gt=0)
     environment: AdapterConfig
     bindings: list[InputBinding]
-    trajectory_path: str = Field(min_length=1)
     # Index over prepared windows in dataset/chunk order, before seed filtering.
-    seed_window_index: int = Field(ge=0)
+    seed_window_index: int | None = Field(default=None, ge=0)
     max_episode_steps: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")

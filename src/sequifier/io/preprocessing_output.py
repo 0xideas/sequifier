@@ -1,6 +1,7 @@
 """Preprocessing destinations for materialized windows and indexed sequences."""
 
 import json
+import re
 import shutil
 from functools import cached_property
 from pathlib import Path
@@ -8,13 +9,13 @@ from typing import Literal
 
 import polars as pl
 
-from sequifier.fingerprints import file_checksum
+from sequifier.io.atomic import atomic_path
 from sequifier.io.pt_payload import load_pt_payload
+from sequifier.io.sequence import DOMAIN_OBSERVATIONS, OBSERVATION_MASK
 from sequifier.preprocess import (
     SPLIT_VALUE_COLUMN,
     WindowWritePlan,
     _batch_to_arrays,
-    _folder_input_files,
     _place_sequence_windows_for_splits,
     _process_batches_single_file,
     merge_window_outputs,
@@ -27,12 +28,24 @@ def _add_static_metadata(metadata, path, columns, fields):
         metadata[name].update(additions)
 
 
+def store_source_rows(scratch, part, rows):
+    path = Path(scratch) / "source-items" / (part + ".parquet")
+    with atomic_path(path) as temporary:
+        rows.select(
+            "sequenceId",
+            "itemPosition",
+            DOMAIN_OBSERVATIONS,
+            *([OBSERVATION_MASK] if OBSERVATION_MASK in rows.columns else []),
+        ).write_parquet(temporary)
+
+
 class WindowOutput:
     indexed: Literal[False] = False
 
     def __init__(self, run):
         self.run = run
         self.fragments = []
+        self.source_path = Path("data") / f"{run.data_name_root}-source-items.parquet"
         self.metadata_path = (
             Path(run.config.project_root)
             / "configs"
@@ -44,6 +57,15 @@ class WindowOutput:
 
     def time_index_path(self):
         return Path(self.run.config.project_root) / self.time_index_name
+
+    @property
+    def cleanup_checkpoint(self):
+        scratch = Path(self.run.config.project_root) / "data" / self.run.target_dir
+        return scratch / "windows-complete"
+
+    def capture_source(self, data, captured, part):
+        store_source_rows(self.cleanup_checkpoint.parent, part, captured)
+        return data
 
     def bind_media(self, manifest):
         """Materialized media references already use project-relative paths."""
@@ -78,6 +100,14 @@ class WindowOutput:
 
     def write_metadata(self, metadata, columns):
         self.feature_columns = columns
+        metadata["source_observations_path"] = str(self.source_path)
+        if self.run.sequence_identities:
+            metadata["sequence_identities"] = {
+                str(seq): {"episode_id": episode, "group_id": group}
+                for seq, (episode, group) in self.run.sequence_identities.items()
+            }
+        if self.run.sequence_manifest_path:
+            metadata["provenance"] = self.run.source_provenance()
         self.metadata_path.parent.mkdir(parents=True, exist_ok=True)
         self.metadata_path.write_text(json.dumps(metadata))
 
@@ -124,7 +154,7 @@ class WindowOutput:
                 Path(split).with_suffix("") / "metadata.json"
                 for split in run.split_paths
             )
-        columns = [name for name in static.columns if name != "sequenceId"]
+        columns = list(fields["column_data_types"])
         for file in files:
             metadata = json.loads(file.read_text())
             _add_static_metadata(metadata, path, columns, fields)
@@ -132,10 +162,50 @@ class WindowOutput:
 
     def finish(self):
         run = self.run
+        source_parts = self.cleanup_checkpoint.parent / "source-items"
+        if source_parts.is_dir():
+            destination = Path(run.config.project_root) / self.source_path
+            source = Path(run.config.preprocessing_data_path).resolve()
+            if (
+                destination.resolve() == source
+                or source in destination.resolve().parents
+                or (
+                    run.config.static_data_path
+                    and destination.resolve()
+                    == Path(run.config.static_data_path).resolve()
+                )
+            ):
+                raise ValueError(
+                    f"Source observation output overlaps preprocessing input: {destination}"
+                )
+            with atomic_path(destination) as temporary:
+                pl.scan_parquet(source_parts / "*.parquet").sink_parquet(temporary)
         if self.fragments:
             merge_window_outputs(
                 self.fragments, run.split_paths, run.config.write_format
             )
+        if not run.config.depth_layouts and not self.cleanup_checkpoint.exists():
+            # Only prune before any shards move. A retry of cleanup may find
+            # valid shards in the final folder and no longer in scratch.
+            if not run.config.merge_output:
+                for index, split in enumerate(run.split_paths):
+                    folder = Path(split).with_suffix("")
+                    if not folder.is_dir():
+                        continue
+                    pattern = re.compile(
+                        rf"{re.escape(run.data_name_root)}(?:-.*)?-split{index}"
+                        rf"-\d+-\d+\.{re.escape(run.config.write_format)}"
+                    )
+                    for part in folder.iterdir():
+                        if (
+                            pattern.fullmatch(part.name)
+                            and not (
+                                self.cleanup_checkpoint.parent / part.name
+                            ).is_file()
+                        ):
+                            part.unlink()
+                            Path(f"{part}.metadata.json").unlink(missing_ok=True)
+            self.cleanup_checkpoint.touch()
         run._cleanup(run.config.write_format)
         if run._static_source is not None:
             run._finalize_static_source()
@@ -146,9 +216,10 @@ class IndexedOutput:
     indexed: Literal[True] = True
     time_index_name = "item-times.parquet"
 
-    def __init__(self, run, writer, resume):
-        if resume:
-            raise ValueError("Indexed preparation can be restarted from raw input")
+    def capture_source(self, data, captured, part):
+        return captured
+
+    def __init__(self, run, writer):
         self.run = run
         self.writer = writer
         self.metadata = {}
@@ -183,7 +254,7 @@ class IndexedOutput:
 
     def write_static(self, static, fields):
         self.writer.write_static(static)
-        columns = [name for name in static.columns if name != "sequenceId"]
+        columns = list(fields["column_data_types"])
         _add_static_metadata(self.metadata, "static.parquet", columns, fields)
 
     def write_metadata(self, metadata, columns):
@@ -230,9 +301,13 @@ class IndexedOutput:
                     assignments,
                 )
             )
+            seq = int(arrays.sequence_ids[start])
+            episode, group = run.sequence_identities.get(seq, (str(seq), None))
             self.writer.add(
                 data.slice(start, stop - start).drop(SPLIT_VALUE_COLUMN, strict=False),
                 views,
+                episode_id=episode,
+                group_id=group,
             )
 
     def finish(self):
@@ -246,36 +321,9 @@ class IndexedOutput:
             if run.config.metadata_config_path
             else None
         )
-        input_path = Path(run.config.preprocessing_data_path)
-        paths = (
-            [input_path]
-            if input_path.is_file()
-            else [
-                Path(path)
-                for path in _folder_input_files(
-                    str(input_path), run.config.read_format, run.config.static_data_path
-                )
-            ]
-        )
-        if run.config.static_data_path:
-            paths.append(Path(run.config.static_data_path))
         self.writer.publish(
             self.metadata,
             feature_columns=self.feature_columns,
             original_metadata=original,
-            provenance={
-                "source": {
-                    "preprocessing_data_path": str(input_path.absolute()),
-                    "static_data_path": str(
-                        Path(run.config.static_data_path).absolute()
-                    )
-                    if run.config.static_data_path
-                    else None,
-                    "indexed_passthrough": run.config.indexed_passthrough,
-                },
-                "files": [
-                    {"path": str(path.absolute()), "sha256": file_checksum(path)}
-                    for path in paths
-                ],
-            },
+            provenance=run.source_provenance(),
         )

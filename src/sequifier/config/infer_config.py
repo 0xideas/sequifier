@@ -12,10 +12,11 @@ from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
-from sequifier.config.image_config import MediaPath, bind_image_paths
+from sequifier.config.image_config import MediaPath
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
     ResolvedInferenceModel,
+    inference_image_store,
 )
 from sequifier.config.metadata import (
     DatasetMetadata,
@@ -99,6 +100,7 @@ def bind_indexed_input_resources(
                 metadata.image_sources, metadata.preconditioning_image is not None
             ),
             "static_features_path": stored.static_features_path,
+            "source_observations_path": stored.source_observations_path,
         }
     )
 
@@ -147,7 +149,7 @@ InferenceMetadataLayout = Literal["raw", "indexed", "stored"]
 def _metadata_layout(request, view) -> InferenceMetadataLayout:
     if view is not None:
         return "raw" if view.view["view"] == "predict" else "indexed"
-    if request.input_layout == "raw" or request.task == "policy":
+    if request.input_layout == "raw":
         return "raw"
     return "stored"
 
@@ -334,25 +336,73 @@ def _resolve_policy_inference(
         resolve_inference_view,
     )
 
-    indexed = resolve_inference_view(request)
-    metadata_path = original_metadata_path(request, indexed)
-    if metadata_path is not None:
-        validate_policy_metadata(
-            execution,
-            selected,
-            metadata_path,
-            layout=_metadata_layout(request, indexed),
-        )
+    root = Path(request.project_root)
+    metadata = None
+    if request.data_path is None:
+        if request.input_layout == "raw" or not request.metadata_config_path:
+            raise ValueError("Select input.path or a split from preprocessing metadata")
+        metadata = load_dataset_metadata(str(root / request.metadata_config_path))
+        authored["data_path"] = _metadata_input_path(metadata, request.split)
     config = ResolvedPolicyInferenceConfig.model_validate(authored)
+    assert config.data_path is not None
+    indexed = resolve_inference_view(config)
+    metadata_path = original_metadata_path(config, indexed)
+    prepared_source = None
+    storage = execution.interface_storage.get(selected)
+    if metadata_path is not None:
+        if indexed is not None or metadata is None:
+            metadata = load_dataset_metadata(str(metadata_path))
+    else:
+        metadata = interface.preprocessing_metadata(storage)
+    layout = _metadata_layout(config, indexed)
+    InferenceMetadataSource(interface, storage, "policy metadata").validate(
+        metadata, layout
+    )
+    if layout == "stored":
+        from sequifier.config.policy_train_config import SequenceSourceConfig
+        from sequifier.trajectory.sources import resolve_source
+
+        path = (root / config.data_path).resolve()
+        split_paths = [(root / part).resolve() for part in metadata.split_paths]
+        split = (
+            metadata.split_names[split_paths.index(path)]
+            if metadata_path is not None and path in split_paths
+            else None
+        )
+        folder = _assert_folder_metadata_matches(
+            str(path),
+            metadata,
+            interface.feature_selection,
+            allow_wider_layout=metadata_path is None,
+        )
+        if folder is not None:
+            if split is not None and folder.split_index not in (
+                None,
+                metadata.named_split_index(split),
+            ):
+                raise ValueError("Prepared folder disagrees with the selected split")
+            metadata = folder
+            metadata_path = path / "metadata.json"
+            split = None
+        source = SequenceSourceConfig(
+            split=split,
+            paths=[] if split is not None else [str(path)],
+            metadata_config_path=str(metadata_path.resolve())
+            if metadata_path
+            else None,
+            static_data_path=config.static_data_path,
+        )
+        prepared_source = resolve_source(source, root, metadata=metadata, prepared=True)
     config._model = model
     config._indexed_view = indexed
+    config._prepared_source = prepared_source
     return config
 
 
 @beartype
 def load_inferer_config(
-    config_path: str, args_config: dict, skip_metadata: bool
-) -> "ResolvedInferenceConfig | ResolvedPolicyInferenceConfig":
+    config_path: str, args_config: dict, skip_metadata: bool, *, workspace_stack=None
+) -> "ResolvedInferenceConfig | ResolvedPolicyInferenceConfig | None":
     """Compose inference YAML, load model defaults, and resolve metadata."""
 
     config_values = load_composed_yaml_config(config_path)
@@ -366,7 +416,90 @@ def load_inferer_config(
     from sequifier.config.inference_request import REQUESTS, inference_overrides
 
     composed = merge_config_fragments((config_values, inference_overrides(cli_values)))
-    authored_values = REQUESTS.validate_python(composed).resolver_values()
+    public_request = REQUESTS.validate_python(composed)
+    if workspace_stack is not None:
+        from sequifier.io.inference_workspace import inference_workspace
+
+        authored_seed = composed.get("run", {}).get("reproducibility", {}).get("seed")
+        workspace = workspace_stack.enter_context(
+            inference_workspace(
+                public_request,
+                random_seed=authored_seed == "random",
+                skip_metadata=skip_metadata,
+            )
+        )
+        if workspace is None:
+            return None
+        public_request.run.reproducibility.seed = workspace.record["seed"]
+    return _resolve_inference_request(public_request, skip_metadata, config_path)
+
+
+def _policy_training_route(values):
+    """Select the same physical prepared part that the training dataset view owns."""
+    from sequifier.config.train_config import load_train_config_with_source
+    from sequifier.config.training_resolution import TrainingSources
+
+    root = Path(values.get("run", {}).get("project_root", "."))
+    path = (root / values["training_config_path"]).resolve()
+    values["training_config_path"] = str(path)
+    loaded = load_train_config_with_source(str(path), {}, False)
+    config = loaded.config
+    name = values.pop("dataset", None)
+    if name is None and len(config.datasets) == 1:
+        name = next(iter(config.datasets))
+    if name not in config.datasets:
+        raise ValueError(
+            "Select an input.training_route.dataset from the training config"
+        )
+    sources = TrainingSources(
+        config, Path(config.run.project_root).resolve(), loaded.metadata
+    )
+    dataset = config.datasets[name]
+    interface = dataset.model_interface
+    if interface is None and len(loaded.resolved.interfaces) == 1:
+        interface = next(iter(loaded.resolved.interfaces))
+    if interface:
+        _merge_loaded_execution_values(
+            values,
+            _execution_values(
+                loaded.resolved.execution.options, loaded.resolved.interface(interface)
+            ),
+            f"training dataset {name!r}",
+        )
+    view = values.pop("part", None)
+    if view is None and len(dataset.views) == 1:
+        view = next(iter(dataset.views))
+    if view is None and values.get("data_path"):
+        view = next(iter(dataset.views))
+    if view not in dataset.views:
+        raise ValueError(
+            f"Select an input.training_route.view from {list(dataset.views)}"
+        )
+    refs = sources.members[f"{name}.{view}"]
+    if len(refs) != 1 and not values.get("data_path"):
+        raise ValueError("A multi-part inference view requires an explicit input.path")
+    ref = f"{name}.{refs[0]}"
+    part = sources.parts[ref]
+    if part.metadata_path is not None:
+        values.setdefault("metadata_config_path", str(part.metadata_path.resolve()))
+    if not values.get("data_path"):
+        if part.indexed is None and part.spec.type not in {
+            "indexed_sequence",
+            "prepared",
+        }:
+            raise ValueError(
+                "A policy training route requires a prepared view or explicit input.path"
+            )
+        path = sources.split_path(ref)
+        if path is None:
+            raise ValueError(f"{ref}: training view has no prepared data path")
+        values["data_path"] = str(Path(path).resolve())
+        if hasattr(part.spec, "read_format"):
+            values.setdefault("read_format", part.spec.read_format)
+
+
+def _resolve_inference_request(public_request, skip_metadata, config_path):
+    authored_values = public_request.resolver_values()
     inline_metadata = authored_values.pop("inline_metadata", None)
     if inline_metadata is not None:
         if not skip_metadata:
@@ -375,6 +508,8 @@ def load_inferer_config(
     if authored_values.get("task") == "policy":
         if skip_metadata:
             raise ValueError("skip_metadata is not supported for policy inference")
+        if authored_values.get("training_config_path"):
+            _policy_training_route(authored_values)
         return _resolve_policy_inference(
             PolicyInferenceConfig.model_validate(authored_values)
         )
@@ -538,11 +673,6 @@ def load_inferer_config(
             "metadata."
         )
 
-    if sources:
-        media = sources[0].media
-        if any(entry.media != media for entry in sources[1:]):
-            raise ValueError("Inference model artifacts select different image views")
-        metadata = metadata.model_copy(update=metadata.select_media(*media))
     if metadata_path is None and selected_metadata_path is not None:
         config.metadata_config_path = selected_metadata_path
 
@@ -554,6 +684,17 @@ def load_inferer_config(
     ):
         config.data_path = _metadata_input_path(metadata, config.split)
         indexed_view = resolve_inference_view(config, skip_metadata=skip_metadata)
+        if indexed_view is not None:
+            config.metadata_config_path = str(
+                original_metadata_path(config, indexed_view)
+            )
+            metadata = load_dataset_metadata(config.metadata_config_path)
+
+    if sources:
+        media = sources[0].media
+        if any(entry.media != media for entry in sources[1:]):
+            raise ValueError("Inference model artifacts select different image views")
+        metadata = metadata.model_copy(update=metadata.select_media(*media))
     if config.input_layout == "indexed" and indexed_view is None:
         raise ValueError("Indexed inference requires an indexed split manifest")
     layout = _metadata_layout(config, indexed_view)
@@ -696,7 +837,10 @@ def _resolve_inference_config(
     media_metadata = metadata
     if folder_metadata is not None:
         media_metadata = metadata.model_copy(
-            update=folder_metadata.select_media(selection.images, selection.use_prefix)
+            update={
+                **folder_metadata.select_media(selection.images, selection.use_prefix),
+                "source_observations_path": folder_metadata.source_observations_path,
+            }
         )
     split_index = (
         normalized_splits.index(normalized_data_path)
@@ -813,7 +957,6 @@ class _InferenceConfigBase(
     data_path: _DataPathT
     fresh_prediction_positions: Literal["right_edge", "observed"] | None = None
     training_config_path: Optional[str] = None
-    split: str | None = None
     dataset: Optional[str] = None
     part: Optional[str] = None
 
@@ -843,6 +986,14 @@ class _InferenceConfigBase(
 
     def input_paths(self) -> list[str]:
         inputs = super().input_paths()
+        if (
+            self.rollout
+            and (metadata := getattr(self, "dataset_metadata", None))
+            and metadata.source_observations_path
+        ):
+            inputs.append(
+                normalize_path(metadata.source_observations_path, self.project_root)
+            )
         if self.static_features_path:
             inputs.append(normalize_path(self.static_features_path, self.project_root))
         if self.training_config_path:
@@ -984,27 +1135,8 @@ class ResolvedInferenceConfig(
 
     def image_store(self):
         if self._image_store is None:
-            from sequifier.io.images import ImageStore
-
-            sources = self.dataset_metadata.image_sources
-            preconditioning = self.dataset_metadata.preconditioning_image
-            if (
-                self._indexed_view is None
-                or self.image_paths
-                or self.preconditioning_image_paths
-            ):
-                sources, preconditioning = bind_image_paths(
-                    sources,
-                    preconditioning,
-                    self.image_paths,
-                    self.preconditioning_image_paths,
-                )
-            self._image_store = (
-                self._indexed_view.image_store(
-                    sources, preconditioning, project_root=self.project_root
-                )
-                if self._indexed_view is not None
-                else ImageStore(sources, preconditioning, self.project_root)
+            self._image_store = inference_image_store(
+                self, self.dataset_metadata, self._indexed_view
             )
         return self._image_store
 
@@ -1183,27 +1315,6 @@ class ResolvedInferenceConfig(
         v2 = normalize_path(v, info.data["run"].project_root)
         if not os.path.exists(v2):
             raise ValueError(f"{v2} does not exist")
-        return v
-
-    @field_validator("read_format")
-    @classmethod
-    @beartype
-    def validate_read_format(cls, v: str) -> str:
-        if v not in ["csv", "parquet", "pt"]:
-            raise ValueError(
-                "Currently only 'csv', 'parquet' and 'pt' are supported for "
-                "inference input"
-            )
-        return v
-
-    @field_validator("write_format")
-    @classmethod
-    @beartype
-    def validate_write_format(cls, v: str) -> str:
-        if v not in ["csv", "parquet"]:
-            raise ValueError(
-                "Currently only 'csv' and 'parquet' are supported for inference output"
-            )
         return v
 
     @field_validator("target_column_types")

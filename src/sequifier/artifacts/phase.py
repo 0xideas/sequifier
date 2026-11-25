@@ -1,5 +1,6 @@
 """Selected models and sidecar identities at committed phase boundaries."""
 
+import json
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -96,6 +97,17 @@ class PhaseCommit:
         ):
             raise ValueError("Committed phase result changed")
         commit.verify_model()
+        provenance = commit.result.get("provenance", {})
+        if snapshot := provenance.get("committed_sequence_manifest"):
+            from sequifier.config.policy_train_config import SequenceSourceConfig
+            from sequifier.trajectory.sources import resolve_source
+
+            verify_artifact(
+                snapshot,
+                provenance["committed_sequence_manifest_sha256"],
+                "Committed rollout manifest changed",
+            )
+            resolve_source(SequenceSourceConfig(manifest_path=snapshot))
         if checkpoint_path is not None and commit.result["checkpoint_path"] != str(
             checkpoint_path
         ):
@@ -143,6 +155,11 @@ class PhaseCommit:
         if not path.is_file() or file_checksum(path) != self.model_sha256:
             with atomic_path(path, durable=True) as temporary:
                 copyfile(self.model_path, temporary)
+        try:
+            if json.loads(artifacts.report.read_text(encoding="utf-8")) == report:
+                return
+        except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
+            pass
         write_json_atomic(artifacts.report, report)
 
 
@@ -200,6 +217,7 @@ class PhasePublication:
     """Publish once the checkpoint that owns a phase boundary is durable."""
 
     save_parent: Callable[[Path, PhaseCommit | None], None] | None = None
+    global_step_offset: int = 0
 
     @property
     def standalone(self) -> bool:

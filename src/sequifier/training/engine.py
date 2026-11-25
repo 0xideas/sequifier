@@ -41,12 +41,22 @@ from sequifier.integration.contexts import (
     ValidationCompleted,
 )
 from sequifier.logging_paths import model_log_directory
-from sequifier.runtime.plan import PhaseOutcome, metric_improved, run_phases, stop_scope
+from sequifier.runtime.plan import (
+    NORMAL_COMPLETION,
+    PhaseOutcome,
+    metric_improved,
+    run_phases,
+    stop_scope,
+)
 from sequifier.runtime.random_state import RandomState
 from sequifier.runtime.stopping import StoppingState
 from sequifier.training.checkpoint_service import CheckpointRequest
 from sequifier.training.metrics_service import TrainingMetrics
-from sequifier.training.optimization import OptimizationBoundaryState, UpdatePolicy
+from sequifier.training.optimization import (
+    OptimizationBoundaryState,
+    TokenAccumulation,
+    UpdatePolicy,
+)
 from sequifier.training.plan import BatchUpdate, CompiledSupervisedPhase
 from sequifier.training.runtime import (
     DatasetRuntimeRegistry,
@@ -132,7 +142,7 @@ class TrainingEngine:
             epoch=epoch,
             training_batch=batch,
             training_batches_total=batches_total,
-            global_step=run.state.global_batch_step,
+            global_step=run.state.global_step,
             device=run.distributed.device,
             rank=run.distributed.rank,
             world_size=run.distributed.world_size,
@@ -245,7 +255,7 @@ class TrainingEngine:
                 backbone_parent_revision_id=run.state.backbone_parent_revision_id,
                 backbone_publication=result.publication,
             ),
-            run.config.outputs.report_path,
+            run.config,
         )
 
     def _stage_phase(self, run, index, phase, outcome):
@@ -273,6 +283,7 @@ class TrainingEngine:
             selection=selected,
             clocks={
                 "epochs": run.state.phase_epoch,
+                "global_step": state.global_step,
                 "optimizer_steps": run.state.optimizer_step,
             },
             provenance={
@@ -309,9 +320,11 @@ class TrainingEngine:
             and len(run.datasets) == 1
         )
         pending: BatchUpdate | None = None
+        weights = TokenAccumulation()
         last_identity: StepIdentity | None = None
         stop_requested = False
-        completion_reason = "normal_completion"
+        completion_reason = NORMAL_COMPLETION
+        pending_metric_positions = {}
         metric_windows: dict[str, dict[str, Any]] = {}
         last_latest = time.monotonic()
         last_snapshot = time.monotonic()
@@ -325,7 +338,7 @@ class TrainingEngine:
         update_failed = False
 
         def flush() -> None:
-            nonlocal pending, stop_requested
+            nonlocal pending, weights, stop_requested
             nonlocal boundary, boundary_identity, update_failed
             if pending is None:
                 return
@@ -340,15 +353,17 @@ class TrainingEngine:
                         frozen_parameter_ids=run.datasets.resolve(
                             pending.dataset
                         ).frozen_parameter_ids,
-                        gradient_divisor=pending.accumulated,
+                        gradient_divisor=weights.divisor,
                     ),
                 )
                 state.optimizer_step = run.optimization.optimizer_step
                 state.accumulation_index = 0
                 pending = None
+                weights = TokenAccumulation()
                 stop_requested = stop_requested or result.stop_requested
                 boundary = capture_runtime_boundary(run)
                 boundary_identity = last_identity
+                pending_metric_positions.clear()
             except BaseException:
                 update_failed = True
                 raise
@@ -363,6 +378,13 @@ class TrainingEngine:
             total, targets = run.loss.finalize_accounting(
                 window["sums"], window["count"], dataset, allow_empty=True
             )
+            # These batches can still roll back if accumulation is interrupted.
+            if pending is not None and dataset_name not in pending_metric_positions:
+                writer = run.metrics.writers.get(dataset_name)
+                if writer is not None:
+                    pending_metric_positions[dataset_name] = (
+                        writer.checkpoint_positions()
+                    )
             run.metrics.record_training(
                 TrainingMetrics(
                     dataset=dataset_name,
@@ -370,7 +392,7 @@ class TrainingEngine:
                     epoch=epoch,
                     batch=batch,
                     batches_total=batches_total,
-                    global_step=state.global_batch_step,
+                    global_step=state.global_step,
                     window_batches=window["batches"],
                     total_loss=float(total.item()),
                     target_losses={
@@ -577,8 +599,18 @@ class TrainingEngine:
                                         backward_loss=loss.backward_loss,
                                     )
                                 )
+                        backward_loss = loss.backward_loss
+                        if phase.accumulation_batches > 1:
+                            count = (
+                                loss.global_count
+                                if loss.global_count is not None
+                                else loss.accounting_count
+                            )
+                            backward_loss = backward_loss * weights.weight(
+                                int(count.item()), run.optimization.optimizer
+                            )
                         run.optimization.accumulate(
-                            loss.backward_loss,
+                            backward_loss,
                             identity,
                             run.integrations,
                             run.network,
@@ -807,7 +839,6 @@ class TrainingEngine:
                 start=len(state.phase_commits),
                 stopped=state.plan_stopped
                 and len(state.phase_commits) > state.phase_index,
-                completion_reason="normal_completion",
                 replay=replay,
                 optimizer_continues=lambda view: view.optimizer_state == "continue",
                 terminal_reason=(
@@ -827,6 +858,8 @@ class TrainingEngine:
                 pending = None
             else:
                 flush()
+            for name, positions in pending_metric_positions.items():
+                run.metrics.writers[name].restore_positions(state.run_id, positions)
             restore_runtime_boundary(run, boundary)
             run.optimization.optimizer.zero_grad(set_to_none=True)
             if run.distributed.world_size == 1:

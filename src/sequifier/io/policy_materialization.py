@@ -1,4 +1,4 @@
-"""Materialize policy histories using the persisted model execution schema."""
+"""Materialize policy histories with model input roles and fitted column dtypes."""
 
 from typing import Any, cast
 
@@ -7,6 +7,7 @@ import polars as pl
 import torch
 
 from sequifier.config.depth_layout import depth_mask_metadata_key
+from sequifier.helpers import PANDAS_TO_TORCH_TYPES
 from sequifier.io.actions import decode_action
 from sequifier.io.batch import ModelEncodedPolicyInputs, SequifierInputs
 from sequifier.io.categorical import CategoricalCodec, is_hash_bucket_label
@@ -64,12 +65,21 @@ def encode_value(value, column, config, *, force_raw=False, codecs=None):
     return codecs[key].encode(value)
 
 
-def materialize_history(config, observations, previous_actions, static, *, codecs):
+def materialize_history(
+    config, observations, previous_actions, static, *, codecs, masks=None
+):
     schema = config.input_schema
     if schema is None:
         raise ValueError("Materializing policy windows requires a model input schema")
     transforms = config.transforms
     rows = observations[-config.context_length :]
+    masks = (
+        masks[-len(rows) :]
+        if masks is not None
+        else [row.get(config.raw_mask_column, False) for row in rows]
+    )
+    if len(masks) != len(rows) or any(value not in (True, False) for value in masks):
+        raise ValueError("Observation masks must align with the history")
     previous = previous_actions[-config.context_length :]
     if config.previous_action_inputs and len(previous) != len(rows):
         raise ValueError("lagged actions must align with the observation history")
@@ -84,7 +94,7 @@ def materialize_history(config, observations, previous_actions, static, *, codec
 
     def tensor(raw, key, dtype, *, feedback=False):
         raw = encode_value(raw, key, config, force_raw=feedback, codecs=codecs)
-        if dtype == torch.float32 and normalize and (not prepared or feedback):
+        if dtype.is_floating_point and normalize and (not prepared or feedback):
             column_type = transforms.column_data_types.get(key, "")
             if transforms.normalize_real_columns and (
                 statistics := transforms.selected_columns_statistics.get(key)
@@ -94,15 +104,33 @@ def materialize_history(config, observations, previous_actions, static, *, codec
                 raw = np.asarray(raw, dtype=np.float16)
         if dtype == torch.int64:
             values = torch.as_tensor(raw)
-            if values.is_floating_point() or values.dtype == torch.bool:
+            if (
+                values.is_floating_point()
+                or values.is_complex()
+                or values.dtype == torch.bool
+            ):
                 raise ValueError(f"{key}: expected integer categorical IDs")
             return values.to(dtype)
         return torch.as_tensor(raw, dtype=dtype)
 
     features, metadata = {}, {}
+    categorical_storage = {}
     for descriptor in schema.inputs:
         key = descriptor.key
         dtype = _HISTORY_DTYPES[descriptor.dtype]
+        if descriptor.role in {"feature", "static_feature"} and (
+            column_type := transforms.column_data_types.get(key)
+        ):
+            storage_dtype = PANDAS_TO_TORCH_TYPES[column_type]
+            if dtype.is_floating_point != storage_dtype.is_floating_point:
+                raise ValueError(
+                    f"{key}: {column_type} conflicts with its model input role"
+                )
+            if dtype == torch.int64 and storage_dtype != dtype:
+                # Validate original IDs before a narrow cast can wrap them.
+                categorical_storage[key] = storage_dtype
+            else:
+                dtype = storage_dtype
         if key == "attention_valid_mask":
             metadata[key] = torch.tensor([[False] * padding + [True] * len(rows)])
             continue
@@ -135,13 +163,15 @@ def materialize_history(config, observations, previous_actions, static, *, codec
                 if key == DESIRED_RETURN and config.return_conditioned and normalize:
                     raw /= config.returns.scale
                     feedback = True
-                mask = row.get(config.raw_mask_column, False) if not prepared else False
-                if mask not in (True, False):
-                    raise ValueError(
-                        f"{config.raw_mask_column}: expected a boolean or 0 or 1"
-                    )
-                if mask and key in transforms.column_data_types and not feedback:
-                    value = torch.tensor(
+                if (
+                    masks[index]
+                    and key in config.observation_columns
+                    and descriptor.role == "feature"
+                    and key in transforms.column_data_types
+                    and not feedback
+                ):
+                    value = torch.full(
+                        tuple(shape[2:]),
                         SPECIAL_TOKEN_IDS.mask if dtype == torch.int64 else 0,
                         dtype=dtype,
                     )
@@ -172,5 +202,17 @@ def materialize_history(config, observations, previous_actions, static, *, codec
                 payload[0, padding + index] = value
         (metadata if descriptor.role == "metadata" else features)[key] = payload
     schema.validate(features, metadata)
+    for key, storage_dtype in categorical_storage.items():
+        values = features[key]
+        max_id = torch.iinfo(storage_dtype).max
+        classes = schema.n_classes.get(key)
+        # Schema validation already checked [0, classes) for the entire window.
+        if classes is None or classes - 1 > max_id:
+            upper = min(max_id, torch.iinfo(torch.int64).max)
+            if (values < 0).any().item() or (values > upper).any().item():
+                raise ValueError(
+                    f"{key}: categorical ID outside the range of {storage_dtype}"
+                )
+        features[key] = values.to(storage_dtype)
     input_type = ModelEncodedPolicyInputs if normalize else SequifierInputs
     return input_type(features, metadata)

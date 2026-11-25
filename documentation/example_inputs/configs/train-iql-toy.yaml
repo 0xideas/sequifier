@@ -1,4 +1,4 @@
-initialize_from: models/toy-bc/actor.pt
+initialize_from: models/toy-bc.pt
 model:
   backbone:
     architecture:

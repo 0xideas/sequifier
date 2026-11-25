@@ -41,7 +41,7 @@ from sequifier.config.model_interface import (
     ResolvedInterfaceStorage,
     ResolvedModelInterface,
 )
-from sequifier.config.naming import ConfigModel
+from sequifier.config.naming import ConfigModel, supervised_phase_seed
 from sequifier.config.normalization_config import FrozenNormalizationConfig
 from sequifier.config.ownership import (
     DataLoadingSettings,
@@ -133,6 +133,12 @@ class SequencePartSpecModel(SequenceSourceConfig):
     type: Literal["sequence"]
 
 
+class RolloutPhaseSource(ConfigModel):
+    type: Literal["rollout"]
+    phase: str = Field(min_length=1)
+    preprocessing_config_path: str | None = Field(default=None, min_length=1)
+
+
 class PreferencePartSpecModel(ConfigModel):
     type: Literal["preferences"]
     manifest_path: str = Field(min_length=1)
@@ -142,6 +148,7 @@ DatasetPart = Annotated[
     DatasetPartSpecModel
     | IndexedSource
     | SequencePartSpecModel
+    | RolloutPhaseSource
     | PreferencePartSpecModel,
     Field(discriminator="type"),
 ]
@@ -339,6 +346,13 @@ def validate_training_contract(run, model, phases, settings: ModelExecutionOptio
         stage_objective = get_objective_class(
             learning.objective_name(settings.training_objective)
         )
+        if stage_objective.uses_causal_attention and settings.attention != "causal":
+            task = (
+                "forward prediction"
+                if stage_objective.forward_looking
+                else stage_objective.name
+            )
+            raise ValueError(f"{phase.name}: {task} requires causal attention")
         if (stage_objective.forward_looking, stage_objective.uses_causal_attention) != (
             objective.forward_looking,
             objective.uses_causal_attention,
@@ -448,7 +462,7 @@ def resolve_phases(authored_phases, sources, *, seed: int):
                 name: getattr(phase, name)
                 for name in SupervisedPhaseSettings.model_fields
             },
-            resolved_seed=seed + phase_index,
+            resolved_seed=supervised_phase_seed(seed, phase_index),
             evaluation_sources=[
                 sources.supervised_source(ref) for ref in phase.evaluation.sources
             ]
@@ -490,6 +504,8 @@ def resolve_phases(authored_phases, sources, *, seed: int):
 class ResolvedSequifierConfig(ConfigModel):
     """Compiled run, model, source, phase, and publication records."""
 
+    _rollout_plan: Any = PrivateAttr(default=None)
+    _random_seed_inputs: tuple | None = PrivateAttr(default=None)
     _prepared_inputs: Any = PrivateAttr(default=None)
     _policy_bindings: dict[str, ResolvedPolicyBinding] = PrivateAttr()
 
@@ -1376,6 +1392,8 @@ class OwnedModelSpec(ConfigModel):
             declared.execution.model_dump(exclude_unset=True) if declared else {}
         )
         if declared:
+            if declared.backbone is not None:
+                values["backbone"]["repository"] = declared.backbone.repository
             for name, interface in declared.interfaces.items():
                 if name in values["interfaces"]:
                     values["interfaces"][name]["input_contract"] = (
@@ -1407,10 +1425,23 @@ class DatasetTrainingSpecModel(ConfigModel):
     partition: SplitSettings | None = None
     views: dict[str, DatasetView] = Field(default_factory=dict)
 
+    def validate_policy_units(self, binding):
+        if binding is not None:
+            for source in self.sources.values():
+                if isinstance(source, SequencePartSpecModel):
+                    binding.validate_source_units(source.units)
+
     @property
     def uses_metadata_views(self):
         return not self.views and all(
-            source.type == "prepared" for source in self.sources.values()
+            self.prepared_source(source) for source in self.sources.values()
+        )
+
+    @staticmethod
+    def prepared_source(source):
+        return source.type == "prepared" or (
+            isinstance(source, RolloutPhaseSource)
+            and source.preprocessing_config_path is not None
         )
 
     @model_validator(mode="after")
@@ -1418,7 +1449,13 @@ class DatasetTrainingSpecModel(ConfigModel):
         for name in self.sources:
             _identifier(name, "Dataset source")
         if self.partition:
-            kinds = {source.type for source in self.sources.values()}
+            kinds = {
+                "sequence"
+                if isinstance(source, RolloutPhaseSource)
+                and not source.preprocessing_config_path
+                else source.type
+                for source in self.sources.values()
+            }
             if kinds not in ({"sequence"}, {"preferences"}):
                 raise ValueError(
                     "A generated partition requires raw sequences or preference manifests"
@@ -1441,7 +1478,7 @@ class DatasetTrainingSpecModel(ConfigModel):
                     raise ValueError(
                         f"{name}: select train or validation from the partition"
                     )
-                if not self.partition and (source.type == "prepared") != (
+                if not self.partition and self.prepared_source(source) != (
                     view.split is not None
                 ):
                     raise ValueError(
@@ -1566,8 +1603,12 @@ class SequifierConfig(ConfigModel):
             self.model is None or self.model.backbone is None
         ) and self.initialize_from is None:
             raise ValueError("a run requires a complete model or initialize_from")
-        for name in self.datasets:
+        for name, dataset in self.datasets.items():
             _identifier(name, "Dataset name")
+            if dataset.model_interface is not None:
+                dataset.validate_policy_units(
+                    self.policy_bindings.get(dataset.model_interface)
+                )
         for phase in self.phases.values():
             refs = phase.data_sources
             for ref in refs:

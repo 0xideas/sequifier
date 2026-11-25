@@ -189,6 +189,7 @@ def _build_composable_network(
         built_ingestion = compile_feature_ingestion(
             hparams=interface,
             architecture=config.backbone.architecture,
+            causal_attention=config.options.attention == "causal",
             direct_real_dtype_provider=lambda: cast(
                 SequifierEncoderLayer, backbone.layers[0]
             ).ff.get_first_layer_dtype(),

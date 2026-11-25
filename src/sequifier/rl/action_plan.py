@@ -8,7 +8,7 @@ from torch import Tensor
 
 from sequifier.config.policy_config import ActionFieldConfig
 from sequifier.io.action_record import action_record_layout
-from sequifier.io.actions import decode_action_value, inactive_action
+from sequifier.io.actions import decode_action_value, inactive_action, real_action_dtype
 from sequifier.io.preprocessing import normalize_values
 from sequifier.io.values import DomainValue
 from sequifier.model.decoders import AutoregressiveTransformerDecoderBranch
@@ -197,7 +197,13 @@ class ActionExecutionPlan:
                 }
                 activity = {
                     name: {
-                        parent: torch.tensor(values, device=device)
+                        parent: torch.tensor(
+                            values,
+                            device=device,
+                            dtype=torch.long
+                            if self.fields[parent].spec.type == "categorical"
+                            else real_action_dtype(device),
+                        )
                         for parent, values in field.activity.items()
                     }
                     for name, field in self.fields.items()

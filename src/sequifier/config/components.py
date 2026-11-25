@@ -17,7 +17,7 @@ from pydantic import (
 
 from sequifier.config.identifiers import validate_module_dict_key
 from sequifier.config.initialization_config import ModelInitializationConfig
-from sequifier.config.naming import ConfigModel
+from sequifier.config.naming import ConfigModel, SeedInteger
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.typechecking import beartype
 
@@ -1000,9 +1000,18 @@ class ReplacementDistribution(ConfigModel):
 
 
 class BERTSpecModel(ConfigModel):
+    evaluation_mask_seed: SeedInteger | Literal["run"] = 0
     masking_probability: float = Field(..., gt=0.0, le=1.0)
     replacement_distribution: ReplacementDistribution
     span_masking: ProbabilityDistribution
+
+    @model_serializer(mode="wrap")
+    def serialize_mask_settings(self, serializer):
+        values = serializer(self)
+        # Preserve existing checkpoint and scoring fingerprints at the default.
+        if self.evaluation_mask_seed == 0:
+            values.pop("evaluation_mask_seed", None)
+        return values
 
 
 class NextOccurrenceConfigModel(ConfigModel):
@@ -1013,9 +1022,9 @@ class NextOccurrenceConfigModel(ConfigModel):
 class ResumeConfig(ConfigModel):
     """Policy for resuming the same run from its complete checkpoint."""
 
-    policy: Literal["never", "if_exists", "required"] = "never"
+    policy: Literal["never", "if_exists", "required"] = "if_exists"
     checkpoint_path: Optional[str] = None
-    mode: Literal["exact", "reset_environments"] = "reset_environments"
+    mode: Literal["exact", "reset_environments"] = "exact"
 
     @model_validator(mode="after")
     @beartype
@@ -1025,4 +1034,9 @@ class ResumeConfig(ConfigModel):
                 "run.recovery.resume.checkpoint_path is required when "
                 "policy is 'required'"
             )
+        if (
+            self.checkpoint_path is not None
+            and not self.checkpoint_path.lower().endswith(".pt")
+        ):
+            raise ValueError("run.recovery.resume.checkpoint_path must name a .pt file")
         return self

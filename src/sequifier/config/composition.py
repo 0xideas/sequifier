@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Hashable, Iterable, Mapping
 from typing import Any
 
 import yaml
@@ -70,6 +70,7 @@ def merge_config_fragments(
 def load_composed_yaml_config(
     config_path: str,
     *,
+    input_paths: list[str] | None = None,
     atomic_paths: frozenset[ConfigPath] = DEFAULT_ATOMIC_PATHS,
 ) -> dict[str, Any]:
     """Load one YAML config and its direct, complementary fragments.
@@ -81,6 +82,8 @@ def load_composed_yaml_config(
     """
 
     entry_path = os.path.abspath(config_path)
+    if input_paths is not None:
+        input_paths.append(entry_path)
     entry_values = _load_yaml_mapping(entry_path)
     raw_additional_paths = entry_values.pop(ADDITIONAL_CONFIG_PATHS_KEY, None)
     additional_paths = _normalize_additional_config_paths(
@@ -113,6 +116,8 @@ def load_composed_yaml_config(
             )
         seen_paths.add(canonical_path)
 
+        if input_paths is not None:
+            input_paths.append(resolved_path)
         fragment_values = _load_yaml_mapping(resolved_path)
         if ADDITIONAL_CONFIG_PATHS_KEY in fragment_values:
             raise ValueError(
@@ -153,11 +158,34 @@ def merge_complementary_config_fragments(
     return merged
 
 
+class _ConfigLoader(yaml.SafeLoader):
+    def compose_mapping_node(self, anchor):
+        node = super().compose_mapping_node(anchor)
+        # Check authored keys before YAML merge keys expand inherited fields.
+        first_marks = {}
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                key = ("<<",)  # Distinct from a quoted "<<" string.
+            elif key_node.tag == "tag:yaml.org,2002:value":
+                key = key_node.value
+            else:
+                key = self.construct_object(key_node)
+            if not isinstance(key, Hashable):
+                continue  # SafeLoader reports invalid keys during construction.
+            if key in first_marks:
+                raise yaml.YAMLError(
+                    f"Duplicate key {key_node.value!r} at {key_node.start_mark}"
+                    f"\nFirst defined at {first_marks[key]}"
+                )
+            first_marks[key] = key_node.start_mark
+        return node
+
+
 @beartype
 def _load_yaml_mapping(path: str) -> dict[str, Any]:
     try:
         with open(path, "r") as file:
-            values = yaml.safe_load(file)
+            values = yaml.load(file, Loader=_ConfigLoader)
     except OSError as error:
         raise ValueError(f"Unable to read config '{path}': {error}") from error
     except yaml.YAMLError as error:

@@ -15,7 +15,8 @@ from loguru import logger
 from torch import Tensor
 
 from sequifier.contract_versions import ContractVersions, require_contract_version
-from sequifier.logging_paths import dataset_artifact_prefix
+from sequifier.io.atomic import atomic_path
+from sequifier.logging_paths import dataset_artifact_prefix, model_log_directory
 from sequifier.typechecking import beartype
 
 TOTAL_TARGET = "__total__"
@@ -43,6 +44,7 @@ FULL_COMMON_FIELDS = [
 ]
 
 TRAINING_FIELDS = FULL_COMMON_FIELDS + [
+    "iterations_total",
     "metric",
     "is_primary",
     "window_batches",
@@ -50,20 +52,32 @@ TRAINING_FIELDS = FULL_COMMON_FIELDS + [
     "value",
     "learning_rate",
     "seconds_per_batch",
+    "seconds_per_iteration",
+]
+
+CONDENSED_PROGRESS = [
+    "run_id",
+    "phase",
+    "algorithm",
+    "iteration",
+    "global_step",
+    "epoch",
+    "batch",
 ]
 
 TRAINING_CONDENSED_FIELDS = [
     "schema_version",
-    "run_id",
-    "epoch",
-    "batch",
+    *CONDENSED_PROGRESS,
+    "iterations_total",
     "metric",
     "value",
     "learning_rate",
     "seconds_per_batch",
+    "seconds_per_iteration",
 ]
 
 VALIDATION_FIELDS = FULL_COMMON_FIELDS + [
+    "iterations_total",
     "is_primary",
     "evaluation_id",
     "evaluation_kind",
@@ -76,9 +90,8 @@ VALIDATION_FIELDS = FULL_COMMON_FIELDS + [
 
 VALIDATION_CONDENSED_FIELDS = [
     "schema_version",
-    "run_id",
-    "epoch",
-    "batch",
+    *CONDENSED_PROGRESS,
+    "iterations_total",
     "metric",
     "value",
 ]
@@ -125,6 +138,13 @@ def _format_number(number: float) -> str:
     return f"{adjusted:5.2f}e{order_of_magnitude}"
 
 
+def _log_training_progress(progress, metric, value, learning_rate, seconds, unit):
+    logger.info(
+        f"[INFO] {progress} | {metric}: {_format_number(value)} | "
+        f"LR: {_format_number(learning_rate)} | S/{unit} {_format_number(seconds)}"
+    )
+
+
 def validate_metrics_csv_header(fields, path):
     if fields is None or "schema_version" not in fields:
         raise ValueError(
@@ -132,10 +152,124 @@ def validate_metrics_csv_header(fields, path):
         )
 
 
+def _metric_version(fields):
+    if "seconds_per_iteration" in fields or "iterations_total" in fields:
+        return ContractVersions.ITERATION_METRICS_SCHEMA
+    if list(fields) in (
+        _batch_schema(TRAINING_CONDENSED_FIELDS),
+        _batch_schema(VALIDATION_CONDENSED_FIELDS),
+    ):
+        return ContractVersions.CONDENSED_METRICS_SCHEMA
+    return ContractVersions.METRICS_SCHEMA
+
+
 def validate_metrics_csv_row(row, path):
     value = row.get("schema_version")
-    if value != str(ContractVersions.METRICS_SCHEMA):
+    if value != str(_metric_version(row)):
         raise ValueError(f"Unsupported metrics schema in {path}")
+
+
+def progress_after(commits, offset, project_root, model_name, run_id):
+    """Continue the committed run timeline, including pre-global-clock checkpoints."""
+    if not commits:
+        return offset
+    clocks = commits[-1].result["clocks"]
+    if "global_step" in clocks:
+        return clocks["global_step"]
+
+    names = {commit.result["name"] for commit in commits}
+    directory = model_log_directory(project_root, model_name)
+    for path in directory.glob("*-full.csv"):
+        with path.open(encoding="utf-8", newline="") as stream:
+            for row in csv.DictReader(stream):
+                if row.get("run_id") == run_id and row.get("phase") in names:
+                    offset = max(offset, int(row["global_step"]))
+    return offset
+
+
+METRIC_SCHEMAS = {
+    "-training.csv": TRAINING_CONDENSED_FIELDS,
+    "-training-full.csv": TRAINING_FIELDS,
+    "-validation.csv": VALIDATION_CONDENSED_FIELDS,
+    "-validation-full.csv": VALIDATION_FIELDS,
+    "-validation-class-shares.csv": CLASS_SHARE_FIELDS,
+}
+
+
+def _batch_schema(fields):
+    return [f for f in fields if f not in {"seconds_per_iteration", "iterations_total"}]
+
+
+def _existing_fields(path, fields):
+    if path.is_file():
+        with path.open(encoding="utf-8", newline="") as stream:
+            existing = next(csv.reader(stream), [])
+        if existing == _batch_schema(fields):
+            return existing
+    return fields
+
+
+def _legacy_condensed_fields(path, fields):
+    if (
+        fields in (TRAINING_CONDENSED_FIELDS, VALIDATION_CONDENSED_FIELDS)
+        and path.is_file()
+    ):
+        legacy = [
+            f
+            for f in _batch_schema(fields)
+            if f not in {"phase", "algorithm", "iteration", "global_step"}
+        ]
+        with path.open(encoding="utf-8", newline="") as stream:
+            if next(csv.reader(stream), []) == legacy:
+                return legacy
+    return None
+
+
+def model_metric_tables(project_root, model_name):
+    directory = model_log_directory(project_root, model_name)
+    for path in directory.glob("*.csv"):
+        for suffix, fields in METRIC_SCHEMAS.items():
+            if path.name.endswith(suffix):
+                yield (
+                    path,
+                    _legacy_condensed_fields(path, fields)
+                    or _existing_fields(path, fields),
+                )
+                break
+
+
+def restore_metric_positions(tables, run_id, positions, missing_offset=None):
+    tables = list(tables)
+    sizes = {path.name: path.stat().st_size for path, _ in tables if path.is_file()}
+    for name, offset in positions.items():
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise ValueError(f"Invalid metric checkpoint position for {name}")
+        if sizes.get(name, 0) < offset:
+            raise ValueError(f"Metric table shorter than checkpoint position: {name}")
+    for path, fields in tables:
+        offset = positions.get(path.name, missing_offset)
+        if offset is None or sizes.get(path.name, 0) == offset:
+            continue
+        with atomic_path(path, durable=True) as temporary:
+            with path.open("rb") as source, temporary.open("wb") as target:
+                # Copy only the prefix committed with the checkpoint.
+                left = offset
+                while left:
+                    chunk = source.read(min(left, 1024 * 1024))
+                    if not chunk:
+                        raise ValueError(
+                            f"Metric table shortened during recovery: {path}"
+                        )
+                    target.write(chunk)
+                    left -= len(chunk)
+            with temporary.open("a", encoding="utf-8", newline="") as target:
+                writer = csv.DictWriter(target, fieldnames=fields)
+                if offset == 0:
+                    writer.writeheader()
+                with path.open(encoding="utf-8", newline="") as source:
+                    source.seek(offset)
+                    rows = csv.DictReader(source, fieldnames=fields if offset else None)
+                    writer.writerows(row for row in rows if row["run_id"] != run_id)
 
 
 class _CsvAppender:
@@ -144,7 +278,7 @@ class _CsvAppender:
     @beartype
     def __init__(self, path: Path, fields: list[str]) -> None:
         self.path = path
-        self.fields = fields
+        self.fields = _existing_fields(path, fields)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_header()
 
@@ -173,13 +307,10 @@ class _CsvAppender:
     def append(self, rows: Iterable[Mapping[str, Any]], *, durable: bool) -> None:
         row_group = [dict(row) for row in rows]
         if "schema_version" in self.fields:
+            expected = _metric_version(self.fields)
             for row in row_group:
-                version = row.setdefault(
-                    "schema_version", ContractVersions.METRICS_SCHEMA
-                )
-                require_contract_version(
-                    "metrics schema", version, ContractVersions.METRICS_SCHEMA
-                )
+                version = row.setdefault("schema_version", expected)
+                require_contract_version("metrics schema", version, expected)
         if not row_group:
             return
         with self.path.open("a", encoding="utf-8", newline="") as file:
@@ -193,6 +324,21 @@ class _CsvAppender:
                         row.get("metric") == "loss"
                         and row.get("target") == TOTAL_TARGET,
                     )
+                # Existing tables retain their physical schema and checkpoint byte offsets.
+                if "iterations_total" not in self.fields and "iterations_total" in row:
+                    total = row.pop("iterations_total")
+                    if "batches_total" in self.fields:
+                        row["batches_total"] = total
+                    row["batch"] = row["iteration"]
+                if (
+                    "seconds_per_iteration" not in self.fields
+                    and "seconds_per_iteration" in row
+                ):
+                    elapsed = row.pop("seconds_per_iteration")
+                    if elapsed is not None:
+                        row["seconds_per_batch"] = elapsed
+                        if "window_batches" in self.fields:
+                            row["window_batches"] = 1
                 writer.writerow(row)
             file.flush()
             if durable:
@@ -232,6 +378,18 @@ class StructuredMetricWriters:
         self.validation_path = Path(f"{prefix}-validation.csv")
         self.validation_full_path = Path(f"{prefix}-validation-full.csv")
         self.class_share_path = Path(f"{prefix}-validation-class-shares.csv")
+        # Recovery offsets refer to bytes. Leave legacy files in place and start
+        # a companion table for observations that use the expanded header.
+        self._legacy_tables = []
+        for attr, fields in (
+            ("training_path", TRAINING_CONDENSED_FIELDS),
+            ("validation_path", VALIDATION_CONDENSED_FIELDS),
+        ):
+            path = getattr(self, attr)
+            if legacy := _legacy_condensed_fields(path, fields):
+                self._legacy_tables.append((path, legacy))
+                suffix = path.name.removeprefix(prefix.name)
+                setattr(self, attr, prefix.with_name(f"{prefix.name}.phases{suffix}"))
         self._training: _CsvAppender | None = _CsvAppender(
             self.training_path, TRAINING_CONDENSED_FIELDS
         )
@@ -251,6 +409,35 @@ class StructuredMetricWriters:
         self.validation_enabled = validation_enabled
         self._class_shares: _CsvAppender | None = None
 
+    def _tables(self):
+        return (
+            *self._legacy_tables,
+            (self.training_path, TRAINING_CONDENSED_FIELDS),
+            (self.training_full_path, TRAINING_FIELDS),
+            (self.validation_path, VALIDATION_CONDENSED_FIELDS),
+            (self.validation_full_path, VALIDATION_FIELDS),
+            (self.class_share_path, CLASS_SHARE_FIELDS),
+        )
+
+    def checkpoint_positions(self):
+        return {
+            path.name: path.stat().st_size if path.is_file() else 0
+            for path, _ in self._tables()
+        }
+
+    def restore_positions(self, run_id, positions):
+        """Remove this run's uncommitted suffix, preserving other runs' rows."""
+        if self._legacy_tables and positions:
+            positions = {
+                self.training_path.name: 0,
+                self.validation_path.name: 0,
+                **positions,
+            }
+        tables = [
+            (path, _existing_fields(path, fields)) for path, fields in self._tables()
+        ]
+        restore_metric_positions(tables, run_id, positions)
+
     @beartype
     def _common(
         self,
@@ -258,15 +445,14 @@ class StructuredMetricWriters:
         run_id: str,
         session_id: str,
         timestamp: str,
-        epoch: int,
-        batch: int,
-        batches_total: int,
+        epoch: int | None,
+        batch: int | None,
+        batches_total: int | None,
         global_step: int,
         dataset: str | None = None,
         part: str | None = None,
     ) -> dict[str, Any]:
         return {
-            "schema_version": ContractVersions.METRICS_SCHEMA,
             "phase": self.phase,
             "algorithm": self.algorithm,
             "iteration": self.iteration,
@@ -336,9 +522,7 @@ class StructuredMetricWriters:
 
         total_value = _metric_value(total_loss)
         condensed = {
-            "run_id": run_id,
-            "epoch": epoch,
-            "batch": batch,
+            **{field: common[field] for field in CONDENSED_PROGRESS},
             "metric": "loss",
             "value": total_value,
             "learning_rate": float(learning_rate),
@@ -347,11 +531,13 @@ class StructuredMetricWriters:
         if self._training is None:
             self._training = _CsvAppender(self.training_path, TRAINING_CONDENSED_FIELDS)
         self._training.append([condensed], durable=False)
-        logger.info(
-            f"[INFO] Epoch {epoch:3d} | Batch {batch:5d}/{batches_total:5d} | "
-            f"Loss: {_format_number(total_value)} | "
-            f"LR: {_format_number(float(learning_rate))} | "
-            f"S/Batch {_format_number(float(seconds_per_batch))}"
+        _log_training_progress(
+            f"Epoch {epoch:3d} | Batch {batch:5d}/{batches_total:5d}",
+            "Loss",
+            total_value,
+            float(learning_rate),
+            float(seconds_per_batch),
+            "Batch",
         )
 
     @beartype
@@ -436,9 +622,7 @@ class StructuredMetricWriters:
         baseline_value = _metric_value(baseline_loss)
         condensed = [
             {
-                "run_id": run_id,
-                "epoch": epoch,
-                "batch": batch,
+                **{field: common[field] for field in CONDENSED_PROGRESS},
                 "metric": metric,
                 "value": value,
             }
@@ -517,6 +701,8 @@ class StructuredMetricWriters:
         primary,
         learning_rate,
         elapsed_seconds=0.0,
+        dataset=None,
+        part=None,
         initial=False,
     ):
         """Use the supervised tables for named algorithm-specific scalar metrics."""
@@ -526,13 +712,16 @@ class StructuredMetricWriters:
             session_id=session_id,
             timestamp=_timestamp_utc(),
             epoch=epoch,
-            batch=iteration,
-            batches_total=max(1, batches_total),
+            dataset=dataset,
+            part=part,
+            batch=None,
+            batches_total=None,
             global_step=global_step,
         )
         common = {
             key: value for key, value in common.items() if key in FULL_COMMON_FIELDS
         }
+        common["iterations_total"] = batches_total
         evaluation_id = uuid.uuid4().hex
         rows = []
         for name, value in values.items():
@@ -540,7 +729,7 @@ class StructuredMetricWriters:
                 **common,
                 "metric": name,
                 "target": TOTAL_TARGET,
-                "value": float(value),
+                "value": None if value is None else float(value),
                 "is_primary": name == primary,
                 "learning_rate": learning_rate,
             }
@@ -551,7 +740,7 @@ class StructuredMetricWriters:
                     elapsed_seconds=elapsed_seconds,
                 )
             else:
-                row.update(window_batches=1, seconds_per_batch=elapsed_seconds)
+                row["seconds_per_iteration"] = elapsed_seconds
             rows.append(row)
         full = self._validation_full if validation else self._training_full
         condensed = self._validation if validation else self._training
@@ -580,15 +769,33 @@ class StructuredMetricWriters:
             VALIDATION_CONDENSED_FIELDS if validation else TRAINING_CONDENSED_FIELDS
         )
         condensed.append(
-            [{key: row.get(key, "") for key in fields} for row in rows],
+            [
+                {key: row.get(key) for key in fields if key != "schema_version"}
+                for row in rows
+                if row["is_primary"]
+            ],
             durable=validation,
         )
-        if primary in values:
+        progress = (
+            f"Phase {self.phase} ({self.algorithm}) | "
+            f"Iteration {iteration:5d}/{batches_total:5d}"
+        )
+        if validation:
+            value = (
+                _format_number(values[primary])
+                if values.get(primary) is not None
+                else "unavailable"
+            )
             logger.info(
-                "{} {} | Iteration {} | {}: {}",
-                self.phase,
-                "Validation" if validation else "Training",
-                iteration,
+                f"[INFO] Validation | {progress} | {primary}: {value} | "
+                f"Elapsed {_format_number(elapsed_seconds)}s"
+            )
+        else:
+            _log_training_progress(
+                progress,
                 primary,
                 values[primary],
+                learning_rate,
+                elapsed_seconds,
+                "Iteration",
             )

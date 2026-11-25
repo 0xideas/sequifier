@@ -15,11 +15,16 @@ from typing import Generator
 
 import numpy as np
 import polars as pl
+import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 from loguru import logger
 
-from sequifier.config.depth_layout import DepthLayoutModel, DepthLayoutRegistryModel
+from sequifier.config.depth_layout import (
+    DepthLayoutModel,
+    DepthLayoutRegistryModel,
+    depth_mask_metadata_key,
+)
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import file_checksum
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES
@@ -418,6 +423,51 @@ def _validated_item_rows(item, columns, shallow, layout, curriculum_columns):
         sorted(values),
         next(iter(sample_positions)) if sample_positions else None,
     )
+
+
+def collapse_depth_table(source, destination, name, layout):
+    """Convert ordered child rows into the canonical masked decision layout."""
+    schema = pq.read_schema(source)
+    coordinates = {"sequenceId", "itemPosition", layout.position_column}
+    deep = set(layout.columns)
+    shallow = [column for column in schema.names if column not in coordinates | deep]
+    mask_key = depth_mask_metadata_key(name)
+    if mask_key in schema.names:
+        raise ValueError(f"Raw child rows cannot also supply {mask_key}")
+    fields = [
+        pa.field(field.name, pa.list_(field.type)) if field.name in deep else field
+        for field in schema
+        if field.name != layout.position_column
+    ]
+    fields.append(pa.field(mask_key, pa.list_(pa.bool_())))
+    result_schema = pa.schema(fields)
+    with pq.ParquetWriter(destination, result_schema) as writer:
+        pending = []
+        for item in _file_items(
+            str(source), "parquet", schema.names, layout.max_depth_length
+        ):
+            children, _ = _validated_item_rows(item, layout.columns, (), layout, ())
+            row = {column: item.rows[0][column] for column in shallow}
+            if any(
+                any(child[column] != value for column, value in row.items())
+                for child in item.rows[1:]
+            ):
+                raise ValueError(
+                    f"Shallow values disagree for outer item {(item.sequence_id, item.position)}"
+                )
+            row.update(sequenceId=item.sequence_id, itemPosition=item.position)
+            for column in layout.columns:
+                row[column] = [children[0][1][column]] * layout.max_depth_length
+                for slot, child in children:
+                    row[column][slot] = child[column]
+            slots = {slot for slot, _ in children}
+            row[mask_key] = [slot in slots for slot in range(layout.max_depth_length)]
+            pending.append(row)
+            if len(pending) == 1024:
+                writer.write_table(pa.Table.from_pylist(pending, schema=result_schema))
+                pending.clear()
+        if pending:
+            writer.write_table(pa.Table.from_pylist(pending, schema=result_schema))
 
 
 @dataclass(frozen=True)
@@ -862,10 +912,14 @@ def preprocess_depth(owner, selected_columns):
     precomputed = load_precomputed_id_maps(
         config.project_root, columns, config.use_precomputed_maps
     )
-    _validate_cardinality_columns(owner.cardinality_config, columns, precomputed)
     sequence_counts = dict(sequence_counts)
     assignments = (
-        _between_sequence_assignments(sequence_counts, owner.window_plan, config.seed)
+        _between_sequence_assignments(
+            sequence_counts,
+            owner.window_plan,
+            config.seed,
+            owner._sequence_assignments(sequence_counts),
+        )
         if config.split_method == "between_sequence"
         else {}
     )
@@ -885,6 +939,7 @@ def preprocess_depth(owner, selected_columns):
                 "Metadata normalization policy does not match preprocessing"
             )
         fitted = owner._frozen_temporal_features(data_columns=columns)
+    _validate_cardinality_columns(owner.cardinality_config, columns, precomputed)
     rules = FittingRules(
         precomputed,
         owner.cardinality_config,
@@ -950,11 +1005,22 @@ def preprocess_depth(owner, selected_columns):
         normalize=owner.normalize_real_columns,
         cardinality=owner.cardinality_config,
     )
+
+    def physical_item(item):
+        domain = {column: item.rows[0][column] for column in shallow}
+        for column in layout.columns:
+            dense = [None] * layout.max_depth_length
+            for row in item.rows:
+                dense[row[layout.position_column] - layout.position_base] = row[column]
+            domain[column] = dense
+        return domain
+
     if owner.output.indexed:
         from itertools import groupby
 
         from sequifier.config.depth_layout import depth_mask_metadata_key
         from sequifier.io.sample_order import curriculum_storage_column
+        from sequifier.io.sequence import DOMAIN_OBSERVATIONS
 
         owner._export_metadata(fitted)
         for sid, items in groupby(selected_items(), key=lambda item: item.sequence_id):
@@ -972,6 +1038,7 @@ def preprocess_depth(owner, selected_columns):
                         for column, value in values.items()
                     },
                 }
+                record[DOMAIN_OBSERVATIONS] = physical_item(item)
                 for column in config.indexed_passthrough:
                     value = item.rows[0][column]
                     if any(row[column] != value for row in item.rows[1:]):
@@ -1000,7 +1067,7 @@ def preprocess_depth(owner, selected_columns):
         "serial": ContractVersions.SERIAL_DEPTH_LEDGER,
         "parallel": ContractVersions.PARALLEL_DEPTH_LEDGER,
     }
-    if config.continue_preprocessing and ledger_path.exists():
+    if not config.reprocess and ledger_path.exists():
         ledger = json.loads(ledger_path.read_text())
         mode = ledger.get("mode") if isinstance(ledger, dict) else None
         if not isinstance(mode, str) or mode not in ledger_versions:
@@ -1027,6 +1094,25 @@ def preprocess_depth(owner, selected_columns):
             "shards": {},
         }
 
+    from itertools import islice
+
+    from sequifier.io.preprocessing_output import store_source_rows
+    from sequifier.io.sequence import DOMAIN_OBSERVATIONS
+
+    items = iter(selected_items())
+    for index, batch in enumerate(iter(lambda: list(islice(items, 1024)), [])):
+        rows = pl.DataFrame(
+            [
+                {
+                    "sequenceId": item.sequence_id,
+                    "itemPosition": item.position,
+                    DOMAIN_OBSERVATIONS: physical_item(item),
+                }
+                for item in batch
+            ],
+            infer_schema_length=None,
+        )
+        store_source_rows(scratch_root, str(index), rows)
     owner._export_metadata(fitted)
 
     def shard_path(split, index):
@@ -1157,6 +1243,11 @@ def preprocess_depth(owner, selected_columns):
         if folder.exists():
             for stale in folder.glob("*.pt"):
                 if stale.name not in expected_shards:
+                    suffix = stale.stem.removeprefix(f"{folder.name}-0-")
+                    if config.reprocess and suffix != stale.stem and suffix.isdigit():
+                        stale.unlink()
+                        Path(f"{stale}.metadata.json").unlink(missing_ok=True)
+                        continue
                     raise ValueError(
                         f"Existing split folder contains stale output {stale}; "
                         "use a fresh output location"

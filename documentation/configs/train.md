@@ -320,7 +320,7 @@ its next token. A decoder `prediction_length` greater than 1 selects several
 consecutive positions for inference; it does not make one position predict
 several future tokens as in LLM multi-token prediction. Training currently
 computes loss over all valid decoded positions, regardless of
-`prediction_length`.
+`prediction_length`. Forward prediction phases require causal attention to keep future inputs out of these predictions.
 
 To train a next-occurrence objective, declare the trigger
 in each supervised phase's `learning` settings:
@@ -350,7 +350,7 @@ and evaluation targets; they are not needed to execute an exported model.
 For categorical hard-label targets, set a target's criterion to
 `AccurateCrossEntropyLoss` to preserve small loss values and target-logit
 gradients at high confidence. `CrossEntropyLoss` retains the existing PyTorch
-behavior. For example:
+behavior. Categorical `NLLLoss` applies log-softmax to the decoder logits before scoring the label. For example:
 
 ```yaml
 phases:
@@ -625,8 +625,27 @@ different evaluation-mask seeds and therefore start separate histories. Set
 Best handoff, stopping and plateau
 scheduling require an evaluation monitor. See [ownership](ownership.md#phase-settings).
 
+For BERT validation, set `phases.<name>.learning.objective.evaluation_mask_seed`
+to an integer from 0 through 4294967295 to choose an independent masking seed.
+The default mask seed is `0`. Use `run` to derive
+the masks from the phase seed, including when `run.reproducibility.seed` is
+`random`. Each validation batch adds offsets for its phase, epoch, and batch
+index. BERT evaluation recomputes its previous-input baseline from the corrupted inputs on the same selected positions. Training masks use the training random stream.
+
 Frozen normalization is an interface input contract or inherited artifact fact.
-Recovery policy is `run.recovery`; phase snapshots belong to `checkpoints`.
+Repeating `sequifier train` resumes the latest compatible checkpoint by default.
+A completed run reuses its published outputs. Set `run.retrain: true` to start
+a fresh run at the configured destinations. This switch overrides the resume
+policy. The legacy `resume.policy: never` setting alone now uses the default
+resume behavior. Use `run.recovery.resume.policy: required` with an explicit
+checkpoint path to fail if the checkpoint is missing.
+
+Online recovery defaults to `exact`, which requires a snapshot-capable PPO
+adapter or reproducible GRPO group starts. Explicitly choosing
+`run.recovery.resume.mode: reset_environments` allows a different trajectory
+after an interruption. Recovery starts at a durable training boundary. An
+interrupted, uncommitted interaction can be issued again.
+Phase snapshots belong to `checkpoints`.
 
 ## Model prediction parameters and policy actions
 
@@ -768,7 +787,7 @@ uses `round_robin` or `weighted_random`. Each selection consumes at most
 `batches_per_selection`; every source is still exhausted once per phase epoch.
 Source `selection_weight` values affect order and burst frequency, not the amount of data consumed.
 
-Gradient accumulation may cross part or source boundaries only while the
+Supervised gradient accumulation weights each microbatch by its global valid-token count so the update matches the pooled masked loss. Gradient accumulation may cross part or source boundaries only while the
 dataset stays the same. A dataset transition flushes a partial window using its
 actual microbatch count. Dataset-specific frozen gradients are removed before
 the optimizer step, preventing momentum and weight decay from changing frozen
@@ -1233,6 +1252,26 @@ All algorithms use `phases`. Declare policy sequence/preference
 parts in `datasets`, and attach actions with `policy_bindings` keyed by interface. Run-wide settings remain in
 `run` and `model.execution`; no alternate run discriminator is needed.
 
+Set `run.execution.policy.compilation.torch_compile` for policy phases, including
+online collection and offline updates. In a mixed plan, supervised phases use
+their own `run.execution.supervised.compilation.torch_compile` setting.
+
+```yaml
+run:
+  execution:
+    device: cuda
+    policy:
+      compilation:
+        torch_compile: inner
+```
+
+The default, `none`, runs eagerly. `inner` compiles each distinct transformer
+encoder layer, including layers in the actor, reference, and critics. `outer`
+compiles the actor and reference history encoder and action-decoding calls, plus
+the full value and Q prediction from normalized inputs. Environment interaction,
+action sampling, and phase orchestration run eagerly. Checkpoints and exported
+actors use the same weight format across modes.
+
 See the complete [supervised template](../../src/sequifier/templates/train-supervised.yaml),
 [policy template](../../src/sequifier/templates/train-policy.yaml), and
 [supervised-to-policy template](../../src/sequifier/templates/train-supervised-to-policy.yaml).
@@ -1265,3 +1304,7 @@ evaluation view explicitly. Use episode-group splits when policy evaluation
 measures performance on unseen episodes. For mixed plans, exclude the policy
 holdout from supervised training and feature fitting. The indexed loader builds
 batches from the recorded split coordinates and the selected model view.
+
+## Training on collected sequences
+
+PPO and GRPO publish sequence data through `collection.output.manifest_path`. A later phase can consume the committed data by declaring a dataset source with `type: rollout` and the producer’s `phase` name. Set `preprocessing_config_path` on the source to prepare named splits for supervised training. [Rollout configuration and examples](../rollout.md#reusing-rollout-data)

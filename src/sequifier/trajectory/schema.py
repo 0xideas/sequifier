@@ -15,7 +15,8 @@ from pydantic import (
     model_validator,
 )
 
-from sequifier.config.rollout_config import InputBinding
+from sequifier.config.rollout_config import TrajectoryInputBinding
+from sequifier.fingerprints import fingerprint
 from sequifier.io.values import DomainValue
 from sequifier.trajectory.returns import remaining_return
 
@@ -27,7 +28,22 @@ class Record(BaseModel):
 class SeedHistory(Record):
     observations: dict[str, list[JsonValue]]
     attention_valid_mask: list[bool]
+    observation_mask: list[bool] = Field(default_factory=list)
     static_inputs: dict[str, JsonValue]
+
+    @classmethod
+    def from_rows(cls, rows, columns, width, static, masks):
+        padding = width - len(rows)
+        if padding < 0:
+            raise ValueError("Seed exceeds the model context length")
+        return cls(
+            observations={
+                name: [0.0] * padding + [row[name] for row in rows] for name in columns
+            },
+            attention_valid_mask=[False] * padding + [True] * len(rows),
+            observation_mask=[False] * padding + list(masks),
+            static_inputs=static,
+        )
 
     @model_validator(mode="after")
     def validate_window(self):
@@ -38,6 +54,13 @@ class SeedHistory(Record):
             or any(mask[i] and not mask[i + 1] for i in range(len(mask) - 1))
         ):
             raise ValueError("seed mask must be left padding followed by valid history")
+        if "observation_mask" not in self.model_fields_set:
+            self.observation_mask = [False] * len(mask)
+        if len(self.observation_mask) != len(mask) or any(
+            hidden and not valid
+            for hidden, valid in zip(self.observation_mask, mask, strict=True)
+        ):
+            raise ValueError("Observation masks must align with valid seed positions")
         if not self.observations or any(
             len(values) != len(mask) for values in self.observations.values()
         ):
@@ -72,12 +95,20 @@ class Trajectory(Record):
     ]
     episode_id: str = Field(min_length=1)
     seed: SeedHistory
-    bindings: list[InputBinding]
+    bindings: list[TrajectoryInputBinding]
     prediction_columns: list[str]
     transitions: list[Transition] = Field(min_length=1)
     collection_cutoff: bool
     total_return: FiniteFloat
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def seed_group(self) -> str | None:
+        origin = self.metadata.get("seed_origin")
+        keys = ("dataset", "sequenceId", "itemPosition")
+        if isinstance(origin, dict) and all(key in origin for key in keys):
+            return fingerprint({key: origin[key] for key in keys})
+        return None
 
     @model_validator(mode="after")
     def validate_temporal_contract(self):
@@ -177,6 +208,32 @@ def validate_trajectory(value: Trajectory | dict) -> Trajectory:
     )
 
 
+def validate_policy_seed(spec, actions, budgets, count, desired_return):
+    from sequifier.io.actions import decode_action, encode_action
+
+    if not isinstance(actions, list) or len(actions) != count:
+        raise ValueError("Seed actions must align with valid observations")
+    for index, action in enumerate(actions):
+        if action is None:
+            if index and spec.previous_action_inputs:
+                raise ValueError("Policy seed is missing a lagged action")
+            continue
+        if not isinstance(action, dict) or set(action) != set(spec.actions):
+            raise ValueError("Seed feedback must name the policy actions")
+        for name, field in spec.actions.items():
+            value = action[name]
+            if field.type == "categorical" and (
+                (isinstance(value, int) is False) or not 0 <= value < len(field.values)
+            ):
+                raise ValueError("Invalid categorical ID in seed feedback")
+        encode_action(decode_action(action, spec), spec)
+    budgets = TypeAdapter(list[FiniteFloat]).validate_python(budgets, strict=True)
+    if len(budgets) != (count if spec.return_conditioned else 0) or (
+        budgets and budgets[-1] != desired_return
+    ):
+        raise ValueError("Seed budgets must align with the seed history")
+
+
 def _validate_joint_execution(trajectory):
     from sequifier.config.policy_config import ResolvedPolicyBinding
     from sequifier.io.actions import encode_action
@@ -201,7 +258,20 @@ def _validate_joint_execution(trajectory):
         or len(previous) != len(scores)
     ):
         raise ValueError("trajectory scores/history must match decision count")
-    expected = None
+    count = sum(trajectory.seed.attention_valid_mask)
+    seed_actions = execution.get("seed_previous_action_ids", [None])
+    initial_budget = execution.get("initial_desired_return")
+    seed_returns = execution.get(
+        "seed_returns", [initial_budget] if spec.return_conditioned else []
+    )
+    validate_policy_seed(
+        spec,
+        seed_actions,
+        seed_returns,
+        count,
+        initial_budget,
+    )
+    expected = seed_actions[-1]
     for index, step in enumerate(trajectory.transitions):
         real_fields = {
             name for name, field in spec.actions.items() if field.type == "real"

@@ -198,7 +198,10 @@ def model_execution_from_model_config(
 
 def extend_prediction_distributions(execution, declared_model):
     """Allow explicit new scale parameters while preserving an initialized model."""
-    exclude = {"interfaces": {"__all__": {"prediction_distributions"}}}
+    exclude = {
+        "backbone": {"repository"},
+        "interfaces": {"__all__": {"prediction_distributions"}},
+    }
     from sequifier.config.train_config import OwnedModelSpec
 
     if isinstance(declared_model, OwnedModelSpec):

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from sequifier.config.metadata import RawInputMetadata
 from sequifier.config.policy_config import PolicyBinding, ResolvedPolicyBinding
 
 
@@ -21,6 +22,8 @@ class PolicyFittingSpec:
     interface_name: str
     observation_columns: list[str]
     static_columns: list[str]
+    raw_inputs: RawInputMetadata | None = None
+    raw_mask_column: str | None = None
     categorical_columns: list[str]
     categorical_n_classes: dict[str, int]
     id_maps: dict[str, dict[str | int, int]]
@@ -37,6 +40,8 @@ class PolicyFittingSpec:
             interface_name=interface_name,
             observation_columns=observations,
             static_columns=static,
+            raw_inputs=metadata,
+            raw_mask_column=metadata.raw_mask_column,
             categorical_columns=[
                 k for k in features if "int" in metadata.column_data_types[k].lower()
             ],
@@ -45,6 +50,13 @@ class PolicyFittingSpec:
             },
             id_maps={k: metadata.id_maps[k] for k in features if k in metadata.id_maps},
         )
+
+    def validate_source_units(self, units):
+        self.binding.validate_source_units(units)
+
+    @property
+    def previous_action_inputs(self):
+        return self.binding.previous_action_inputs
 
     @property
     def actions(self):

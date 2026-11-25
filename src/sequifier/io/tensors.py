@@ -7,6 +7,28 @@ import torch
 
 Record = TypeVar("Record", bound="TensorRecord")
 
+_SIGNED_INDEX_VIEWS = {
+    torch.uint16: torch.int16,
+    torch.uint32: torch.int32,
+    torch.uint64: torch.int64,
+}
+
+
+def gather_tensor(value: torch.Tensor, indices) -> torch.Tensor:
+    # Advanced indexing kernels support signed integers on more backends.
+    if signed := _SIGNED_INDEX_VIEWS.get(value.dtype):
+        return value.view(signed)[indices].view(value.dtype)
+    return value[indices]
+
+
+def transfer_tensor(
+    value: torch.Tensor, device: torch.device, dtype: torch.dtype | None = None
+) -> torch.Tensor:
+    dtype = value.dtype if dtype is None else dtype
+    if device.type == "mps" and dtype == torch.float64:
+        dtype = torch.float32
+    return value.to(device, dtype=dtype, non_blocking=True)
+
 
 def _map_tensors(value, operation):
     if value is None:
@@ -33,13 +55,7 @@ class TensorRecord:
             Record,
             _map_tensors(
                 self,
-                lambda value: value.to(
-                    target,
-                    dtype=torch.float32
-                    if target.type == "mps" and value.dtype == torch.float64
-                    else value.dtype,
-                    non_blocking=True,
-                ),
+                lambda value: transfer_tensor(value, target),
             ),
         )
 

@@ -1,6 +1,6 @@
 """Inference options for policy interfaces in ordinary portable model artifacts."""
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, PrivateAttr, model_validator
 
@@ -11,13 +11,18 @@ from sequifier.config.inference_common import (
 )
 from sequifier.config.policy_config import PolicyConfigBase
 from sequifier.config.policy_plan import OnlineEnvironmentConfig
+from sequifier.config.rollout_config import RolloutSelection
+
+if TYPE_CHECKING:
+    from sequifier.trajectory.sources import ResolvedSequenceSource
 
 
-class PolicyRolloutConfig(PolicyConfigBase):
+class PolicyRolloutConfig(RolloutSelection):
+    model_config = PolicyConfigBase.model_config
     environment: OnlineEnvironmentConfig
     max_steps: int = Field(gt=0)
-    trajectory_path: str = Field(min_length=1)
-    seed_row_index: int = Field(ge=0)
+    seed_history: Literal["available", "current"] = "available"
+    seed_row_index: int | None = Field(default=None, ge=0)
     max_episode_steps: int | None = Field(default=None, gt=0)
 
 
@@ -25,7 +30,8 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     model_paths: list[str] = Field(min_length=1, max_length=1)
     task: Literal["policy"]
 
-    data_path: str
+    training_config_path: str | None = None
+    data_path: str | None = None
     image_paths: MediaPath = None
     preconditioning_image_paths: MediaPath = None
     output_probabilities: bool = False
@@ -33,8 +39,6 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     desired_return: float | None = Field(default=None, allow_inf_nan=False)
     desired_return_column: str = "desired_return"
     previous_action_columns: dict[str, str] = Field(default_factory=dict)
-    sequence_id_column: str = "sequenceId"
-    item_position_column: str = "itemPosition"
     rollout: PolicyRolloutConfig | None = None
     # Optional assertions against the portable artifact contract.
     input_columns: list[str] | None = None
@@ -50,11 +54,22 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
 
     @model_validator(mode="after")
     def validate_execution(self):
-        if self.read_format not in {"csv", "parquet"} or self.write_format not in {
-            "csv",
-            "parquet",
-        }:
-            raise ValueError("policy inference formats must be csv or parquet")
+        from sequifier.config.column_names import (
+            validate_column_names,
+            validate_policy_column_types,
+        )
+
+        validate_column_names(
+            self.previous_action_columns, "previous_action_columns actions"
+        )
+        validate_column_names(
+            self.previous_action_columns.values(), "previous_action_columns inputs"
+        )
+        validate_column_names([self.desired_return_column], "desired_return_column")
+        if type(self) is PolicyInferenceConfig:
+            self.column_data_types = validate_policy_column_types(
+                self.column_data_types
+            )
         if self.rollout is not None and self.output_probabilities:
             raise ValueError(
                 "rollout writes a trajectory including action log probabilities"
@@ -66,4 +81,13 @@ class ResolvedPolicyInferenceConfig(PolicyInferenceConfig):
     """Validated policy request with selected artifact/interface and assertions."""
 
     _model: ResolvedInferenceModel = PrivateAttr()
+    _prepared_source: "ResolvedSequenceSource | None" = PrivateAttr(default=None)
     _indexed_view: object | None = PrivateAttr(default=None)
+
+    def input_paths(self):
+        paths = super().input_paths()
+        if self.training_config_path:
+            paths.append(self.training_config_path)
+        if self._prepared_source is not None:
+            paths.extend(self._prepared_source.dependencies.identity)
+        return paths

@@ -12,6 +12,7 @@ from sequifier.artifacts.reports import HandoffCandidate, PhaseResult
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.contract_versions import ContractVersions
 from sequifier.fingerprints import fingerprint
+from sequifier.rl.compilation import compile_critics
 from sequifier.rl.phase_optimization import PhaseOptimization, PhaseRoles
 from sequifier.rl.policy import Policy
 from sequifier.rl.telemetry import TelemetryJournal
@@ -128,6 +129,7 @@ class PhaseContext(Generic[PhaseType, DataType]):
     metrics: "PolicyMetrics | None" = None
     continuation: OptimizerContinuation | None = None
     preserve_optimizer: bool = False
+    global_step_offset: int = 0
 
     @property
     def index(self):
@@ -196,6 +198,7 @@ class PhaseSession:
         roles = PhaseRoles.build(
             context.actor, context.phase, restoring=context.resume_state is not None
         )
+        compile_critics(context.run.parent.run.execution.policy_compile_mode, roles)
         self.modules = roles.trainable
         self.networks = {**self.modules, **roles.frozen}
         self.mask_ids = context.optimization.masks
@@ -216,6 +219,7 @@ class PhaseSession:
         self.steps = dict.fromkeys(self.modules, 0)
         self.sampler = torch.Generator().manual_seed(context.identity.sampling_seed)
         self.state = context.resume_state or {}
+        self.epoch: int | None = None
         self.transaction = self.state.get("transaction", 0)
         self.iteration_budget = context.phase.iteration_budget(
             context.optimization.step_budget
@@ -275,6 +279,10 @@ class PhaseSession:
                 optimizer.load_state_dict(saved["optimizer"])
                 scheduler.load_state_dict(saved["scheduler"])
 
+    @property
+    def global_step(self):
+        return self.context.global_step_offset + self.transaction
+
     def restore_random(self):
         if self.state:
             restore_rng_state(self.context.actor.device, self.state["random"])
@@ -313,6 +321,7 @@ class PhaseSession:
             self._count_stopping = False
             evaluate(*args, initial=True, **kwargs)
             self.initial_evaluated = True
+        self.iteration_started = time.monotonic()
 
     def transaction_schedule(self, final):
         phase = self.context.phase
@@ -346,12 +355,13 @@ class PhaseSession:
             timed_snapshot=timed,
         )
 
-    def observe(self, metric, **record):
+    def observe(self, metric, *, elapsed_seconds, **record):
         if self.context.metrics is not None:
             values = {**record, self.selection.monitor: metric}
             self.context.metrics.record(
                 self,
                 values,
+                elapsed_seconds=elapsed_seconds,
                 validation=True,
                 primary=self.selection.monitor,
                 initial=self.transaction == 0,
@@ -365,20 +375,24 @@ class PhaseSession:
                 self.transaction,
             )
 
-    def record_evaluation(self, metric, **record):
-        self.observe(metric, **record)
+    def record_evaluation(self, metric, *, elapsed_seconds, **record):
+        self.observe(metric, elapsed_seconds=elapsed_seconds, **record)
         self.telemetry.append("metrics", {"transaction": self.transaction, **record})
 
-    def record_training(self, *, final=False, **record):
+    def record_training(self, *, elapsed_seconds, final=False, **record):
         self.telemetry.append("metrics", {"transaction": self.transaction, **record})
         if self.context.metrics is not None:
-            self.context.metrics.record(self, record, final=final)
+            self.context.metrics.record(
+                self, record, elapsed_seconds=elapsed_seconds, final=final
+            )
 
     def evaluate_validation(self, evaluator, **record):
+        started = time.monotonic()
         values = evaluator()
         key = self.selection.monitor.removeprefix("validation_")
         self.record_evaluation(
             values[key],
+            elapsed_seconds=time.monotonic() - started,
             **record,
             **{f"validation_{name}": value for name, value in values.items()},
         )
@@ -390,32 +404,38 @@ class PhaseSession:
         training,
         evaluate,
         checkpoint=None,
-        evaluation_record: dict | Callable[[], dict] | None = None,
     ):
         """Commit an offline update after all participating optimizers have stepped."""
         self.transaction += 1
-        self.record_training(final=final, **training)
+        self.record_training(
+            final=final,
+            elapsed_seconds=time.monotonic() - self.iteration_started,
+            **training,
+        )
         schedule = self.transaction_schedule(final)
         if schedule.evaluate:
-            extra = (
-                evaluation_record()
-                if callable(evaluation_record)
-                else evaluation_record
-            )
-            evaluate(**training, **(extra or {}))
+            evaluate()
         self.checkpoint(schedule, checkpoint)
+        self.iteration_started = time.monotonic()
 
     def complete_online_update(
         self, *, final, training: dict | Callable[[], dict], evaluate, checkpoint
     ):
         """Evaluate the updated policy before recording collection metrics and recovery."""
         self.transaction += 1
+        elapsed_seconds = time.monotonic() - self.iteration_started
         schedule = self.transaction_schedule(final)
         if schedule.evaluate:
             evaluate()
         metrics = training() if callable(training) else training
-        self.record_training(final=final, transaction=self.transaction, **metrics)
+        self.record_training(
+            final=final,
+            elapsed_seconds=elapsed_seconds,
+            transaction=self.transaction,
+            **metrics,
+        )
         self.checkpoint(schedule, checkpoint)
+        self.iteration_started = time.monotonic()
 
     def optimizer_clocks(self):
         return {f"{role}_optimizer_steps": steps for role, steps in self.steps.items()}
@@ -439,10 +459,11 @@ class PhaseSession:
         )
         if adjust is not None:
             adjust(result, phase)
-        self.observe(result["selection_value"], **result)
-        self.telemetry.append(
-            "evaluations", {**result, "transaction": self.transaction, **progress}
+        record = {**result, "transaction": self.transaction, **progress}
+        self.observe(
+            result["selection_value"], elapsed_seconds=result["seconds"], **record
         )
+        self.telemetry.append("evaluations", record)
 
     def optimization_state(self, *, include_steps=False):
         return {
@@ -506,6 +527,7 @@ class PhaseSession:
     def finish(self, clocks, provenance):
         if self.context.metrics is not None:
             self.context.metrics.flush(self)
+        clocks = {**clocks, "global_step": self.global_step}
         scope = stop_scope(self.context.phase.stopping, self.stopping.triggered)
         actor, weights, result = self.selection.finish(
             self.context,
@@ -513,6 +535,7 @@ class PhaseSession:
             clocks,
             {
                 **provenance,
+                "model_interface": self.context.actor.interface_name,
                 "trainable_parameters": self.mask_ids,
                 "resolved_seeds": {
                     "run": self.context.identity.run_seed,

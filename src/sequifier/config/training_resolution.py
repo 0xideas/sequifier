@@ -1,5 +1,6 @@
 """Resolve the common authored plan into model, dataset and task contracts."""
 
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from sequifier.config.train_config import (
     ResolvedInterfaceStorage,
     ResolvedSequifierConfig,
     ResolvedTrainingSource,
+    RolloutPhaseSource,
     SequencePartSpecModel,
     SequifierConfig,
     _assert_compatible,
@@ -110,13 +112,54 @@ class IndexedSelection:
                 )
 
 
+def _view_members(dataset, name, view):
+    parts = view.parts or list(dataset.sources)
+    for part in parts:
+        yield (name if len(parts) == 1 else f"{name}__{part}"), part
+
+
+def _scheduled_dataset(dataset, views_used, physical_parts):
+    """Project a deferred dataset onto the views and physical parts used now."""
+    if views_used and (dataset.uses_metadata_views or dataset.partition):
+        # Implicit split views and generated partitions require the whole corpus.
+        return dataset
+    if not any(isinstance(s, RolloutPhaseSource) for s in dataset.sources.values()):
+        return dataset
+    parts = set(physical_parts)
+    views = {}
+    for name, view in dataset.views.items():
+        for member, physical in _view_members(dataset, name, view):
+            if name in views_used:
+                views[name] = view
+                parts.add(physical)
+            elif member in views_used or (
+                member in physical_parts
+                and member == physical
+                and not dataset.partition
+            ):
+                views[member] = DatasetView(parts=[physical], split=view.split)
+                parts.add(physical)
+    if not parts:
+        raise ValueError(f"Unknown dataset view in {sorted(views_used)}")
+    return dataset.model_copy(
+        update={
+            "views": views,
+            "sources": {
+                key: value for key, value in dataset.sources.items() if key in parts
+            },
+        }
+    )
+
+
 def _active_datasets(config, phases, root, prepared_inputs):
     """Include scheduled views and the episode datasets addressed by DPO spans."""
-    names = {ref.dataset for phase in phases for ref in phase.data_sources}
+    references = defaultdict(set)
+    physical = defaultdict(set)
     for phase in phases:
-        if phase.source_kind != "preference":
-            continue
         for ref in phase.data_sources:
+            references[ref.dataset].add(ref.part)
+            if phase.source_kind != "preference":
+                continue
             dataset = config.datasets[ref.dataset]
             view = dataset.views.get(ref.part)
             if view is None:
@@ -131,8 +174,19 @@ def _active_datasets(config, phases, root, prepared_inputs):
                 path = str((root / source.manifest_path).resolve())
                 for pair in prepared_inputs.preference_pairs(path):
                     for span in (pair.chosen, pair.rejected):
-                        names.add(span.source.partition(".")[0])
-    return {name: dataset for name, dataset in config.datasets.items() if name in names}
+                        name, _, part = span.source.partition(".")
+                        if (
+                            name in config.datasets
+                            and part in config.datasets[name].sources
+                        ):
+                            physical[name].add(part)
+                        else:
+                            references[name].add(part)
+    return {
+        name: _scheduled_dataset(dataset, references[name], physical[name])
+        for name, dataset in config.datasets.items()
+        if name in references or name in physical
+    }
 
 
 class TrainingSources:
@@ -156,6 +210,23 @@ class TrainingSources:
                 if isinstance(spec, IndexedSource):
                     indexed = self.indexed_view(spec.path)
                     path = indexed.metadata_path
+                    metadata = indexed.metadata()
+                elif (
+                    isinstance(spec, SequencePartSpecModel)
+                    and spec.format in {"auto", "prepared"}
+                    and len(spec.paths) == 1
+                    and is_indexed_view(root / spec.paths[0])
+                ):
+                    indexed = self.indexed_view(spec.paths[0])
+                    path = indexed.metadata_path
+                    if (
+                        spec.metadata_config_path
+                        and (root / spec.metadata_config_path).resolve()
+                        != path.resolve()
+                    ):
+                        raise ValueError(
+                            "Indexed sources resolve metadata from the view"
+                        )
                     metadata = indexed.metadata()
                 elif (
                     isinstance(spec, (DatasetPartSpecModel, SequencePartSpecModel))
@@ -186,12 +257,8 @@ class TrainingSources:
                     )
             self.view_parts[name] = {}
             for view_name, view in dataset.views.items():
-                selected = view.parts or list(dataset.sources)
                 members = []
-                for key in selected:
-                    part_name = (
-                        view_name if len(selected) == 1 else f"{view_name}__{key}"
-                    )
+                for part_name, key in _view_members(dataset, view_name, view):
                     if part_name in self.view_parts[name]:
                         raise ValueError(
                             f"{name}: ambiguous expanded view name {part_name!r}"
@@ -357,6 +424,13 @@ class TrainingSources:
                 source = SequenceSourceConfig.model_validate(
                     part.model_dump(exclude={"type"})
                 )
+                if record.indexed is not None:
+                    source = source.model_copy(
+                        update={
+                            "format": "prepared",
+                            "metadata_config_path": str(record.indexed.metadata_path),
+                        }
+                    )
             elif (view := record.indexed) is not None:
                 source = SequenceSourceConfig(
                     paths=[str(view.path)],
@@ -420,7 +494,15 @@ def _inferred_metadata(config, name, binding, settings):
     columns = inputs | set(interface.target_columns)
     types = dict.fromkeys(columns, "Float32")
     maps = binding.categorical_id_maps()
-    types.update(dict.fromkeys(maps, "Int64"))
+    cardinality = interface.input_contract.cardinality_rules
+    eligible = inputs - set(binding.actions) - set(binding.feedback)
+    if binding.return_conditioned:
+        eligible.discard("__policy_return")
+    if invalid := cardinality.keys() - eligible:
+        raise ValueError(
+            f"{name}: cardinality_config requires observation or static features: {sorted(invalid)}"
+        )
+    types.update(dict.fromkeys(maps.keys() | cardinality.keys(), "Int64"))
     counts = {column: max(mapping.values()) + 1 for column, mapping in maps.items()}
     normalization = _normalization(config, name)
     statistics = (
@@ -428,18 +510,22 @@ def _inferred_metadata(config, name, binding, settings):
         if normalization and normalization.source == "statistics"
         else {}
     )
-    return DatasetMetadata(
-        window_length=settings.context_length + max(1, settings.target_offset),
-        column_data_types=types,
-        static_columns=static,
-        n_classes=counts,
-        id_maps=maps,
-        selected_columns_statistics={
-            column: statistics.get(column, {"mean": 0.0, "std": 1.0})
-            for column in columns
-            if column not in counts
-            and (normalization is not None or column not in inputs)
-        },
+    return DatasetMetadata.model_validate(
+        dict(
+            window_length=settings.context_length + max(1, settings.target_offset),
+            column_data_types=types,
+            cardinality_config=cardinality,
+            static_columns=static,
+            n_classes=counts,
+            id_maps=maps,
+            selected_columns_statistics={
+                column: statistics.get(column, {"mean": 0.0, "std": 1.0})
+                for column in columns
+                if column not in counts
+                and column not in cardinality
+                and (normalization is not None or column not in inputs)
+            },
+        )
     )
 
 
@@ -517,6 +603,12 @@ def _fit_input_metadata(
         None,
     )
     if phase is None or phase.source_kind == "none":
+        missing = metadata.cardinality_config.keys() - metadata.id_maps.keys()
+        if missing:
+            raise ValueError(
+                f"{name}: fitting cardinality_config for {sorted(missing)} requires "
+                "an offline first phase or a frozen input vocabulary"
+            )
         return metadata
     interface = config.model.interfaces[name]
     normalization = _normalization(config, name)
@@ -710,9 +802,38 @@ def resolve_training_run(
     from sequifier.model.execution import ModelExecution
     from sequifier.model.history_transfer import validate_history_transfer
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
+    from sequifier.training.rollout_sources import first_consumer
+
+    deferred = first_consumer(authored)
+    if deferred is not None:
+        prefix = authored.model_copy(
+            deep=True, update={"plan": authored.plan[:deferred]}
+        )
+        supervised = [p for p in authored.ordered_phases if p.algorithm == "supervised"]
+        if (
+            supervised
+            and prefix.model
+            and not prefix.initialize_from
+            and prefix.model.execution.prediction_view is None
+        ):
+            prefix.model.execution = type(prefix.model.execution).model_validate(
+                {
+                    **prefix.model.execution.model_dump(exclude_unset=True),
+                    "prediction_view": supervised[-1].learning.objective_name("causal"),
+                }
+            )
+        resolved = resolve_training_run(
+            prefix, metadata_by_part=metadata_by_part, loaded_metadata=loaded_metadata
+        )
+        resolved._rollout_plan = authored.model_copy(deep=True)
+        resolved.run_mode = "coordinated"
+        if authored.run.reproducibility.seed == "random":
+            resolved._random_seed_inputs = (authored, metadata_by_part)
+        return resolved
 
     prepared_inputs = PreparedTrainingInputs()
     config = authored.model_copy(deep=True)
+    config.run.recovery.resume.policy = config.run.effective_resume_policy()
     phases = config.ordered_phases
     supervised = [phase for phase in phases if phase.algorithm == "supervised"]
     has_policy = len(supervised) != len(phases)
@@ -760,6 +881,26 @@ def resolve_training_run(
                 f"Dataset {dataset_name!r} references unknown model interface "
                 f"{dataset.model_interface!r}."
             )
+        interface_name = dataset.model_interface
+        binding = config.policy_bindings.get(interface_name)
+        if binding is None and source is not None and not history_only:
+            binding = source.interface(interface_name).policy
+        dataset.validate_policy_units(binding)
+        if binding is not None and metadata_by_part is not None:
+            from sequifier.config.column_names import validate_policy_column_types
+
+            interface = config.model.interfaces[interface_name]
+            columns = set(interface.feature_selection.columns)
+            for part in dataset.sources:
+                metadata = metadata_by_part.get(f"{dataset_name}.{part}")
+                if metadata is not None:
+                    validate_policy_column_types(
+                        {
+                            name: dtype
+                            for name, dtype in metadata.column_data_types.items()
+                            if name in columns
+                        }
+                    )
 
     sources = TrainingSources(config, root, metadata_by_part)
     metadata_paths = {
@@ -803,10 +944,9 @@ def resolve_training_run(
                 name = settings.environment
                 if isinstance(name, str):
                     settings.environment = config.environments[name]
-            if phase.collection.archive_directory:
-                phase.collection.archive_directory = str(
-                    (root / phase.collection.archive_directory).resolve()
-                )
+            if phase.collection.output:
+                output = phase.collection.output
+                output.manifest_path = str((root / output.manifest_path).resolve())
         reference = phase.reference_config
         if reference and reference.path:
             reference.path = str((root / reference.path).resolve())
@@ -956,6 +1096,8 @@ def resolve_training_run(
         curriculum_column=curriculum.column if curriculum else None,
         run_mode=training_run_mode(resolved_phases),
     )
+    if authored.run.reproducibility.seed == "random":
+        resolved._random_seed_inputs = (authored, metadata_by_part)
     if has_policy:
         resolved._prepared_inputs = prepared_inputs
     from sequifier.config.input_contract_resolution import validate_input_contracts
@@ -964,6 +1106,27 @@ def resolve_training_run(
     validate_input_contracts(config, resolved)
     resolve_training_output_paths(resolved.run)
     return resolved
+
+
+def prepare_locked_run(config, seed=None):
+    """Resolve random-seeded inputs against the checkpoint selected under the run lock."""
+    policy = config.run.effective_resume_policy()
+    if config.run.recovery.resume.policy != policy:
+        config = config.model_copy(update={"run": config.run.model_copy(deep=True)})
+        config.run.recovery.resume.policy = policy
+    if config._random_seed_inputs is None:
+        return config
+    if seed is None:
+        from sequifier.artifacts.run_checkpoint import read_resume_seed
+
+        seed = read_resume_seed(config.run)
+    if seed is None or seed == config.seed:
+        return config
+    authored, metadata = config._random_seed_inputs
+    authored = authored.model_copy(deep=True)
+    authored.run.reproducibility.seed = seed
+    authored.run.retrain = config.run.retrain
+    return resolve_training_run(authored, metadata_by_part=metadata)
 
 
 def policy_run_config(

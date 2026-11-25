@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
+from sequifier.config.column_names import validate_column_names
 from sequifier.config.command_ownership import InferenceRunSettings
 from sequifier.config.naming import ConfigModel
 from sequifier.helpers import normalize_path
@@ -30,14 +31,45 @@ class InferenceExecutionConfig(ConfigModel):
     write_format: str = "csv"
     output_path: str | None = None
     metadata_config_path: str | None = None
+    split: str | None = None
     input_layout: Literal["auto", "raw", "indexed"] = "auto"
+    sequence_view: Literal["decisions", "observations"] = "decisions"
     static_data_path: str | None = None
     mask_column: str | None = None
+    _sequence_dependencies: tuple[str, ...] | None = PrivateAttr(default=None)
 
     if TYPE_CHECKING:
         data_path: Any
         task: Any
         rollout: Any
+
+    @field_validator("read_format")
+    @classmethod
+    def validate_read_format(cls, v: str) -> str:
+        if v not in ["csv", "parquet", "pt", "sequence"]:
+            raise ValueError(
+                "Currently only 'csv', 'parquet', 'pt' and 'sequence' are supported for "
+                "inference input"
+            )
+        return v
+
+    @field_validator("mask_column")
+    @classmethod
+    def validate_mask_column(cls, value):
+        if value is not None:
+            validate_column_names(
+                [value], "mask_column", allowed=("__observation_mask",)
+            )
+        return value
+
+    @field_validator("write_format")
+    @classmethod
+    def validate_write_format(cls, v: str) -> str:
+        if v not in ["csv", "parquet"]:
+            raise ValueError(
+                "Currently only 'csv' and 'parquet' are supported for inference output"
+            )
+        return v
 
     @field_validator("model_paths")
     @classmethod
@@ -79,16 +111,18 @@ class InferenceExecutionConfig(ConfigModel):
             raise ValueError("output_path requires exactly one model path")
         rollout = self.rollout
         if rollout is not None:
-            self.validate_output_destination(
-                normalize_path(rollout.trajectory_path, self.project_root),
-                label="trajectory_path",
-            )
+            paths = [rollout.trajectory_path]
+            if rollout.output:
+                manifest = rollout.output.manifest_path
+                paths.extend([manifest, manifest + ".parts"])
+            from sequifier.io.output_paths import validate_path_conflicts
+
+            destinations = [normalize_path(p, self.project_root) for p in paths if p]
+            validate_path_conflicts(destinations, (), label="rollout output")
+            for destination in destinations:
+                self.validate_output_destination(destination, label="rollout output")
         elif self.output_path is not None:
-            destination = (
-                normalize_path(self.output_path, self.project_root)
-                if self.task == "policy"
-                else Path(self.project_root) / self.output_path
-            )
+            destination = Path(self.project_root) / self.output_path
             self.validate_output_destination(destination, label="output_path")
         return self
 
@@ -117,7 +151,50 @@ class InferenceExecutionConfig(ConfigModel):
         indexed = getattr(self, "_indexed_view", None)
         if indexed is not None:
             normalized.extend(str(path) for path in indexed.dependencies())
+        if (
+            self.input_layout == "raw"
+            and self.data_path
+            and self._sequence_dependencies is None
+        ):
+            from sequifier.io.prepare_inference import is_sequence_input
+
+            data_path = Path(self.project_root) / self.data_path
+            dependencies = ()
+            if is_sequence_input(data_path, self.read_format):
+                from sequifier.config.policy_train_config import SequenceSourceConfig
+                from sequifier.trajectory.sources import resolve_source
+
+                with data_path.open(encoding="utf-8") as stream:
+                    kind = json.load(stream).get("format")
+                if kind == "sequifier.sequence-data":
+                    source = resolve_source(
+                        SequenceSourceConfig(manifest_path=str(data_path.resolve())),
+                        data_path.parent,
+                    )
+                    dependencies = tuple(source.dependencies.identity)
+            self._sequence_dependencies = dependencies
+        normalized.extend(self._sequence_dependencies or ())
         return normalized
+
+
+def inference_image_store(config, metadata, indexed=None):
+    """Bind authored media locations while preserving indexed storage semantics."""
+    from sequifier.config.image_config import bind_image_paths
+    from sequifier.io.images import ImageStore
+
+    sources, prefix = metadata.image_sources, metadata.preconditioning_image
+    if not sources and prefix is None:
+        return None
+    if indexed is not None and not (
+        config.image_paths or config.preconditioning_image_paths
+    ):
+        return indexed.image_store()
+    sources, prefix = bind_image_paths(
+        sources, prefix, config.image_paths, config.preconditioning_image_paths
+    )
+    if indexed is not None:
+        return indexed.image_store(sources, prefix, project_root=config.project_root)
+    return ImageStore(sources, prefix, config.project_root)
 
 
 def resolve_inference_model(values, *, interface_name, task):

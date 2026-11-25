@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field
 
+from sequifier.config.naming import supervised_phase_seed
 from sequifier.config.train_config import ResolvedSequifierConfig, ResolvedTrainingPhase
 
 
@@ -93,7 +94,7 @@ class SupervisedRunPlan:
                     index=index,
                     seed=spec.resolved_seed
                     if spec.resolved_seed is not None
-                    else config.seed + index,
+                    else supervised_phase_seed(config.seed, index),
                 )
             )
         return cls(tuple(phases))

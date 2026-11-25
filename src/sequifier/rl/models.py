@@ -71,7 +71,7 @@ class ActionEncoder(nn.Module):
                     else labels
                 )
                 active &= torch.isin(
-                    actions[predecessor], torch.tensor(allowed, device=value.device)
+                    actions[predecessor], actions[predecessor].new_tensor(allowed)
                 )
             if field.type == "real":
                 value = value.float()

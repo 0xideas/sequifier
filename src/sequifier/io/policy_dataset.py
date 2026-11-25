@@ -15,7 +15,7 @@ from sequifier.io.batch import (
 from sequifier.io.episode_cache import EpisodeCache
 from sequifier.io.episode_corpus import EpisodeCorpus, EpisodeView, episode_content_key
 from sequifier.io.episode_features import EpisodeFeatures, return_labels
-from sequifier.io.partitioning import split_components
+from sequifier.io.partitioning import sequence_assignments
 from sequifier.io.policy_window import PolicyWindowView, action_index
 
 
@@ -37,6 +37,7 @@ class EpisodeDecisions(EpisodeFeatures):
         self.exclusions = {}
         self.all_episode_ids = []
         self.episode_ids = []
+        self.sequence_ids = []
         self.demonstration_keys = []
         self.group_ids = []
         self.lengths = []
@@ -79,6 +80,7 @@ class EpisodeDecisions(EpisodeFeatures):
                 demonstration = episode_content_key(episode, length=length)
             eligible.append(index)
             self.episode_ids.append(episode_id)
+            self.sequence_ids.append(record.sequence_id)
             self.demonstration_keys.append(demonstration)
             self.group_ids.append(record.group_id)
             self.lengths.append(length)
@@ -153,24 +155,51 @@ class EpisodeWindowSampler(Sampler):
                 yield offset + step
 
 
+def episode_split_assignments(dataset, fractions, seed, *, group_identical):
+    """Return one supervised split index per eligible policy episode."""
+    sequences = dataset.sequence_ids
+    content = {}
+    if group_identical and len(fractions) > 1:
+        for index, seq in enumerate(sequences):
+            reference = dataset.episodes.source(index)
+            content[seq] = (
+                getattr(reference, "split_content_key", None)
+                or dataset.demonstration_keys[index]
+            )
+    assignments = sequence_assignments(
+        sequences,
+        dict(zip(sequences, dataset.group_ids, strict=True)),
+        content,
+        fractions,
+        seed,
+    )
+    if group_identical:
+        # Distinct source records can become the same demonstration after selecting
+        # model features. Keep the physical partition authoritative and catch leakage.
+        owners = {}
+        for seq, key in zip(sequences, dataset.demonstration_keys, strict=True):
+            if owners.setdefault(key, assignments[seq]) != assignments[seq]:
+                raise ValueError(
+                    "Identical policy demonstrations cross recorded splits. "
+                    "Give these sequences the same __group in the source."
+                )
+    return [assignments[seq] for seq in sequences]
+
+
 def episode_partition_indices(
     dataset, validation_fraction=0.2, seed=1010, *, group_identical=False
 ):
-    def keys(index):
-        result = (
-            []
-            if dataset.group_ids[index] is None
-            else [("group", dataset.group_ids[index])]
-        )
-        if group_identical:
-            result.append(("content", dataset.demonstration_keys[index]))
-        return result
-
+    if not 0 < validation_fraction < 1:
+        raise ValueError("validation_fraction must be in (0,1)")
+    assignments = episode_split_assignments(
+        dataset,
+        [1 - validation_fraction, validation_fraction],
+        seed,
+        group_identical=group_identical,
+    )
     return tuple(
-        tuple(indices)
-        for indices in split_components(
-            range(len(dataset.episodes)), keys, validation_fraction, seed
-        )
+        tuple(i for i, part in enumerate(assignments) if part == split)
+        for split in range(2)
     )
 
 
@@ -196,11 +225,13 @@ class PolicyDataCatalog:
         *,
         preference_manifests=None,
         episode_records=None,
+        sequence_names=None,
         cache_owner=None,
     ):
         self.sources, self.config, self.cache_size = sources, config, cache_size
         self.cache_owner = cache_owner
         self.corpora = {}
+        self.sequence_names = {} if sequence_names is None else sequence_names
         self.episode_records = episode_records if episode_records is not None else {}
         self.datasets = {}
         self.preference_manifests = (
@@ -225,6 +256,7 @@ class PolicyDataCatalog:
                         self.cache_size,
                         cache_owner=self.cache_owner,
                         records=self.episode_records.get(name),
+                        sequence_names=self.sequence_names,
                     )
                     self.corpora[name] = corpus
                     self.episode_records[name] = corpus.records

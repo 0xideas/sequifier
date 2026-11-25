@@ -26,9 +26,10 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
     split_index = (
         metadata.named_split_index(source.declaration.split)
         if source.declaration.split is not None
-        else None
+        else metadata.split_index
     )
 
+    identities = getattr(metadata, "sequence_identities", {})
     rows = {}
     for path in source.paths:
         if path.suffix.lower() == ".pt":
@@ -36,12 +37,26 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
                 path, layouts=metadata.depth_layouts, n_classes=metadata.n_classes
             )
         else:
-            window_length = (
-                metadata.width_for_split(split_index)
-                if split_index is not None
-                else metadata.window_length
-            )
             data = read_data(str(path), path.suffix.lower().lstrip("."))
+            if "inputCol" not in data.columns:
+                raise ValueError(
+                    f"{path}: expected prepared sequence windows with inputCol. "
+                    "For fresh inference rows, select input.layout: raw and supply "
+                    "input.metadata_config_path."
+                )
+            steps = {name for name in data.columns if name.isdigit()}
+            window_length = len(steps)
+            allowed = (
+                [metadata.width_for_split(split_index)]
+                if split_index is not None
+                else metadata.window_lengths or [metadata.window_length]
+            )
+            if window_length not in allowed or steps != {
+                str(index) for index in range(window_length)
+            }:
+                raise ValueError(
+                    f"{path}: stored timestep columns disagree with preprocessing widths {allowed}"
+                )
             batch = tabular_tensor_batch(
                 data,
                 {
@@ -80,6 +95,13 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
                     **values,
                     "__decision": int(lows[row]) <= position < int(highs[row]),
                 }
+                if identity := identities.get(str(key[0])):
+                    for column, field in (
+                        ("sequenceName", "episode_id"),
+                        ("__group", "group_id"),
+                    ):
+                        if identity.get(field) is not None:
+                            record[column] = identity[field]
                 if key in rows and rows[key] != record:
                     raise ValueError(
                         "prepared history windows disagree on overlapping positions or split bounds"
@@ -87,4 +109,25 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
                 rows[key] = record
     if not rows:
         raise ValueError("prepared source contains no valid positions")
-    return pl.DataFrame(list(rows.values())).sort(["sequenceId", "itemPosition"])
+    frame = pl.DataFrame(list(rows.values())).sort(["sequenceId", "itemPosition"])
+    if metadata.source_observations_path:
+        from sequifier.io.sequence import DOMAIN_OBSERVATIONS
+
+        coordinates = ["sequenceId", "itemPosition"]
+        physical = pl.scan_parquet(
+            source.project_root / metadata.source_observations_path
+        )
+        frame = (
+            frame.lazy()
+            .join(
+                physical,
+                on=coordinates,
+                how="left",
+                validate="1:1",
+                maintain_order="left",
+            )
+            .collect()
+        )
+        if frame[DOMAIN_OBSERVATIONS].null_count():
+            raise ValueError("Source observations do not cover the prepared windows")
+    return frame

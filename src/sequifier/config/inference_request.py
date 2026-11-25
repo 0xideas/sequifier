@@ -2,8 +2,12 @@
 
 from typing import Annotated, Literal
 
-from pydantic import Field, TypeAdapter, model_validator
+from pydantic import Field, TypeAdapter, field_validator, model_validator
 
+from sequifier.config.column_names import (
+    validate_column_names,
+    validate_policy_column_types,
+)
 from sequifier.config.command_ownership import InferenceRunSettings
 from sequifier.config.image_config import MediaPath
 from sequifier.config.naming import ConfigModel
@@ -23,45 +27,71 @@ class TrainingRoute(ConfigModel):
 
 
 class InferenceInput(ConfigModel):
+    training_route: TrainingRoute | None = None
+    format: Literal["csv", "parquet", "pt", "sequence"] | None = None
+    path: str | None = None
+    split: str | None = None
     layout: Literal["auto", "raw", "indexed"] = "auto"
+    sequence_view: Literal["decisions", "observations"] = "decisions"
     metadata_config_path: str | None = None
     static_data_path: str | None = None
     mask_column: str | None = None
     image_paths: MediaPath = None
     preconditioning_image_paths: MediaPath = None
 
-
-class PredictionInput(InferenceInput):
-    path: str | None = None
-    format: Literal["csv", "parquet", "pt"] | None = None
-    training_route: TrainingRoute | None = None
-    inline_metadata: dict | None = None
-    split: str | None = None
-    static_features_path: str | None = None
-    window_stride: int | None = Field(default=None, gt=0)
-    fresh_prediction_positions: Literal["right_edge", "observed"] | None = None
+    @field_validator("mask_column")
+    @classmethod
+    def validate_mask(cls, value):
+        if value:
+            validate_column_names(
+                [value], "input.mask_column", allowed=("__observation_mask",)
+            )
+        return value
 
     @model_validator(mode="after")
     def select_split(self):
+        if (
+            self.format == "sequence" or self.sequence_view != "decisions"
+        ) and self.layout != "raw":
+            raise ValueError("Sequence manifest input requires input.layout: raw")
         if self.split is not None and (
-            (not self.metadata_config_path and self.inline_metadata is None)
-            or self.path
-            or self.training_route
-            or self.layout == "raw"
+            self.path or self.layout == "raw" or not self.has_split_metadata()
         ):
             raise ValueError(
                 "input.split selects a named split from the supplied preprocessing metadata"
             )
         return self
 
+    def has_split_metadata(self):
+        return self.training_route is None and bool(self.metadata_config_path)
+
+
+class PredictionInput(InferenceInput):
+    inline_metadata: dict | None = None
+    static_features_path: str | None = None
+    window_stride: int | None = Field(default=None, gt=0)
+    fresh_prediction_positions: Literal["right_edge", "observed"] | None = None
+
+    def has_split_metadata(self):
+        return self.training_route is None and (
+            bool(self.metadata_config_path) or self.inline_metadata is not None
+        )
+
 
 class PolicyInput(InferenceInput):
-    path: str
-    format: Literal["csv", "parquet"] | None = None
     previous_action_columns: dict[str, str] = Field(default_factory=dict)
-    sequence_id_column: str = "sequenceId"
-    item_position_column: str = "itemPosition"
     desired_return_column: str = "desired_return"
+
+    @model_validator(mode="after")
+    def validate_columns(self):
+        validate_column_names(
+            self.previous_action_columns, "previous_action_columns actions"
+        )
+        validate_column_names(
+            self.previous_action_columns.values(), "previous_action_columns inputs"
+        )
+        validate_column_names([self.desired_return_column], "desired_return_column")
+        return self
 
 
 class ContractAssertions(ConfigModel):
@@ -75,6 +105,23 @@ class ContractAssertions(ConfigModel):
     target_offset: int | None = Field(default=None, ge=0)
     prediction_length: int | None = Field(default=None, gt=0)
     decoder_support_length: int | None = Field(default=None, gt=0)
+
+    @field_validator(
+        "input_columns",
+        "target_columns",
+        "static_columns",
+        "column_data_types",
+        "target_column_types",
+    )
+    @classmethod
+    def validate_columns(cls, values, info):
+        validate_column_names(
+            values or (),
+            info.field_name,
+            allowed=("__policy_return", "__policy_previous_action"),
+            prefixes=("__executed_",),
+        )
+        return values
 
 
 class ForecastAssertions(ContractAssertions):
@@ -169,6 +216,9 @@ class PolicyRequest(InferenceRequest):
 
     @model_validator(mode="after")
     def select_output(self):
+        self.assertions.column_data_types = validate_policy_column_types(
+            self.assertions.column_data_types
+        )
         if self.rollout and self.output:
             raise ValueError("A policy rollout produces its own trajectory")
         if len(self.artifact.paths) != 1:

@@ -1,7 +1,6 @@
 """Policy observations in the native supervised metric tables."""
 
 import math
-import time
 
 from sequifier.training.metrics import StructuredMetricWriters
 
@@ -12,11 +11,9 @@ class PolicyMetrics:
             config.project_root,
             config.model_name,
             0,
-            dataset_name=config.policy.interface_name,
         )
         self.run_id = identity.run_id
         self.session_id = identity.session_id
-        self.started = time.monotonic()
         self.pending = None
 
     def record(
@@ -24,6 +21,7 @@ class PolicyMetrics:
         session,
         values,
         *,
+        elapsed_seconds,
         validation=False,
         primary=None,
         initial=False,
@@ -31,7 +29,7 @@ class PolicyMetrics:
     ):
         context = session.context
         if not validation:
-            self.pending = (session, values)
+            self.pending = (session, values, elapsed_seconds)
         if (
             not validation
             and not final
@@ -40,13 +38,16 @@ class PolicyMetrics:
             % (context.run.parent.run.logging.log_interval_iterations or 10)
         ):
             return
-        scalars = {
+        scalars: dict[str, float | None] = {
             name: float(value)
             for name, value in values.items()
             if isinstance(value, (float, int))
-            and not isinstance(value, bool)
+            and name != "initial"
             and math.isfinite(value)
         }
+        if validation and primary is not None and values.get(primary) is None:
+            # Censored evaluations still have a monitor and episode diagnostics.
+            scalars[primary] = None
         if not scalars:
             return
         if primary is None:
@@ -66,25 +67,35 @@ class PolicyMetrics:
             )
         self.writer.phase = context.phase.name
         self.writer.algorithm = context.phase.algorithm
-        now = time.monotonic()
+        for role, (optimizer, _) in session.optimization.items():
+            if role != "actor":
+                scalars[f"{role}_learning_rate"] = float(
+                    optimizer.param_groups[0]["lr"]
+                )
+        sources = context.phase.data_sources
+        refs = sources.evaluation if validation else sources.training
+        datasets = {ref.dataset for ref in refs}
+        parts = {ref.part for ref in refs}
         self.writer.write_observation(
+            dataset=next(iter(datasets)) if len(datasets) == 1 else None,
+            part=next(iter(parts)) if len(datasets) == len(parts) == 1 else None,
             validation=validation,
             run_id=self.run_id,
             session_id=self.session_id,
-            epoch=context.index + 1,
+            epoch=session.epoch,
             iteration=session.transaction,
             batches_total=session.iteration_budget,
-            global_step=sum(session.steps.values()),
+            global_step=session.global_step,
             values=scalars,
             primary=primary,
             learning_rate=float(session.optimization["actor"][0].param_groups[0]["lr"]),
-            elapsed_seconds=now - self.started,
+            elapsed_seconds=elapsed_seconds,
             initial=initial,
         )
         if not validation:
-            self.started = now
             self.pending = None
 
     def flush(self, session):
         if self.pending is not None and self.pending[0] is session:
-            self.record(session, self.pending[1], final=True)
+            _, values, elapsed_seconds = self.pending
+            self.record(session, values, elapsed_seconds=elapsed_seconds, final=True)

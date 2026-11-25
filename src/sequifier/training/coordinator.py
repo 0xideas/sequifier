@@ -11,7 +11,10 @@ from uuid import uuid4
 
 import torch
 
-from sequifier.artifacts.backbone_repository import select_revision
+from sequifier.artifacts.backbone_repository import (
+    publish_selected_backbone,
+    select_revision,
+)
 from sequifier.artifacts.checkpoint_envelope import (
     checkpoint_envelope,
     phase_boundary,
@@ -34,10 +37,15 @@ from sequifier.artifacts.phase import (
     publish_phase_commits,
     verify_artifact,
 )
-from sequifier.artifacts.reports import publish_run_report, run_report
+from sequifier.artifacts.reports import (
+    completed_run_report,
+    publish_run_report,
+    run_report,
+)
 from sequifier.artifacts.run_checkpoint import (
     checkpoint_path,
     select_run_checkpoint,
+    training_lock,
     training_plan_identity,
 )
 from sequifier.config.components import ResumeConfig
@@ -52,7 +60,17 @@ from sequifier.runtime.plan import (
     new_run_id,
     run_phases,
 )
-from sequifier.training.phase_runners import compile_phase_group
+from sequifier.training.metrics import (
+    model_metric_tables,
+    progress_after,
+    restore_metric_positions,
+)
+from sequifier.training.phase_runners import (
+    PolicyPhaseGroup,
+    SupervisedPhaseGroup,
+    compile_phase_group,
+)
+from sequifier.training.rollout_sources import PendingGroup
 
 if TYPE_CHECKING:
     from sequifier.config.train_config import ResolvedSequifierConfig
@@ -98,16 +116,21 @@ def run_training(
 
 def run_policy_plan(config) -> LearningRunResult | PolicyRunResult:
     """Use native policy recovery when the plan shares an actor representation."""
-    from sequifier.config.training_resolution import policy_run_config
+    from sequifier.config.training_resolution import (
+        policy_run_config,
+        prepare_locked_run,
+    )
     from sequifier.rl.learner import execute_policy
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
-    prepared = PreparedTrainingInputs.for_run(config)
-    with prepared.run_scope():
-        if config.run_mode == "policy":
-            native = policy_run_config(config, config.training_plan)
-            return execute_policy(native, prepared)
-        return _run_learning_plan(config, prepared)
+    with training_lock(checkpoint_path(config)):
+        config = prepare_locked_run(config)
+        prepared = PreparedTrainingInputs.for_run(config)
+        with prepared.run_scope():
+            if config.run_mode == "policy":
+                native = policy_run_config(config, config.training_plan)
+                return execute_policy(native, prepared)
+            return _run_learning_plan(config, prepared)
 
 
 def _snapshot_recovery(source, destination):
@@ -119,15 +142,19 @@ def _snapshot_recovery(source, destination):
             copyfile(source, temporary)
 
 
-def _prepare_plan(config, groups, revision, state, committed):
+def _prepare_plan(config, groups, revision, state, completed):
     manifest = DependencyManifest()
     add_initialization(manifest, config)
     add_backbone_revision(
         manifest, config, revision["revision_id"] if revision else None
     )
+    committed = len(completed)
+    stopped = bool(completed and completed[-1].result["stop_scope"] == "end_plan")
     last_data_phase = -1
     active = state["active"]
     for group in groups:
+        if isinstance(group, PendingGroup):
+            continue
         # A recoverable active phase can use the reference embedded in its checkpoint.
         recovering = (
             active is not None
@@ -137,12 +164,15 @@ def _prepare_plan(config, groups, revision, state, committed):
         dependencies, last = group.preflight(
             state.get("dependencies"),
             max(0, committed - group.index + int(recovering)),
+            finished=stopped or group.index + len(group.phases) <= committed,
         )
         manifest.merge(dependencies)
         last_data_phase = max(last_data_phase, last)
         if group.index + len(group.phases) <= committed:
             group.release()
     for group in groups:
+        if isinstance(group, PendingGroup):
+            continue
         validate_training_destinations(
             group.config,
             group.artifacts.recovery,
@@ -181,25 +211,33 @@ def _run_learning_plan(config, prepared):
     active = state["active"]
     # Policy groups retain this parent, including resolved supervised scheduler budgets.
     config = config.model_copy()
-    groups = [
+    groups: list[PolicyPhaseGroup | SupervisedPhaseGroup | PendingGroup] = [
         compile_phase_group(config, phases, index, prepared)
         for index, phases in continuation_groups(
             config.training_plan, group_supervised=True
         )
     ]
-    phases = [phase for group in groups for phase in group.phases]
-    config.training_plan = phases
+    config.training_plan = [phase for group in groups for phase in group.phases]
     plan_identity = training_plan_identity(config)
+    if config._rollout_plan is not None:
+        from sequifier.fingerprints import fingerprint
+
+        groups.extend(PendingGroup.planned(config, len(config.training_plan)))
+        authored = config._rollout_plan.model_dump(
+            mode="json", exclude={"run": {"recovery", "retrain"}}
+        )
+        plan_identity = fingerprint(
+            {"resolved_prefix": plan_identity, "authored_plan": authored}
+        )
+    phases = [phase for group in groups for phase in group.phases]
     if resuming and state.get("plan") != plan_identity:
         raise ValueError("learning run checkpoint differs from the requested plan")
     state["plan"] = plan_identity
     state["seed"] = config.seed
 
     revision = None
-    if (
-        phases[0].algorithm == "supervised"
-        and not config.initialize_from
-        and (not resuming or state["backbone_revision"] is not None)
+    if not config.initialize_from and (
+        not resuming or state["backbone_revision"] is not None
     ):
         revision = select_revision(
             config.execution.backbone,
@@ -223,11 +261,15 @@ def _run_learning_plan(config, prepared):
                 "learning run checkpoint has an invalid active phase group"
             )
     manifest, last_data_phase = _prepare_plan(
-        config, groups, revision, state, len(completed)
+        config, groups, revision, state, completed
     )
     if resuming:
         manifest.validate(state["dependencies"])
     state["dependencies"] = manifest.identity
+    for recorded in state.get("deferred_dependencies", {}).values():
+        saved_inputs = DependencyManifest()
+        saved_inputs.include(recorded)
+        saved_inputs.revalidate()
     validate_training_destinations(config, checkpoint, manifest.protected_paths)
 
     if last_data_phase < len(completed):
@@ -254,6 +296,13 @@ def _run_learning_plan(config, prepared):
 
     if envelope is not None:
         require_phase_boundary(envelope, boundary())
+        if "metric_positions" in state:
+            restore_metric_positions(
+                model_metric_tables(config.project_root, config.model_name),
+                identity.run_id,
+                state["metric_positions"],
+                missing_offset=0,
+            )
 
     selected_path, selected_model = None, None
 
@@ -269,7 +318,16 @@ def _run_learning_plan(config, prepared):
             checkpoint,
             checkpoint_envelope(
                 "learning",
-                {**state, "completed": completed.records()},
+                {
+                    **state,
+                    "completed": completed.records(),
+                    "metric_positions": {
+                        path.name: path.stat().st_size
+                        for path, _ in model_metric_tables(
+                            config.project_root, config.model_name
+                        )
+                    },
+                },
                 selected_model,
                 boundary=boundary(),
             ),
@@ -277,6 +335,30 @@ def _run_learning_plan(config, prepared):
 
     def run_group(transition):
         group = transition.phase
+        if isinstance(group, PendingGroup):
+            group, inputs = group.compile(
+                config, completed, artifact_before(group.index), prepared
+            )
+            recovering = (
+                state["active"] is not None and state["active"]["recovery"] is not None
+            )
+            deps, _ = group.preflight(
+                state.get("deferred_dependencies", {}).get(str(group.index)),
+                len(completed) - group.index + int(recovering),
+            )
+            inputs.merge(deps)
+            expected = state.setdefault("deferred_dependencies", {}).setdefault(
+                str(group.index), inputs.identity
+            )
+            inputs.validate(expected)
+            inputs.revalidate()
+            validate_training_destinations(
+                group.config,
+                group.artifacts.recovery,
+                inputs.protected_paths,
+                phase_offset=group.index,
+                group=True,
+            )
         index = group.index
         base = group.artifacts
         native_checkpoint = base.recovery
@@ -325,11 +407,18 @@ def _run_learning_plan(config, prepared):
             if previous is not None:
                 Path(previous["path"]).unlink(missing_ok=True)
 
+        group_offset = progress_after(
+            completed[:index],
+            0,
+            config.project_root,
+            config.model_name,
+            identity.run_id,
+        )
         group.run(
             artifact_before(index),
             prior is not None,
             identity,
-            PhasePublication(save_progress),
+            PhasePublication(save_progress, global_step_offset=group_offset),
             revision or {},
         )
         group.release()
@@ -350,6 +439,10 @@ def _run_learning_plan(config, prepared):
     stopped = bool(completed and completed[-1].result["stop_scope"] == "end_plan")
     if start == len(groups) and next_index != len(phases) and not stopped:
         raise ValueError("learning run checkpoint is between inconsistent phase groups")
+    if resuming and state["active"] is None and (start == len(groups) or stopped):
+        report = completed_run_report(config, checkpoint, identity.run_id, completed)
+        if report is not None:
+            return _learning_result(config, checkpoint, report)
     completion_reason = run_phases(
         groups,
         run_group,
@@ -373,12 +466,31 @@ def _run_learning_plan(config, prepared):
         completed,
         resume=resume,
         completion_reason=completion_reason,
-        source_provenance=manifest.identity,
+        source_provenance={
+            **manifest.identity,
+            **{
+                path: checksum
+                for inputs in state.get("deferred_dependencies", {}).values()
+                for path, checksum in inputs.items()
+            },
+        },
         initialization=initialization,
+        backbone_parent_revision_id=state["backbone_revision"],
+        backbone_publication=publish_selected_backbone(
+            config,
+            final.model_state_dict,
+            state["backbone_revision"],
+            identity.run_id,
+            completed[-1].result,
+        ),
         plan_fingerprint=plan_identity,
         resource_accounting=prepared.accounting.snapshot(),
     )
-    publish_run_report(manifest_report, config.outputs.report_path)
+    publish_run_report(manifest_report, config)
+    return _learning_result(config, checkpoint, manifest_report)
+
+
+def _learning_result(config, checkpoint, manifest_report):
     return LearningRunResult(
         config.outputs.model_path,
         str(checkpoint),

@@ -1,5 +1,6 @@
 """Bounded complete groups with reconstructable causal frames and fixed scores."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import torch
@@ -25,6 +26,10 @@ class GRPOTrajectory:
     score: float
     advantage: float
     generation: int
+    raw_rewards: tuple = ()
+    final_observation: Mapping | None = None
+    terminated: bool = False
+    truncated: bool = False
 
     def inputs(self, spec, step):
         return history_inputs(
@@ -55,16 +60,6 @@ class GRPOTrajectory:
                     ),
                 )
                 del inputs
-
-    def as_dict(self):
-        return {
-            **self.__dict__,
-            "frames": [frame.state_dict() for frame in self.frames],
-            "decision_mask": [True] * len(self.actions),
-            "history_lengths": [
-                min(i + 1, self.context_length) for i in range(len(self.actions))
-            ],
-        }
 
 
 class SealedGroupBuffer:

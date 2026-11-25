@@ -63,6 +63,10 @@ class ModelExecution:
         from sequifier.model.ingestion_compiler import resolve_ingestion_plan
 
         for interface in self.interfaces.values():
-            resolve_ingestion_plan(interface, self.backbone.architecture)
+            resolve_ingestion_plan(
+                interface,
+                self.backbone.architecture,
+                causal_attention=self.options.attention == "causal",
+            )
             resolve_decoding_plan(interface)
         return self

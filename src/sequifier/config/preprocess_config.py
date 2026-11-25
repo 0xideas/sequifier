@@ -2,9 +2,13 @@ import os
 import warnings
 from typing import Any, Literal, Optional, Union
 
-import numpy as np
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.cardinality import (
+    CardinalityHashingModel as CardinalityHashingModel,
+)
+from sequifier.config.cardinality import CardinalityLimitModel
+from sequifier.config.column_names import validate_column_names
 from sequifier.config.command_ownership import (
     CommandRunSettings,
     PreprocessingRunSettings,
@@ -14,14 +18,15 @@ from sequifier.config.composition import (
     merge_config_fragments,
 )
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
-from sequifier.config.identifiers import identifier
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.config.naming import ConfigModel
 from sequifier.config.sequence_import_config import (
     PreparePolicyConfig,
     SequenceImportConfig,
+    select_policy_input,
 )
-from sequifier.config.splits import WindowSplit
+from sequifier.config.splits import SequencePreprocessingSettings
+from sequifier.config.splits import WindowSplit as WindowSplit
 from sequifier.helpers import (
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
@@ -43,9 +48,12 @@ def load_preprocessor_config(
     config_values, args_config = apply_run_overrides(config_values, args_config)
     config_values = merge_config_fragments((config_values, args_config))
 
-    if config_values.get("operation") == "import_sequences":
-        return SequenceImportConfig.model_validate(config_values)
-    if config_values.get("operation") == "prepare_policy":
+    operation = config_values.get("operation")
+    if operation in ("import_sequences", "prepare_policy"):
+        if "preprocessing_data_path" in args_config:
+            select_policy_input(config_values, config_values["preprocessing_data_path"])
+        if operation == "import_sequences":
+            return SequenceImportConfig.model_validate(config_values)
         return try_catch_excess_keys(config_path, PreparePolicyConfig, config_values)
     if config_values.get("operation") == "export_metadata":
         return try_catch_excess_keys(config_path, ExportMetadataConfig, config_values)
@@ -72,58 +80,29 @@ class PrepareInferenceConfig(ConfigModel):
     preprocessing_data_path: str
     metadata_config_path: str
     output_path: str
-    read_format: Literal["csv", "parquet"] | None = None
+    read_format: Literal["csv", "parquet", "sequence"] | None = None
+    sequence_view: Literal["decisions", "observations"] = "decisions"
     static_data_path: str | None = None
     passthrough_columns: list[str] = Field(default_factory=list)
     image_paths: dict[str, str] = Field(default_factory=dict)
     preconditioning_image_paths: dict[str, str] | None = None
     mask_column: str | None = None
 
-
-class CardinalityHashingModel(ConfigModel):
-    """Hash non-retained categorical values into a bounded set of buckets."""
-
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    num_buckets: int = Field(
-        ge=1,
-    )
-    seed: int = 0
-
-
-class CardinalityLimitModel(ConfigModel):
-    """Bound the vocabulary produced for one categorical column."""
-
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    min_count: Optional[int] = Field(
-        default=None,
-        ge=1,
-    )
-    max_categories: Optional[int] = Field(
-        default=None,
-        ge=1,
-    )
-    hashing: Optional[CardinalityHashingModel] = None
-
     @model_validator(mode="after")
-    def validate_options(self) -> "CardinalityLimitModel":
-        if self.min_count is not None and self.max_categories is not None:
-            raise ValueError(
-                "max_categories and min_count are mutually exclusive cardinality limits"
-            )
-        if (
-            self.min_count is None
-            and self.max_categories is None
-            and self.hashing is None
-        ):
-            raise ValueError(
-                "cardinality configuration requires max_categories, min_count, or hashing"
+    def validate_column_roles(self):
+        validate_column_names(
+            self.passthrough_columns,
+            "passthrough_columns",
+            allowed=("__collection", "__executed_action", "__previous_action"),
+        )
+        if self.mask_column:
+            validate_column_names(
+                [self.mask_column], "mask_column", allowed=("__observation_mask",)
             )
         return self
 
 
-class PreprocessorModel(ConfigModel):
+class PreprocessorModel(SequencePreprocessingSettings):
     """Top-level preprocessing config."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -142,31 +121,20 @@ class PreprocessorModel(ConfigModel):
 
     read_format: str = "csv"
     write_format: str = "parquet"
+    sequence_view: Literal["decisions", "observations"] = "decisions"
     indexed_output_path: str | None = Field(default=None, min_length=1)
     indexed_passthrough: list[str] = Field(default_factory=list)
     merge_output: bool = True
     allow_sequence_splitting: bool = False
     selected_columns: Optional[list[str]] = None
-    categorical_columns: Optional[list[str]] = None
-    real_columns: Optional[list[str]] = None
     column_data_types: Optional[dict[str, str]] = None
     normalize_real_columns: bool = True
     normalize_on_all_data: bool = False
 
-    splits: dict[str, WindowSplit] = Field(min_length=1)
-    split_method: Literal["within_sequence", "between_sequence", "value_cutoff"] = (
-        "within_sequence"
-    )
-    split_column: str | None = None
-    max_target_offset: int = Field(default=1, ge=0)
-    window_stride: int | None = Field(default=None, gt=0)
-    prediction_length: Optional[int] = Field(default=None, gt=0)
-    prediction_alignment_steps: int = Field(default=1, gt=0)
-    target_offset: Optional[int] = Field(default=None, ge=0)
     max_rows: Optional[int] = None
     batches_per_file: int = 1024
     process_by_file: bool = True
-    continue_preprocessing: bool = False
+    reprocess: bool = False
 
     use_precomputed_maps: Optional[list[str]] = None
     cardinality_config: dict[str, CardinalityLimitModel] = Field(default_factory=dict)
@@ -190,6 +158,34 @@ class PreprocessorModel(ConfigModel):
     def validate_resources(self):
         from sequifier.io.sample_order import curriculum_columns
 
+        for field in (
+            "selected_columns",
+            "column_data_types",
+            "categorical_columns",
+            "real_columns",
+            "cardinality_config",
+            "use_precomputed_maps",
+            "static_categorical_columns",
+            "static_real_columns",
+        ):
+            validate_column_names(
+                getattr(self, field) or (), field, prefixes=("__executed_",)
+            )
+        validate_column_names(
+            self.indexed_passthrough,
+            "indexed_passthrough",
+            allowed=("__collection", "__executed_action", "__previous_action"),
+        )
+        for field in ("split_column", "time_alignment_column", "mask_column"):
+            if name := getattr(self, field):
+                validate_column_names(
+                    [name],
+                    field,
+                    allowed=("__observation_mask",) if field == "mask_column" else (),
+                )
+        validate_column_names(
+            curriculum_columns(self.curriculum_column), "curriculum_column"
+        )
         if self.indexed_passthrough and self.indexed_output_path is None:
             raise ValueError("indexed_passthrough requires indexed_output_path")
         passthrough = set(self.indexed_passthrough)
@@ -229,7 +225,10 @@ class PreprocessorModel(ConfigModel):
     @model_validator(mode="after")
     def validate_static_source(self):
         if self.static_data_path is None:
-            if self.static_categorical_columns or self.static_real_columns:
+            if (self.static_categorical_columns or self.static_real_columns) and not (
+                self.read_format == "sequence"
+                or self.preprocessing_data_path.lower().endswith(".json")
+            ):
                 raise ValueError("Static column roles require static_data_path")
             return self
         path = self.static_data_path
@@ -267,6 +266,16 @@ class PreprocessorModel(ConfigModel):
             raise ValueError("curriculum_column must contain unique, non-empty names")
         return value
 
+    @field_validator("preprocessing_data_path", "static_data_path", mode="before")
+    @classmethod
+    def resolve_input_path(cls, value, info):
+        run = info.data.get("run")
+        if value is not None and run is not None and run.project_root != ".":
+            from sequifier.helpers import normalize_path
+
+            return normalize_path(str(value), run.project_root)
+        return value
+
     @field_validator("preprocessing_data_path")
     @classmethod
     @beartype
@@ -279,7 +288,7 @@ class PreprocessorModel(ConfigModel):
     @classmethod
     @beartype
     def validate_read_format(cls, v: str) -> str:
-        supported_formats = ["csv", "parquet"]
+        supported_formats = ["csv", "parquet", "sequence"]
         if v not in supported_formats:
             raise ValueError(
                 f"Currently only {', '.join(supported_formats)} are supported "
@@ -337,34 +346,6 @@ class PreprocessorModel(ConfigModel):
             )
         return self
 
-    @property
-    def window_lengths(self):
-        return [split.window_length for split in self.splits.values()]
-
-    @property
-    def prediction_aligned_splits(self):
-        return [
-            index
-            for index, split in enumerate(self.splits.values())
-            if split.prediction_aligned
-        ]
-
-    @property
-    def split_ratios(self):
-        if self.split_method == "value_cutoff":
-            return None
-        return [
-            split.fraction
-            for split in self.splits.values()
-            if split.fraction is not None
-        ]
-
-    @property
-    def split_values(self):
-        if self.split_method != "value_cutoff":
-            return None
-        return [split.cutoff for split in list(self.splits.values())[:-1]]
-
     @field_validator("batches_per_file")
     @classmethod
     @beartype
@@ -403,54 +384,27 @@ class PreprocessorModel(ConfigModel):
 
         return normalized
 
-    @field_validator("categorical_columns", "real_columns")
-    @classmethod
-    @beartype
-    def validate_column_roles(
-        cls, value: Optional[list[str]], info: Any
-    ) -> Optional[list[str]]:
-        if value is None:
-            return None
-        if any(not column for column in value) or len(value) != len(set(value)):
-            raise ValueError(f"{info.field_name} must contain unique, non-empty names")
-        return value
-
-    @field_validator("continue_preprocessing")
-    @classmethod
-    @beartype
-    def validate_continue_preprocessing(cls, v: bool, info: Any) -> bool:
-        if v and info.data.get("merge_output"):
-            raise ValueError(
-                "'continue_preprocessing' can only be set to true if "
-                "merge_output is False, not single files"
-            )
-        return v
-
     @model_validator(mode="after")
     @beartype
-    def validate_mask_column_requires_metadata(self) -> "PreprocessorModel":
+    def validate_preprocessing_settings(self) -> "PreprocessorModel":
         categorical = set(self.categorical_columns or [])
         real = set(self.real_columns or [])
-        overlap = categorical & real
-        if overlap:
-            raise ValueError(
-                f"Columns cannot be both categorical and real: {sorted(overlap)}"
-            )
-
         declared = categorical | real
         cardinality_columns = set(self.cardinality_config)
-        if cardinality_columns & real:
+        real_limits = cardinality_columns & (real | set(self.static_real_columns))
+        if real_limits:
             raise ValueError(
                 "cardinality_config may only reference categorical columns. "
-                f"Real columns: {sorted(cardinality_columns & real)}"
+                f"Real columns: {sorted(real_limits)}"
             )
-        if categorical and cardinality_columns - categorical:
+        temporal_limits = cardinality_columns - set(self.static_categorical_columns)
+        if categorical and temporal_limits - categorical:
             raise ValueError(
                 "When categorical_columns is set, cardinality_config columns must "
-                f"be categorical. Invalid: {sorted(cardinality_columns - categorical)}"
+                f"be categorical. Invalid: {sorted(temporal_limits - categorical)}"
             )
         if self.selected_columns is not None:
-            unselected_cardinality = cardinality_columns - set(self.selected_columns)
+            unselected_cardinality = temporal_limits - set(self.selected_columns)
             if unselected_cardinality:
                 raise ValueError(
                     "cardinality_config columns must be selected columns. "
@@ -499,41 +453,8 @@ class PreprocessorModel(ConfigModel):
                     f"Invalid: {real_with_non_float_types}"
                 )
 
-        for name in self.splits:
-            identifier(name, "Split")
-        if next(iter(self.splits)) != "train":
-            raise ValueError("The first split must be train (used for feature fitting)")
-        entries = list(self.splits.values())
+        self.validate_split_method()
         if self.split_method == "value_cutoff":
-            if (
-                any(s.fraction is not None for s in entries)
-                or any(s.cutoff is None for s in entries[:-1])
-                or entries[-1].cutoff is not None
-            ):
-                raise ValueError(
-                    "Cutoff partitions require a cutoff on every split except the last, and no fractions"
-                )
-        elif any(
-            s.cutoff is not None or s.fraction is None for s in entries
-        ) or not np.isclose(
-            sum(s.fraction for s in entries if s.fraction is not None), 1.0
-        ):
-            raise ValueError(
-                "Ratio partitions require fractions summing to one and no cutoffs"
-            )
-        if self.split_method == "value_cutoff":
-            if not self.split_column:
-                raise ValueError(
-                    "split_column must be set when split_method is 'value_cutoff'"
-                )
-            if len(entries) < 2:
-                raise ValueError("A cutoff partition requires at least two splits")
-            if self.split_column in {"sequenceId", "itemPosition"}:
-                raise ValueError("split_column cannot be sequenceId or itemPosition")
-            if self.split_column == "__sequifier_split_value":
-                raise ValueError(
-                    "split_column cannot use reserved name '__sequifier_split_value'"
-                )
             if self.split_column == self.mask_column:
                 raise ValueError("split_column cannot also be mask_column")
             curriculum_columns = (
@@ -552,10 +473,6 @@ class PreprocessorModel(ConfigModel):
                 raise ValueError(
                     "Only split_column or time_alignment_column may have a timestamp column_data_type"
                 )
-        elif self.split_column is not None:
-            raise ValueError(
-                "split_column is only valid when split_method is 'value_cutoff'"
-            )
         elif any(
             column != self.time_alignment_column
             and dtype.startswith(("Date", "Datetime"))
@@ -592,8 +509,6 @@ class PreprocessorModel(ConfigModel):
                 raise ValueError(
                     "Depth position columns are coordinates, not selected features or column_data_types"
                 )
-        if self.mask_column is not None and self.metadata_config_path is None:
-            raise ValueError("metadata_config_path must be set when mask_column is set")
         if self.mask_column in ("sequenceId", "itemPosition"):
             raise ValueError("mask_column cannot be sequenceId or itemPosition")
         curriculum_columns = (
@@ -613,48 +528,9 @@ class PreprocessorModel(ConfigModel):
                 "curriculum_column cannot also be a mask or depth feature/position "
                 "column"
             )
-        widths = self.window_lengths
-        if any(width <= self.max_target_offset for width in widths):
-            raise ValueError("Each split window_length must exceed max_target_offset")
-        if any(
-            width != widths[0] + self.prediction_alignment_steps - 1
-            for width in widths[2:]
-        ):
+        self.validate_window_placement()
+        if self.prediction_aligned_splits and self.allow_sequence_splitting:
             raise ValueError(
-                "All splits after the first two must have window_length equal to "
-                "the training width + (prediction_alignment_steps - 1)"
-            )
-        aligned = self.prediction_aligned_splits
-        if aligned:
-            if self.prediction_length is None or self.target_offset is None:
-                raise ValueError(
-                    "An aligned split requires prediction_length and target_offset"
-                )
-            if self.target_offset != self.max_target_offset:
-                raise ValueError(
-                    "Aligned placement requires target_offset == max_target_offset"
-                )
-            if any(
-                self.prediction_alignment_steps * self.prediction_length
-                > widths[i] - self.max_target_offset
-                for i in aligned
-            ):
-                raise ValueError(
-                    "Aligned window width cannot hold all prediction steps "
-                    "after max_target_offset"
-                )
-            if self.allow_sequence_splitting:
-                raise ValueError(
-                    "Aligned placement requires allow_sequence_splitting: false"
-                )
-        elif self.prediction_length is not None or self.target_offset is not None:
-            raise ValueError(
-                "prediction_length and target_offset require at least one aligned split"
+                "Aligned placement requires allow_sequence_splitting: false"
             )
         return self
-
-    @property
-    def resolved_window_stride(self) -> int:
-        return (
-            self.window_lengths[0] if self.window_stride is None else self.window_stride
-        )

@@ -13,6 +13,7 @@ from sequifier.artifacts.dependencies import (
     supervised_dependencies,
 )
 from sequifier.artifacts.phase import PhaseArtifacts
+from sequifier.config.naming import supervised_phase_seed
 
 if TYPE_CHECKING:
     from sequifier.rl.preparation import PolicyGroupPreparation
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class SupervisedPhaseGroup:
+    log_model_name: str
     index: int
     artifacts: PhaseArtifacts
     compiled: PreparedSupervisedGroup
@@ -36,7 +38,7 @@ class SupervisedPhaseGroup:
     def config(self):
         return self.compiled.config
 
-    def preflight(self, saved, committed_reference_count):
+    def preflight(self, saved, committed_reference_count, *, finished=False):
         return self.dependencies, -1
 
     def release(self):
@@ -61,6 +63,7 @@ class SupervisedPhaseGroup:
             environment,
             initial_artifact=incoming,
             phase_offset=self.index,
+            log_model_name=self.log_model_name,
             identity=identity,
             publication=publication,
             backbone_revision=revision,
@@ -83,13 +86,14 @@ class PolicyPhaseGroup:
     def index(self):
         return self.config.phase_offset
 
-    def preflight(self, saved, committed_reference_count):
+    def preflight(self, saved, committed_reference_count, *, finished=False):
         from sequifier.rl.preparation import PolicyGroupPreparation
 
         self.preparation = PolicyGroupPreparation.build(
             self.config,
             self.inputs,
             group=True,
+            known_adapters={} if finished else None,
             saved=saved,
             committed_reference_count=committed_reference_count,
         )
@@ -123,6 +127,7 @@ class PolicyPhaseGroup:
             identity=identity,
             publication=publication,
             preparation=self.preparation,
+            backbone_revision=revision if self.index == 0 else None,
         )
 
 
@@ -151,7 +156,9 @@ def compile_phase_group(config, phases, index, inputs):
         if name in names
     }
     seed = (
-        phase.resolved_seed if phase.resolved_seed is not None else config.seed + index
+        phase.resolved_seed
+        if phase.resolved_seed is not None
+        else supervised_phase_seed(config.seed, index)
     )
     model_name = f"{config.model_name}-phase-{index:03d}"
     resolved = config.model_copy(
@@ -177,5 +184,9 @@ def compile_phase_group(config, phases, index, inputs):
     )
     compiled = PreparedSupervisedGroup.compile(resolved, validate_sources=True)
     return SupervisedPhaseGroup(
-        index, artifacts, compiled, supervised_dependencies(compiled.config)
+        config.model_name,
+        index,
+        artifacts,
+        compiled,
+        supervised_dependencies(compiled.config),
     )

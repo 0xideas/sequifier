@@ -10,7 +10,7 @@ protocols internally. Rollout configs select the adapter by factory.
   previous Sequifier release for any run or portable model you still need to
   load from that release. Produce fresh portable models, backbone repository
   revisions, reports, metrics, and ONNX exports for the current release.
-- Re-export sequence data and regenerate trajectories and collection archives.
+- Re-export sequence data. Configure `collection.output.manifest_path` for PPO and GRPO to publish decision rows and collection diagnostics in one Parquet file.
   Authored preference-pair and trajectory-source manifests use a format tag.
 - Custom adapters can inherit protocol metadata from
   `ForecastRolloutAdapterBase` or `OnlineEnvironmentAdapterBase`.

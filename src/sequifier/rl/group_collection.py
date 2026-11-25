@@ -31,6 +31,7 @@ class GroupTrajectory:
     rewards: list = field(default_factory=list)
     old_scores: list = field(default_factory=list)
     reference_scores: list = field(default_factory=list)
+    raw_rewards: list | None = None
 
     def append(
         self, frame, decision, reference_score, result: OnlineStepResult, reward_scale
@@ -45,6 +46,8 @@ class GroupTrajectory:
         self.frames.append(frame)
         self.actions.append(decision.action)
         self.rewards.append(reward)
+        if self.raw_rewards is not None:
+            self.raw_rewards.append(float(result.reward))
         self.old_scores.append(decision.log_probability)
         self.reference_scores.append(reference_score)
 
@@ -71,6 +74,12 @@ class GroupTrajectory:
             score,
             0.0,
             generation,
+            raw_rewards=tuple(self.raw_rewards or ()),
+            final_observation=result.observation
+            if self.raw_rewards is not None
+            else None,
+            terminated=result.terminated,
+            truncated=result.truncated,
         )
 
 
@@ -150,9 +159,20 @@ class GroupCollection:
             defer_device_transfer=deferred,
         )
         self.cursors.add(cursor)
-        return GroupTrajectory(group, sample, token, cursor)
+        return GroupTrajectory(
+            group,
+            sample,
+            token,
+            cursor,
+            raw_rewards=[] if self.phase.collection.output else None,
+        )
 
     def seal_trajectory(self, trajectory, result):
+        if trajectory.raw_rewards is not None:
+            self.account(
+                8 * len(trajectory.raw_rewards)
+                + 4 * _json_payload_bytes(result.observation)
+            )
         sealed = trajectory.seal(self.generation, result)
         trajectory.cursor.close()
         self.cursors.remove(trajectory.cursor)

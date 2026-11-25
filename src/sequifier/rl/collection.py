@@ -51,7 +51,10 @@ class PolicyCursor:
     ):
         self.actor, self.adapter, self.units = actor, adapter, units
         self.defer_device_transfer = defer_device_transfer
-        self.history = PolicyHistory(actor.config, strict_vocabulary=strict_vocabulary)
+        self.history = PolicyHistory(
+            actor.config.model_copy(update={"input_encoding": "raw"}),
+            strict_vocabulary=strict_vocabulary,
+        )
         self.generator = action_generator(actor.device, seed)
         self.desired_return = None
         self.episode_return, self.episode_length, self.ended = 0.0, 0, True
@@ -85,7 +88,16 @@ class PolicyCursor:
         self.history.frames.clear()
         self._window_storage.close()
 
-    def reset(self, result, episode_id, desired_return=None):
+    def reset(
+        self,
+        result,
+        episode_id,
+        desired_return=None,
+        *,
+        earlier=(),
+        observation_masks=None,
+        previous_action=None,
+    ):
         result = validate_reset(result, self.units, compact_images=True)
         if self.actor.config.return_conditioned and desired_return is None:
             desired_return = self.actor.config.initial_desired_return
@@ -94,7 +106,13 @@ class PolicyCursor:
                     "return-conditioned collection needs an initial desired return"
                 )
         self.history.reset(
-            result.observation, result.static_inputs, episode_id, desired_return
+            result.observation,
+            result.static_inputs,
+            episode_id,
+            desired_return,
+            earlier=earlier,
+            observation_masks=observation_masks,
+            previous_action=previous_action,
         )
         self.desired_return = desired_return
         self.episode_return, self.episode_length, self.ended = 0.0, 0, False

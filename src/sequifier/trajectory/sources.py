@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
@@ -10,6 +11,9 @@ from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import fingerprint
 from sequifier.trajectory.store import load_trajectory
+
+if TYPE_CHECKING:
+    from sequifier.io.images import ImageStore
 
 
 def _source_files(source, root, metadata, dependencies):
@@ -54,9 +58,9 @@ def _source_files(source, root, metadata, dependencies):
             ):
                 raise ValueError("each manifest entry requires a nonempty path")
             path = manifest_path.parent / entry["path"]
-            if manifest_format == "sequifier.sequence-data" and dependencies.add(
-                path
-            ) != entry.get("sha256"):
+            if entries_field == "shards" and dependencies.add(path) != entry.get(
+                "sha256"
+            ):
                 raise ValueError(f"sequence shard checksum disagrees with {path}")
             if (
                 "episode_id" in entry
@@ -79,6 +83,8 @@ class ResolvedSequenceSource:
     metadata: DatasetMetadata | None
     static_path: Path | None
     dependencies: DependencyManifest
+    manifest: dict | None = None
+    image_store: "ImageStore | None" = None
 
     @cached_property
     def cache_key(self) -> str:
@@ -110,6 +116,7 @@ def resolve_source(
     project_root: str | Path = ".",
     *,
     metadata: DatasetMetadata | None = None,
+    prepared: bool = False,
 ) -> ResolvedSequenceSource:
     root = Path(project_root).resolve()
     dependencies = DependencyManifest()
@@ -123,7 +130,7 @@ def resolve_source(
             metadata = load_dataset_metadata(str(metadata_path))
     # Keep manifest-relative locations for symlink revalidation.
     paths, manifest = _source_files(source, root, metadata, dependencies)
-    kind = "prepared" if source.split is not None else source.format
+    kind = "prepared" if prepared or source.split is not None else source.format
     if manifest is not None and manifest.get("format") == "sequifier.sequence-data":
         if source.encoding != "raw" or source.episode_end != "unknown":
             raise ValueError(
@@ -133,7 +140,16 @@ def resolve_source(
     if kind == "auto":
         suffixes = {path.resolve().suffix.lower() for path in paths}
         if suffixes <= {".json"}:
-            kind = "trajectory"
+            from sequifier.io.indexed_sequences import is_indexed_view
+
+            if any(is_indexed_view(path) for path in paths):
+                if len(paths) != 1:
+                    raise ValueError(
+                        "An indexed sequence source requires exactly one split manifest"
+                    )
+                kind = "prepared"
+            else:
+                kind = "trajectory"
         elif suffixes <= {".csv", ".parquet"}:
             kind = "table"
         elif suffixes == {".pt"}:
@@ -143,6 +159,8 @@ def resolve_source(
                 "select a source format explicitly for mixed or unsupported files"
             )
     if kind == "prepared":
+        if metadata and metadata.source_observations_path:
+            dependencies.add(root / metadata.source_observations_path)
         if (
             static_path is None
             and metadata is not None
@@ -170,4 +188,5 @@ def resolve_source(
         metadata,
         static_path,
         dependencies,
+        manifest,
     )

@@ -49,6 +49,7 @@ class PreparedTrainingInputs:
         self._baseline = DependencyManifest()
         self._inputs = {}
         self._episode_records = {}
+        self._sequence_names = {}
         self._memberships = {}
         self._partitions = {}
         self._catalogs = {}
@@ -69,6 +70,7 @@ class PreparedTrainingInputs:
             self._sources,
             self._baseline,
             self._episode_records,
+            self._sequence_names,
             self._memberships,
             self._partitions,
             self._catalogs,
@@ -93,6 +95,7 @@ class PreparedTrainingInputs:
 
     def close(self):
         self._clear_data()
+        self._sequence_names.clear()
         self._inputs.clear()
         self._sources.clear()
         # Keep the resolved config's checksum baseline for subsequent runs.
@@ -240,6 +243,7 @@ class PreparedTrainingInputs:
                 config.episode_cache_size,
                 preference_manifests=self._preference_manifests,
                 episode_records=self._episode_records.setdefault(catalog_key, {}),
+                sequence_names=self._sequence_names,
                 cache_owner=self,
             )
         return prepare(

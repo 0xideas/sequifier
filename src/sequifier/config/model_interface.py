@@ -7,6 +7,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.column_names import validate_column_names
 from sequifier.config.components import (
     BackboneComponentConfig,
     CategoricalHashingConfig,
@@ -47,6 +48,7 @@ class StaticConditioningConfig(ConfigModel):
     @field_validator("columns")
     @classmethod
     def validate_columns(cls, columns: list[str]) -> list[str]:
+        validate_column_names(columns, "static_conditioning.columns")
         return _unique_columns(columns, "static_conditioning.columns")
 
     @model_validator(mode="after")
@@ -107,6 +109,14 @@ class ModelInterfaceSpecModel(ConfigModel):
     @classmethod
     @beartype
     def validate_columns(cls, value: list[str], info):
+        validate_column_names(
+            value,
+            info.field_name,
+            allowed=("__policy_return", "__policy_previous_action")
+            if info.field_name == "input_columns"
+            else (),
+            prefixes=("__executed_",),
+        )
         if any(
             column.startswith("__image:")
             or column.startswith("__image_mask:")

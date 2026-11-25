@@ -2,8 +2,9 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.column_names import validate_column_names
 from sequifier.config.naming import ConfigModel
 from sequifier.config.sources import PhaseSources, SourceKind
 
@@ -58,6 +59,12 @@ class StoppingConfig(ConfigModel):
 class CurriculumConfig(ConfigModel):
     column: str = Field(min_length=1)
 
+    @field_validator("column")
+    @classmethod
+    def validate_column(cls, value):
+        validate_column_names([value], "curriculum.column")
+        return value
+
 
 class PhaseControls(ConfigModel):
     source_kind: ClassVar[SourceKind] = "sequence"
@@ -76,10 +83,6 @@ class PhaseControls(ConfigModel):
 
     @property
     def reference_config(self) -> "ReferenceConfig | None":
-        return None
-
-    @property
-    def rollout_archive_directory(self) -> str | None:
         return None
 
     @property

@@ -11,6 +11,8 @@ artifact:
   paths:
   - models/policy.pt
 input:
+  layout: raw
+  metadata_config_path: configs/metadata_configs/policy.json
   path: data/policy-observations.csv
   format: csv
 output:

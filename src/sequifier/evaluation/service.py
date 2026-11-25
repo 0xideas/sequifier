@@ -97,6 +97,7 @@ class EvaluationService:
                 "next_occurrence_config": model_value(learning.next_occurrence_config),
             },
             "window_view": model_value(interface.window_view),
+            "window_stride": learning.window_stride,
             "prediction_length": interface.decoder.prediction_length,
             "target_columns": interface.target_columns,
             "target_column_types": interface.target_column_types,
@@ -108,9 +109,10 @@ class EvaluationService:
         return json.dumps(definition, sort_keys=True, separators=(",", ":"))
 
     def _baseline_output(
-        self, prepared: PreparedBatch, dataset: Any, decoded_length: int, network: Any
+        self, prepared: PreparedBatch, dataset: Any, output: ModelOutput, network: Any
     ) -> ModelOutput:
         interface = dataset.interface
+        decoded_length = next(iter(output.logits.values())).shape[1]
         logits = {}
         auxiliary_logits = {}
         for target in interface.target_columns:
@@ -147,6 +149,7 @@ class EvaluationService:
             logits=logits,
             prediction_positions=slice(None),
             auxiliary_logits=auxiliary_logits,
+            prediction_scales=output.prediction_scales,
         )
 
     def evaluate(
@@ -203,7 +206,23 @@ class EvaluationService:
                         source_config.source,
                         self._baseline_definition(dataset),
                     )
-                    calculate_baseline = baseline_key not in self._baselines
+                    bert = phase.learning.bert_spec
+                    # Corruption and learned Gaussian scales can change the
+                    # baseline even when the validation rows stay the same.
+                    cache_baseline = bert is None and not any(
+                        isinstance(criterion, torch.nn.GaussianNLLLoss)
+                        and target in dataset.interface.prediction_distributions
+                        and dataset.interface.prediction_distributions[
+                            target
+                        ].scale.trainable
+                        for target, criterion in dataset.criteria.items()
+                    )
+                    baseline_accounting = (
+                        self._baselines.get(baseline_key) if cache_baseline else None
+                    )
+                    mask_seed = bert.evaluation_mask_seed if bert is not None else 0
+                    if mask_seed == "run":
+                        mask_seed = phase.seed
                     for batch_index, runtime_batch in enumerate(
                         source.iter_batches("validation")
                     ):
@@ -212,7 +231,8 @@ class EvaluationService:
                             dataset,
                             context.device,
                             eval_seed=(
-                                context.phase_index * 1_000_003
+                                mask_seed
+                                + context.phase_index * 1_000_003
                                 + context.phase_epoch * 10_007
                                 + batch_index
                             ),
@@ -244,7 +264,7 @@ class EvaluationService:
                             )
                             sums[target] += value.to(dtype)
                         count += loss.accounting_count.to(dtype)
-                        if calculate_baseline:
+                        if baseline_accounting is None:
                             baseline_targets = {
                                 target: dataset.objective.baseline_target_values(
                                     target, prepared.targets
@@ -273,10 +293,7 @@ class EvaluationService:
                             )
                             baseline = self.loss_service.calculate(
                                 self._baseline_output(
-                                    prepared,
-                                    dataset,
-                                    next(iter(output.logits.values())).shape[1],
-                                    network,
+                                    prepared, dataset, output, network
                                 ),
                                 baseline_prepared,
                                 dataset,
@@ -320,8 +337,13 @@ class EvaluationService:
                                 predicted[mask].to(torch.int64),
                                 minlength=counts.numel(),
                             )
-                    total, target_values = self.loss_service.finalize_accounting(
-                        sums, count, dataset
+                    reduced_sums, global_count = self.loss_service.reduce_accounting(
+                        sums, count, targets
+                    )
+                    total, target_values = (
+                        self.loss_service.finalize_reduced_accounting(
+                            reduced_sums, global_count, dataset
+                        )
                     )
                     if (
                         correct_counts
@@ -340,20 +362,21 @@ class EvaluationService:
                         / max(1, int(accuracy_count.item()))
                         for target, correct in correct_counts.items()
                     }
-                    if calculate_baseline:
+                    if baseline_accounting is None:
                         reduced_sums, reduced_count = (
                             self.loss_service.reduce_accounting(
                                 baseline_sums, baseline_count, targets
                             )
                         )
-                        self._baselines[baseline_key] = BaselineAccounting(
+                        baseline_accounting = BaselineAccounting(
                             sums={
                                 target: value.detach().clone()
                                 for target, value in reduced_sums.items()
                             },
                             count=reduced_count.detach().clone(),
                         )
-                    baseline_accounting = self._baselines[baseline_key]
+                        if cache_baseline:
+                            self._baselines[baseline_key] = baseline_accounting
                     baseline_total, baseline_values = (
                         self.loss_service.finalize_reduced_accounting(
                             baseline_accounting.sums,
@@ -408,7 +431,7 @@ class EvaluationService:
                         baseline_loss=baseline_total_value,
                         baseline_target_losses=baseline_target_values,
                         class_distributions=distributions,
-                        count=int(count.item()),
+                        count=int(global_count.item()),
                         elapsed_seconds=time.perf_counter() - started,
                     )
         finally:

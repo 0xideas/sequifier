@@ -58,7 +58,13 @@ def require_file_destinations(paths):
 def require_directory_destinations(paths):
     for path in paths:
         if path.exists() and not path.is_dir():
-            raise ValueError(f"archive requires a directory: {path}")
+            raise ValueError(f"output requires a directory: {path}")
+
+
+def run_manifest_path(config):
+    return (
+        Path(config.project_root) / "checkpoints" / f"{config.model_name}.json"
+    ).resolve()
 
 
 def validate_training_destinations(
@@ -69,7 +75,7 @@ def validate_training_destinations(
     phase_root = Path(config.outputs.phase_directory).resolve()
     directories = []
     files = [checkpoint]
-    manifest = checkpoint.parent / "manifest.json"
+    manifest = run_manifest_path(config)
     if not group:
         directories.append(phase_root)
         files.extend([config.outputs.model_path, config.outputs.report_path])
@@ -90,6 +96,31 @@ def validate_training_destinations(
         dataset_names = tuple(config.dataset_training)
     from sequifier.artifacts.phase import PhaseArtifacts
 
+    root = Path(config.project_root)
+    deferred = getattr(config, "_rollout_plan", None)
+    if deferred is not None and not group:
+        phases = deferred.ordered_phases
+        protected = set(protected)
+        for dataset in deferred.datasets.values():
+            for source in dataset.sources.values():
+                for field in (
+                    "metadata_config_path",
+                    "manifest_path",
+                    "preprocessing_config_path",
+                    "static_data_path",
+                    "path",
+                ):
+                    if value := getattr(source, field, None):
+                        protected.add((root / value).resolve())
+                protected.update(
+                    (root / path).resolve() for path in getattr(source, "paths", ())
+                )
+        for phase in phases:
+            reference = getattr(phase, "reference", None)
+            if path := getattr(reference, "path", None):
+                protected.add((root / path).resolve())
+
+    sequence_manifests = []
     phase_files = []
     snapshot_phases = {}
     generated = []
@@ -117,11 +148,15 @@ def validate_training_destinations(
     validate_path_conflicts(
         generated, protected, label="phase output", check_each_other=False
     )
-    directories.extend(
-        Path(archive).resolve()
-        for phase in phases
-        if (archive := phase.rollout_archive_directory)
-    )
+    for phase in phases:
+        output = getattr(getattr(phase, "collection", None), "output", None)
+        if output:
+            manifest_path = (root / output.manifest_path).resolve()
+            sequence_manifests.append(manifest_path)
+            files.append(manifest_path)
+            directories.append(
+                manifest_path.with_name(manifest_path.name + ".parts").resolve()
+            )
     directories = unique_paths(
         directories, "training output directories must be distinct"
     )
@@ -145,17 +180,18 @@ def validate_training_destinations(
         and checkpoint.is_file()
         and snapshot_name
         and checkpoint.suffix == ".pt"
-        and manifest != Path(config.outputs.report_path).resolve()
     )
     if group:
-        validate_path_conflicts(directories, protected, label="phase group output")
+        validate_path_conflicts(
+            [*sequence_manifests, *directories], protected, label="phase group output"
+        )
     elif snapshot_resume:
-        external_files = [path for path in files if path not in {checkpoint, manifest}]
+        external_files = [path for path in files if path != checkpoint]
         validate_path_conflicts(
             [*external_files, *directories], protected, label="training output"
         )
         validate_path_conflicts(
-            [checkpoint, manifest],
+            [checkpoint],
             protected | set(external_files) | set(directories[1:]),
             label="training output",
         )
@@ -185,9 +221,10 @@ def validate_training_destinations(
 def resolve_training_output_paths(run):
     root = Path(run.project_root)
     output_dir = Path("outputs/training") / run.model_name
-    run.outputs.model_path = str(
-        (root / (run.outputs.model_path or f"models/{run.model_name}.pt")).resolve()
-    )
+    model = (root / (run.outputs.model_path or f"models/{run.model_name}.pt")).resolve()
+    if model.suffix.lower() != ".pt":
+        raise ValueError("run.outputs.model_path must name a .pt portable model")
+    run.outputs.model_path = str(model)
     run.outputs.report_path = str(
         (root / (run.outputs.report_path or output_dir / "report.json")).resolve()
     )

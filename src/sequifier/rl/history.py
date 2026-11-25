@@ -26,6 +26,7 @@ class PolicyFrame:
     episode_id: str
     step_id: int
     desired_return: float | None = None
+    masked: bool = False
 
     @cached_property
     def image_identities(self):
@@ -46,6 +47,7 @@ class PolicyFrame:
             "episode_id": self.episode_id,
             "step_id": self.step_id,
             "desired_return": self.desired_return,
+            **({"masked": True} if self.masked else {}),
         }
 
     def state_dict(self):
@@ -65,6 +67,7 @@ class PolicyFrame:
             values["episode_id"],
             values["step_id"],
             values["desired_return"],
+            values.get("masked", False),
         )
 
 
@@ -118,6 +121,7 @@ def history_inputs(spec, frames, *, window=None):
         [frame.previous_action for frame in frames],
         [frame.desired_return for frame in frames] if spec.return_conditioned else None,
         dict(frames[-1].static_inputs),
+        masks=[frame.masked for frame in frames],
     )
     if image_feature_cache_enabled():
         for view in frames[-1].image_identities:
@@ -151,7 +155,14 @@ class PolicyHistory:
         return self.frames[-1]
 
     def _frame(
-        self, observation, previous_action, static, episode_id, step_id, desired_return
+        self,
+        observation,
+        previous_action,
+        static,
+        episode_id,
+        step_id,
+        desired_return,
+        masked=False,
     ):
         if (
             not isinstance(episode_id, str)
@@ -185,21 +196,34 @@ class PolicyHistory:
             episode_id,
             step_id,
             desired_return,
+            masked,
         )
         history_inputs(self.spec, [frame])
         return frame
 
-    def reset(self, observation, static_inputs, episode_id, desired_return=None):
-        frame = self._frame(
-            observation,
-            None,
-            static_inputs,
-            episode_id,
-            0,
-            desired_return,
+    def reset(
+        self,
+        observation,
+        static_inputs,
+        episode_id,
+        desired_return=None,
+        *,
+        earlier=(),
+        observation_masks=None,
+        previous_action=None,
+    ):
+        seed = [*earlier, (observation, previous_action, desired_return)]
+        masks = (
+            observation_masks if observation_masks is not None else [False] * len(seed)
         )
+        frames = [
+            self._frame(values, action, static_inputs, episode_id, i, budget, mask)
+            for i, ((values, action, budget), mask) in enumerate(
+                zip(seed, masks, strict=True)
+            )
+        ]
         self.frames.clear()
-        self.frames.append(frame)
+        self.frames.extend(frames)
         self.reset_count += 1
 
     def advance(self, action, successor, desired_return=None):
@@ -239,6 +263,7 @@ class PolicyHistory:
                     frame.episode_id,
                     frame.step_id,
                     frame.desired_return,
+                    frame.masked,
                 )
             )
         if any(
