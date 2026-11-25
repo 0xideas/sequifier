@@ -18,12 +18,6 @@ def validate_runner_settings(
     if (
         policy
         and execution.supervised
-        and execution.supervised.distribution.distributed
-    ):
-        raise ValueError("Mixed training plans require local execution")
-    if (
-        policy
-        and execution.supervised
         and execution.supervised.precision.layer_type_dtypes
     ):
         raise ValueError(

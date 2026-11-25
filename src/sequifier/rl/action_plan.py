@@ -80,6 +80,13 @@ class ActionExecutionPlan:
             resolved.add(ready)
             pending.remove(ready)
 
+        self.entropy_is_exact = not self.has_autoregression and all(
+            not field.active_when
+            and field.lower is None
+            and field.upper is None
+            and not field.atoms
+            for field in actions.values()
+        )
         self.order = tuple(order)
         self.position = actor.config.decision_position
         self.fields = {}

@@ -157,7 +157,9 @@ class TrainingEngine:
         datasets: DatasetRuntimeRegistry,
         context: EvaluationContext,
     ) -> EvaluationResult:
-        result = run.evaluation.evaluate(run.network, phase, datasets, context)
+        result = run.evaluation.evaluate(
+            run.network, phase, datasets, context, forward=run.callable_network
+        )
         run.metrics.record_evaluation(
             result,
             context=context,
@@ -269,37 +271,40 @@ class TrainingEngine:
                 run.distributed.capture_model_state(run.network),
             ),
         )
-        if run.distributed.rank != 0:
-            return
-        artifacts = PhaseArtifacts.for_phase(
-            run.config.outputs.phase_directory, index, phase.name
-        )
-        result = PhaseResult.from_phase(
-            index,
-            phase,
-            phase.evaluation_monitor,
-            stop_scope=outcome.stop_scope,
-            completion_reason=outcome.completion_reason,
-            selection=selected,
-            clocks={
-                "epochs": run.state.phase_epoch,
-                "global_step": state.global_step,
-                "optimizer_steps": run.state.optimizer_step,
-            },
-            provenance={
-                "resolved_seed": phase.seed,
-                "source_provenance": run.dependencies.identity,
-                **artifacts.describe(),
-            },
-        )
-        return PhaseCommit.stage(
-            artifacts,
-            result,
-            checkpoint_path=run.checkpoints.store.latest_path,
-            model=build_model_artifact(
-                run.network, run.config, state_dict=selected.require_weights()
-            ),
-        )
+        from sequifier.training.distributed_strategy import on_writer
+
+        def stage():
+            artifacts = PhaseArtifacts.for_phase(
+                run.config.outputs.phase_directory, index, phase.name
+            )
+            result = PhaseResult.from_phase(
+                index,
+                phase,
+                phase.evaluation_monitor,
+                stop_scope=outcome.stop_scope,
+                completion_reason=outcome.completion_reason,
+                selection=selected,
+                clocks={
+                    "epochs": run.state.phase_epoch,
+                    "global_step": state.global_step,
+                    "optimizer_steps": run.state.optimizer_step,
+                },
+                provenance={
+                    "resolved_seed": phase.seed,
+                    "source_provenance": run.dependencies.identity,
+                    **artifacts.describe(),
+                },
+            )
+            return PhaseCommit.stage(
+                artifacts,
+                result,
+                checkpoint_path=run.checkpoints.store.latest_path,
+                model=build_model_artifact(
+                    run.network, run.config, state_dict=selected.require_weights()
+                ),
+            )
+
+        return on_writer(run.distributed, stage)
 
     def run(self, run: Any) -> RunResult:
         config = run.config
@@ -355,6 +360,7 @@ class TrainingEngine:
                         ).frozen_parameter_ids,
                         gradient_divisor=weights.divisor,
                     ),
+                    distributed=run.distributed,
                 )
                 state.optimizer_step = run.optimization.optimizer_step
                 state.accumulation_index = 0
@@ -437,9 +443,7 @@ class TrainingEngine:
             if phase_index != state.phase_index:
                 previous = transition.previous
                 if previous.handoff == "best":
-                    selected = run.distributed.gather_objects(state.selection.weights)[
-                        0
-                    ]
+                    selected = run.distributed.broadcast(state.selection.weights)
                     if selected is None:
                         raise ValueError(
                             f"{previous.name}: best handoff has no finite evaluation"
@@ -575,6 +579,7 @@ class TrainingEngine:
                                 teacher_valid_mask=prepared.loss_valid_mask,
                                 interface_name=dataset.interface_name,
                                 trace=trace,
+                                include_regularization=True,
                             )
                             if run.integrations.enabled:
                                 run.integrations.emit(
@@ -823,7 +828,6 @@ class TrainingEngine:
                 transition.phase,
                 outcome,
             )
-            commit = run.distributed.gather_objects(commit)[0]
             state.phase_commits.append(commit)
             run.checkpoints.save(
                 CheckpointRequest("latest", last_identity), run, commit=commit

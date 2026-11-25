@@ -106,7 +106,7 @@ Prepared and sequence/preference parts belong to `datasets`. Each phase owns
 its batching and role optimization (`model` for supervised; policy roles in the guide).
 All interfaces survive handoff, though shared backbone updates can affect inactive
 interfaces. The coordinator preflights the plan, commits incoming artifacts, and uses
-native checkpoints plus atomic completion receipts. Mixed plans execute locally. Adjacent
+native checkpoints plus atomic completion receipts. Mixed plans share one worker environment across supervised and policy phases under local execution, DDP, or FSDP2. See the [distributed training guide](training/multi-gpu-training.md). Adjacent
 phases can continue their optimizer under the [continuation rules](configs/train.md#optimization-across-phases).
 Adjacent supervised phases also share compatible best-model history across optimizer resets.
 

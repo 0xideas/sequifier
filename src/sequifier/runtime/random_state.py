@@ -109,8 +109,19 @@ class RandomStateManager:
 
 
 def capture_rng_state(device):
-    return RandomStateManager(device).capture_local(all_devices=True).state_dict()
+    distributed = (
+        torch.distributed.is_available() and torch.distributed.is_initialized()
+    )
+    if distributed and torch.distributed.get_backend() == "nccl":
+        device = torch.device("cuda", torch.cuda.current_device())
+    return (
+        RandomStateManager(device)
+        .capture_local(all_devices=not distributed)
+        .state_dict()
+    )
 
 
 def restore_rng_state(device, state):
+    if torch.distributed.is_initialized() and torch.distributed.get_backend() == "nccl":
+        device = torch.device("cuda", torch.cuda.current_device())
     RandomStateManager(device).restore(RandomState.from_state_dict(state))

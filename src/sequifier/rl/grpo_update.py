@@ -2,8 +2,9 @@
 
 import torch
 
-from sequifier.rl.batching import MetricTotals, optimize_groups
+from sequifier.rl.batching import MetricTotals, RolloutPartition, optimize_groups
 from sequifier.rl.clipped_objective import clipped_policy_objective
+from sequifier.rl.grpo_buffer import GRPOTrajectory, SealedGroupBuffer
 
 
 def grpo_objective(
@@ -39,15 +40,20 @@ def validate_old_scores(actor, buffer, chunk_size):
             del inputs, actions, old, _
 
 
-def update_grpo(session, buffer):
+def update_grpo(session, buffer: SealedGroupBuffer | None):
     context = session.context
     actor, phase = context.actor.eval(), context.phase
     generation = session.transaction
-    buffer.require_fresh(generation, context.reference_identity)
+    if buffer:
+        buffer.require_fresh(generation, context.reference_identity)
     if actor.grpo_policy_version != generation:
         raise ValueError("GRPO collection generation differs from actor")
-    validate_old_scores(actor, buffer, phase.scoring_chunk_size)
-    trajectories = buffer.trajectories
+    with session.rounds.scope():
+        if buffer:
+            validate_old_scores(actor, buffer, phase.scoring_chunk_size)
+    trajectories: tuple[GRPOTrajectory, ...] = buffer.trajectories if buffer else ()
+    strategy = session.strategy
+    partition = RolloutPartition(strategy, len(trajectories))
     totals = MetricTotals(
         "loss",
         "sampled_reference_penalty",
@@ -56,50 +62,43 @@ def update_grpo(session, buffer):
     )
     scored = 0
 
-    def group_kl(indices):
-        old_kl = 0.0
-        for i in indices:
-            trajectory = trajectories[i]
-            for inputs, actions, old, ref in trajectory.batches(
-                actor, phase.scoring_chunk_size
-            ):
+    def chunks(group):
+        for index in partition.local(group):
+            trajectory = trajectories[index]
+            for batch in trajectory.batches(actor, phase.scoring_chunk_size):
+                yield (*batch, trajectory.advantage, len(trajectory.actions))
+
+    def group_kl(group):
+        total = 0.0
+        with session.rounds.scope():
+            for inputs, actions, old, ref, advantage, length in chunks(group):
                 _, _, kl, _ = grpo_objective(
-                    actor.evaluate_actions(inputs, actions),
-                    old,
-                    ref,
-                    trajectory.advantage,
-                    phase,
+                    actor.evaluate_actions(inputs, actions), old, ref, advantage, phase
                 )
-                old_kl += float(kl.sum()) / len(trajectory.actions) / len(indices)
-                del inputs, actions, old, ref
-        return old_kl
+                total += float(kl.sum()) / length
+        return strategy.sum(total) / len(group)
 
-    def backward(indices):
+    def backward(group, epoch):
         nonlocal scored
-        for i in indices:
-            trajectory = trajectories[i]
-            for inputs, actions, old, ref in trajectory.batches(
-                actor, phase.scoring_chunk_size
-            ):
-                values = grpo_objective(
-                    actor.evaluate_actions(inputs, actions),
-                    old,
-                    ref,
-                    trajectory.advantage,
-                    phase,
-                )
-                (values[0].sum() / len(trajectory.actions) / len(indices)).backward()
-                totals.add(dict(zip(totals, values)), len(trajectory.actions))
-                del inputs, actions, old, ref
-            scored += 1
+        for batch, active in partition.aligned(chunks(group)):
+            inputs, actions, old, ref, advantage, length = batch
+            values = grpo_objective(
+                actor.evaluate_actions(inputs, actions), old, ref, advantage, phase
+            )
+            scale = strategy.world_size / len(group) / length if active else 0.0
+            (values[0].sum() * scale).backward()
+            if active:
+                totals.add(dict(zip(totals, values)), length)
+        scored += len(group)
 
-    epochs, stopped, _ = optimize_groups(session, len(trajectories), group_kl, backward)
+    epochs, stopped, _ = optimize_groups(session, partition.total, group_kl, backward)
     if not scored:
         raise ValueError("GRPO old-policy KL stopped all optimizer transactions")
-    buffer.consume()
+    if buffer:
+        buffer.consume()
     actor.grpo_policy_version = generation + 1
     return {
-        **totals.means(scored),
+        **{key: strategy.sum(total) / scored for key, total in totals.items()},
         "optimizer_steps": session.steps["actor"],
         "optimization_epochs": epochs,
         "old_policy_kl_stopped": stopped,

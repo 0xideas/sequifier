@@ -14,6 +14,7 @@ class ExecutionEnvironment:
     world_size: int
     device: torch.device
     distributed: bool
+    control_group: Any = None
 
 
 @dataclass(frozen=True)

@@ -120,7 +120,7 @@ class CheckpointCompatibility:
                 },
             },
             "owned_execution": config.run.execution.model_dump(
-                mode="python", exclude={"policy"}
+                mode="python", exclude={"policy", "distribution"}
             ),
             "normalization_by_interface": {
                 name: value.model_dump(mode="python")
@@ -206,41 +206,44 @@ class CheckpointService:
         random_state = self.random_state.gather(self.distributed)
         loader_state = self.loader_state.state_dict(run.datasets)
         integration_state = run.integrations.checkpoint_state_dict()
-        self.distributed.barrier()
-        if self.distributed.rank != 0:
-            return None
-        run.state.metric_positions = {
-            name: writer.checkpoint_positions()
-            for name, writer in run.metrics.writers.items()
-        }
-        checkpoint = RunCheckpoint(
-            format_version=ContractVersions.SUPERVISED_RECOVERY,
-            model=build_model_artifact(
-                run.network,
-                run.config,
-                state_dict=model_state,
-                provenance={
-                    "run_id": run.state.run_id,
-                    "session_id": run.state.session_id,
-                },
-            ),
-            optimization=run.optimization.state_dict(optimizer_state),
-            run_state=run.state.state_dict(),
-            random_state=random_state,
-            loader_state=loader_state,
-            integration_state=IntegrationState(values=integration_state),
-            dependencies=run.dependencies.identity,
-            training_config=run.config.model_copy(
-                update={"training_plan": list(run.plan.phases)}
-            ),
-        )
-        self.compatibility.validate(checkpoint)
-        written = self.store.save(checkpoint, request.suffix)
-        self.publication.after_checkpoint(self.store.latest_path, commit)
-        run.integrations.emit(
-            CheckpointSaved(access=access, identity=request.identity, path=written)
-        )
-        return written
+        from sequifier.training.distributed_strategy import on_writer
+
+        def publish():
+            run.state.metric_positions = {
+                name: writer.checkpoint_positions()
+                for name, writer in run.metrics.writers.items()
+            }
+            checkpoint = RunCheckpoint(
+                format_version=ContractVersions.SUPERVISED_RECOVERY,
+                model=build_model_artifact(
+                    run.network,
+                    run.config,
+                    state_dict=model_state,
+                    provenance={
+                        "run_id": run.state.run_id,
+                        "session_id": run.state.session_id,
+                    },
+                ),
+                optimization=run.optimization.state_dict(optimizer_state),
+                run_state=run.state.state_dict(),
+                random_state=random_state,
+                loader_state=loader_state,
+                integration_state=IntegrationState(values=integration_state),
+                dependencies=run.dependencies.identity,
+                training_config=run.config.model_copy(
+                    update={"training_plan": list(run.plan.phases)}
+                ),
+            )
+            self.compatibility.validate(checkpoint)
+            written = self.store.save(checkpoint, request.suffix)
+            self.publication.after_checkpoint(self.store.latest_path, commit)
+            run.integrations.emit(
+                CheckpointSaved(access=access, identity=request.identity, path=written)
+            )
+            return written
+
+        written = on_writer(self.distributed, publish)
+        return written if self.distributed.rank == 0 else None
 
 
 class CheckpointRestorer:

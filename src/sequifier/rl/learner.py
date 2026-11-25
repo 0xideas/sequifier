@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from socket import gethostname
 from typing import TYPE_CHECKING
 
 import torch
@@ -75,6 +76,17 @@ def _plan_contract(config):
     }
 
 
+def restore_policy_versions(actor, phases, results):
+    for phase, result in zip(phases, results):
+        clocks = result["clocks"]
+        if phase.algorithm == "ppo":
+            width = phase.collection.env_steps_per_iteration
+            actor.ppo_policy_version = (clocks["env_steps"] + width - 1) // width
+        elif phase.algorithm == "grpo":
+            width = phase.collection.groups_per_iteration
+            actor.grpo_policy_version = (clocks["groups"] + width - 1) // width
+
+
 def _initialize_history_actor(config):
     from sequifier.artifacts.model_artifact import load_execution_model
     from sequifier.fingerprints import file_checksum
@@ -97,7 +109,7 @@ def _initialize_history_actor(config):
     random = capture_rng_state(actor.device)
     try:
         source, execution, _ = load_execution_model(
-            config.initialize_from, device=config.parent.device, interface_name=name
+            config.initialize_from, device=str(actor.device), interface_name=name
         )
     finally:
         restore_rng_state(actor.device, random)
@@ -139,7 +151,7 @@ def _initialize_actor(config):
 
 def run_policy_training(
     config: ResolvedSequifierConfig | SequifierConfig,
-) -> PolicyRunResult | LearningRunResult:
+) -> PolicyRunResult | LearningRunResult | None:
     """Resolve and launch a policy-only training plan."""
     from sequifier.config.train_config import ResolvedSequifierConfig, SequifierConfig
     from sequifier.config.training_resolution import resolve_training_run
@@ -167,7 +179,24 @@ def execute_policy(
     publication: PhasePublication = PhasePublication(),
     preparation=None,
     backbone_revision=None,
+    environment=None,
 ):
+    from sequifier.training.distributed_strategy import (
+        LocalStrategy,
+        on_writer,
+        strategy_for,
+    )
+
+    strategy = (
+        strategy_for(
+            environment,
+            config.parent.run.execution.distribution_settings,
+            find_unused=True,
+        )
+        if environment
+        else LocalStrategy(device=torch.device(config.parent.device))
+    )
+    writer = strategy.rank == 0
     torch.set_float32_matmul_precision("highest")
     configure_determinism(
         config.parent.seed, config.parent.run.reproducibility.enforce_determinism
@@ -194,8 +223,11 @@ def execute_policy(
     )
     if publication.standalone and not config.initialize_from:
         if recovery is None:
-            backbone_revision = select_revision(
-                config.parent.execution.backbone, config.project_root
+            backbone_revision = on_writer(
+                strategy,
+                lambda: select_revision(
+                    config.parent.execution.backbone, config.project_root
+                ),
             )
         elif pinned := recovery.initialization.get("backbone_parent_revision_id"):
             backbone_revision = select_revision(
@@ -234,24 +266,21 @@ def execute_policy(
     data_identity = dependencies.identity
     adapter_contract = preparation.adapters
     data = preparation.data
-    identity = identity or RunIdentity.start(recovery.run_id if recovery else None)
+    identity = strategy.broadcast(
+        identity or RunIdentity.start(recovery.run_id if recovery else None)
+    )
     if recovery is not None:
         recovery.validate_dependencies(config, data_identity)
         require_equal(
             adapter_contract, recovery.adapter_contract, "resume.environments"
         )
         representation = recovery.representation
-        actor = build_actor(config)
+        actor = build_actor(config, initialize=False)
         recovery.validate_actor(actor)
         actor.transfer_report = recovery.initialization["transfer"]
-        for phase, commit in zip(config.phases, recovery.completed):
-            clocks = commit.result["clocks"]
-            if phase.algorithm == "ppo":
-                width = phase.collection.env_steps_per_iteration
-                actor.ppo_policy_version = (clocks["env_steps"] + width - 1) // width
-            elif phase.algorithm == "grpo":
-                width = phase.collection.groups_per_iteration
-                actor.grpo_policy_version = (clocks["groups"] + width - 1) // width
+        restore_policy_versions(
+            actor, config.phases, [commit.result for commit in recovery.completed]
+        )
     else:
         actor = _initialize_actor(config)
         if backbone_revision and not config.initialize_from:
@@ -272,8 +301,12 @@ def execute_policy(
     if recovery is not None:
         require_equal(data_contract, recovery.data_contract, "resume.partitions")
         if publication.standalone and terminal:
-            report = completed_run_report(
-                config, checkpoint, recovery.run_id, recovery.completed
+            report = strategy.broadcast(
+                completed_run_report(
+                    config, checkpoint, recovery.run_id, recovery.completed
+                )
+                if writer
+                else None
             )
             if report is not None:
                 return PolicyRunResult(
@@ -286,7 +319,12 @@ def execute_policy(
                     config.outputs.report_path,
                     config.checkpoint_path,
                 )
-    logger = configure_logger(config.project_root, config.model_name, 0)
+    logger = configure_logger(
+        config.project_root,
+        config.model_name,
+        strategy.rank,
+        rank_specific=strategy.world_size > 1,
+    )
     logger.info(f"Starting training for {config.model_name}, run {identity.run_id}")
     if recovery is None:
         recovery = RunCheckpoint(
@@ -302,24 +340,39 @@ def execute_policy(
                 "weight_hash": weight_fingerprint(actor.network.state_dict()),
             },
             clone_weights(actor.network),
-            capture_rng_state(actor.device),
+            capture_rng_state(strategy.device),
             completed=CommittedPhases(config.phases, config.phase_offset),
             run_id=identity.run_id,
         )
     from sequifier.rl.metrics import PolicyMetrics
 
-    metrics = PolicyMetrics(config, identity)
-    if resuming:
+    metrics = PolicyMetrics(config, identity) if writer else None
+    if resuming and metrics is not None:
         metrics.writer.restore_positions(identity.run_id, recovery.metric_positions)
     references = PolicyReferences(config, recovery, resuming=resuming)
-    saved_random = capture_rng_state(actor.device)
+    saved_random = capture_rng_state(strategy.device)
     optimizations = preflight_optimization(config, actor, data)
-    restore_rng_state(actor.device, recovery.random if resuming else saved_random)
+    random = recovery.random if resuming else saved_random
+    if "ranks" in random:
+        if len(random["ranks"]) != strategy.world_size:
+            raise ValueError("Policy recovery requires its original world size")
+        random = random["ranks"][strategy.rank]
+    elif resuming and strategy.world_size != 1:
+        raise ValueError("Single-process policy recovery requires world size one")
+    restore_rng_state(strategy.device, random)
 
     def save_checkpoint(state=None, *, commit=None):
-        recovery.metric_positions = metrics.writer.checkpoint_positions()
-        recovery.save(checkpoint, actor.device, state)
-        publication.after_checkpoint(checkpoint, commit)
+        random = capture_rng_state(strategy.device)
+        if strategy.world_size > 1:
+            random = {"ranks": strategy.gather_for_writer(random)}
+
+        def publish():
+            assert metrics is not None
+            recovery.metric_positions = metrics.writer.checkpoint_positions()
+            recovery.save(checkpoint, strategy.device, state, random=random)
+            publication.after_checkpoint(checkpoint, commit)
+
+        on_writer(strategy, publish)
 
     if not resuming:
         # Persist the complete fitted representation before the first update.
@@ -386,7 +439,7 @@ def execute_policy(
             current_state["telemetry_position"] if current_state else None
         )
         with TelemetryJournal.open(
-            artifacts.telemetry, telemetry_position
+            artifacts.telemetry, telemetry_position, writer=writer
         ) as telemetry:
             context = PhaseContext(
                 config,
@@ -402,6 +455,7 @@ def execute_policy(
                 telemetry,
                 adapter_contract,
                 metrics=metrics,
+                strategy=strategy,
                 global_step_offset=step_offset,
                 continuation=recovery.continuation
                 if transition.continues_optimizer
@@ -417,10 +471,33 @@ def execute_policy(
             execution.actor, f"phases.{phase.name}.selected_actor"
         )
         result = execution.result
+        distribution = {}
+        if strategy.world_size > 1:
+            distribution = {
+                "distributed_execution": {
+                    "strategy": config.parent.run.execution.distribution_settings.strategy,
+                    "world_size": strategy.world_size,
+                    "ranks": strategy.gather_for_writer(
+                        {
+                            "host": gethostname(),
+                            "rank": strategy.rank,
+                            "local_rank": strategy.local_rank,
+                            "device": str(strategy.device),
+                            "working_storage": prepared.accounting.snapshot(),
+                            "process_peak_cuda_bytes": torch.cuda.max_memory_allocated(
+                                strategy.device
+                            )
+                            if strategy.device.type == "cuda"
+                            else None,
+                        }
+                    ),
+                }
+            }
         result = result.model_copy(
             update={
                 "provenance": {
                     **result.provenance,
+                    **distribution,
                     "config_fingerprint": fingerprint(phase.model_dump(mode="json")),
                     "resolved_phase": phase.model_dump(mode="json"),
                     "representation_fingerprint": representation.identity,
@@ -440,8 +517,23 @@ def execute_policy(
         nonlocal actor
         execution, position = outcome.result
         actor = execution.actor
-        commit = recovery.finish_phase(execution, position, checkpoint)
+        commit = on_writer(
+            strategy, lambda: recovery.finish_phase(execution, position, checkpoint)
+        )
         save_checkpoint(commit=commit)
+        if not writer:
+            # Read the durable, consolidated generation from shared storage.
+            from sequifier.artifacts.checkpoint_envelope import recovery_payload
+
+            payload = recovery_payload(
+                torch.load(checkpoint, map_location="cpu", weights_only=False), "policy"
+            )
+            recovery.completed.append(commit)
+            recovery.incoming_actor = payload["incoming_actor"]
+            recovery.continuation = payload["continuation"]
+            recovery.stopped = payload["stopped"]
+            recovery.phase_state = None
+            actor.network.load_state_dict(recovery.incoming_actor)
         if publication.standalone and transition.index == last_data_phase:
             release_phase_data()
 
@@ -461,11 +553,13 @@ def execute_policy(
         commit_phase,
         start=recovery.phase_index,
         stopped=recovery.stopped,
-        replay=lambda: publication.replay_native(recovery.completed),
+        replay=lambda: publication.replay_native(recovery.completed)
+        if writer
+        else None,
         optimizer_continues=lambda phase: phase.optimizer_state == "continue",
     )
-    results = ()
-    if publication.standalone:
+
+    def publish_final():
         data.clear()
         prepared.close()
         report = run_report(
@@ -494,6 +588,9 @@ def execute_policy(
         results = tuple(PhaseResult.model_validate(phase) for phase in report["phases"])
         save_policy(actor.eval(), config.outputs.model_path, metadata=report)
         publish_run_report(report, config)
+        return results
+
+    results = on_writer(strategy, publish_final) if publication.standalone else ()
     logger.info(f"Training complete ({completion_reason})")
     return PolicyRunResult(
         actor,

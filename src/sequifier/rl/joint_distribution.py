@@ -250,13 +250,7 @@ class JointActionDistribution:
 
     @property
     def entropy_is_exact(self):
-        return not self.plan.has_autoregression and all(
-            not field.active_when
-            and field.lower is None
-            and field.upper is None
-            and not field.atoms
-            for field in (action.spec for action in self.plan.fields.values())
-        )
+        return self.plan.entropy_is_exact
 
     def entropy(self, generator=None):
         if self.entropy_is_exact:

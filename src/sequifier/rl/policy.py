@@ -29,12 +29,13 @@ class Policy(nn.Module):
     interface_name: str
     network: ComposableTransformerNetwork
     transfer_report: dict | None
-    ppo_policy_version: int
-    grpo_policy_version: int
+    ppo_policy_version: int = 0
+    grpo_policy_version: int = 0
 
     def __init__(self):
         super().__init__()
         self.transfer_report = None
+        self.role_call = None
 
     @classmethod
     def from_network(cls, network, execution_config, binding: ResolvedPolicyBinding):
@@ -56,6 +57,8 @@ class Policy(nn.Module):
 
     @property
     def device(self) -> torch.device:
+        if self.role_call is not None:
+            return self.role_call.device
         return next(self.network.parameters()).device
 
     @property
@@ -146,16 +149,60 @@ class Policy(nn.Module):
     ) -> JointActionDistribution:
         return JointActionDistribution(self, inputs, input_encoding=input_encoding)
 
+    def action_scores(
+        self,
+        inputs,
+        actions=None,
+        *,
+        deterministic=False,
+        generator=None,
+        entropy=False,
+    ):
+        if self.role_call is not None:
+            return self.role_call(
+                inputs,
+                actions,
+                deterministic=deterministic,
+                generator=generator,
+                entropy=entropy,
+            )
+        return self.score_distribution(
+            inputs,
+            actions,
+            deterministic=deterministic,
+            generator=generator,
+            entropy=entropy,
+        )
+
+    def score_distribution(
+        self,
+        inputs,
+        actions=None,
+        *,
+        deterministic=False,
+        generator=None,
+        entropy=False,
+    ):
+        distribution = self.distribution(inputs)
+        if actions is None:
+            selection = distribution.select_and_score(deterministic, generator)
+            record, score = selection.actions, selection.log_prob
+        else:
+            record, score = {}, distribution.log_prob(actions)
+        return record, score, distribution.entropy(generator) if entropy else None
+
     def act(self, inputs: SequifierInputs, *, deterministic: bool, generator):
-        selected = self.distribution(inputs).select_and_score(deterministic, generator)
-        return selected.actions, selected.log_prob
+        record, score, _ = self.action_scores(
+            inputs, deterministic=deterministic, generator=generator
+        )
+        return record, score
 
     def evaluate_actions(
         self,
         inputs: SequifierInputs,
         actions: ActionDecision | Mapping[str, Tensor],
     ) -> Tensor:
-        return self.distribution(inputs).log_prob(actions)
+        return self.action_scores(inputs, actions)[1]
 
     def validate_inputs(self, inputs: SequifierInputs) -> None:
         schema = self.config.input_schema

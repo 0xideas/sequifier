@@ -78,7 +78,7 @@ class PendingGroup:
             for i, group in continuation_groups(phases, group_supervised=True)
         ]
 
-    def compile(self, parent, completed, incoming, prepared):
+    def compile(self, parent, completed, incoming, prepared, strategy=None):
         from sequifier.config.training_resolution import (
             _active_datasets,
             resolve_training_run,
@@ -121,9 +121,18 @@ class PendingGroup:
                 if source.preprocessing_config_path:
                     config_path = root / source.preprocessing_config_path
                     source_dependencies.add(config_path)
-                    metadata = prepare_source(
-                        path, config_path, root, parent.seed, source_dependencies
-                    )
+                    metadata = None
+                    if strategy is None or strategy.rank == 0:
+                        metadata = prepare_source(
+                            path, config_path, root, parent.seed, source_dependencies
+                        )
+                    if strategy is not None:
+                        metadata, recorded = strategy.broadcast(
+                            (metadata, source_dependencies.identity)
+                            if strategy.rank == 0
+                            else None
+                        )
+                        source_dependencies.include(recorded)
                     spec = DatasetPartSpecModel(
                         type="prepared", metadata_config_path=str(metadata)
                     )

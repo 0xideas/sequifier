@@ -839,7 +839,9 @@ def resolve_training_run(
     has_policy = len(supervised) != len(phases)
     resources = config.run.execution
     if supervised and resources.supervised is None:
-        resources.supervised = SupervisedExecution()
+        resources.supervised = SupervisedExecution(
+            distribution=resources.distribution_settings
+        )
     offline = any(
         p.algorithm != "supervised" and p.source_kind != "none" for p in phases
     )

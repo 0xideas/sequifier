@@ -8,15 +8,41 @@ from torch import nn
 from torch.nn import functional as F
 
 
+class _LogScales(nn.ParameterDict):
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        for name in self:
+            key = prefix + name
+            if key in state_dict and state_dict[key].ndim == 0:
+                state_dict[key] = state_dict[key].reshape(1)
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
+
 class PredictionScales(nn.Module):
     """Gaussian scales owned and persisted by the model interface."""
 
     def __init__(self, fields):
         super().__init__()
         self.fields = dict(fields)
-        self.log_scales = nn.ParameterDict(
+        self.log_scales = _LogScales(
             {
-                name: nn.Parameter(torch.tensor(math.log(field.scale.initial)))
+                name: nn.Parameter(torch.tensor([math.log(field.scale.initial)]))
                 for name, field in sorted(fields.items())
                 if field.scale.trainable
             }
@@ -26,7 +52,7 @@ class PredictionScales(nn.Module):
         for name, field in sorted(fields.items()):
             if field.scale.trainable and name not in self.log_scales:
                 self.log_scales[name] = nn.Parameter(
-                    torch.tensor(math.log(field.scale.initial))
+                    torch.tensor([math.log(field.scale.initial)])
                 )
         self.fields.update(fields)
 
@@ -38,7 +64,12 @@ class PredictionScales(nn.Module):
         spec = self.fields[name].scale
         if not spec.trainable:
             return spec.initial
-        return self.log_scales[name].clamp(math.log(spec.min), math.log(spec.max)).exp()
+        return (
+            self.log_scales[name]
+            .reshape(())
+            .clamp(math.log(spec.min), math.log(spec.max))
+            .exp()
+        )
 
 
 class RealPredictionDistribution:

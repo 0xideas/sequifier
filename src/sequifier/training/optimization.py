@@ -197,6 +197,8 @@ class OptimizationRuntime:
         identity: StepIdentity,
         integrations: IntegrationManager,
         policy: UpdatePolicy,
+        *,
+        distributed=None,
     ) -> StepResult:
         if policy.gradient_divisor <= 0:
             raise ValueError("gradient_divisor must be positive.")
@@ -234,8 +236,11 @@ class OptimizationRuntime:
             elif directive.gradient_clip_norm is not None:
                 clip_norm = directive.gradient_clip_norm
         if clip_norm is not None:
-            active_parameters = [p for p in parameters if p.grad is not None]
-            total_norm = nn.utils.clip_grad_norm_(active_parameters, clip_norm)
+            total_norm = (
+                distributed.clip_gradients(network, clip_norm)
+                if distributed is not None
+                else nn.utils.clip_grad_norm_(parameters, clip_norm)
+            )
             if integrations.enabled:
                 integrations.emit(
                     GradientsClipped(

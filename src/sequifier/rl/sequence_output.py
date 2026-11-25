@@ -9,6 +9,7 @@ import pyarrow as pa
 
 from sequifier.fingerprints import file_checksum
 from sequifier.io.sequence import register_sequence_name
+from sequifier.training.distributed_strategy import on_writer
 from sequifier.trajectory.sequence_output import (
     action_record,
     decision_row,
@@ -53,6 +54,7 @@ def _collection_type(algorithm, output):
 
 class CollectedSequences:
     def __init__(self, context, state):
+        self.strategy = context.strategy
         self.policy = context.actor.config
         self.output = context.phase.collection.output
         self.phase = context.phase.name
@@ -116,6 +118,25 @@ class CollectedSequences:
                 collection_type=_collection_type(self.algorithm, self.output),
             )
         )
+
+    def record(self, buffer):
+        if not self.output:
+            return
+        # Serialize one owner's sealed rollout at a time to bound writer memory.
+        for owner in range(self.strategy.world_size):
+            parts = self.strategy.gather_for_writer(
+                buffer if self.strategy.rank == owner else None
+            )
+
+            def write_owner(part=parts[owner] if parts else None):
+                if part is not None:
+                    if self.algorithm == "ppo":
+                        self.ppo(part)
+                    else:
+                        self.grpo(part)
+
+            on_writer(self.strategy, write_owner)
+            del parts, write_owner
 
     def ppo(self, buffer):
         if not self.output:
@@ -196,7 +217,7 @@ class CollectedSequences:
             self._write(rows())
 
     def publish(self):
-        if not self.output:
+        if not self.output or self.strategy.rank != 0:
             return {}
         return publish_sequences(
             self.output.manifest_path,

@@ -22,7 +22,9 @@ def setup_distributed_env(
         timeout_sec = int(os.environ.get("NCCL_TIMEOUT", 1800))
 
         device_id = (
-            torch.device(f"cuda:{local_rank}") if torch.cuda.is_available() else None
+            torch.device(f"cuda:{local_rank}")
+            if backend == "nccl" and torch.cuda.is_available()
+            else None
         )
 
         dist.init_process_group(

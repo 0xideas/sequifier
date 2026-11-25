@@ -304,9 +304,10 @@ class LossService:
             total = component if total is None else total + component
         if total is None:
             raise RuntimeError("Loss calculation requires a positive-weight target.")
-        backward_loss: Tensor = total + network.regularization_loss(
-            dataset.interface_name
-        )
+        regularization = output.regularization
+        if regularization is None:
+            regularization = network.regularization_loss(dataset.interface_name)
+        backward_loss: Tensor = total + regularization
         accounting_dtype = (
             torch.float32 if backward_loss.device.type == "mps" else torch.float64
         )

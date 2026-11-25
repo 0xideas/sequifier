@@ -98,6 +98,27 @@ class ExecutionSettings(Settings):
     supervised: SupervisedExecution | None = None
     offline: OfflineExecution | None = None
     policy: PolicyExecution | None = None
+    distribution: DistributionSettings | None = None
+
+    @model_validator(mode="after")
+    def resolve_distribution(self):
+        if self.distribution is not None and self.supervised is not None:
+            supervised = self.supervised
+            if (
+                "distribution" in supervised.model_fields_set
+                and supervised.distribution != self.distribution
+            ):
+                raise ValueError("Conflicting run and supervised distribution settings")
+            self.supervised = SupervisedExecution.model_validate(
+                {**supervised.model_dump(), "distribution": self.distribution}
+            )
+        return self
+
+    @property
+    def distribution_settings(self):
+        if self.distribution is not None:
+            return self.distribution
+        return self.supervised.distribution if self.supervised else LocalDistribution()
 
     @property
     def policy_compile_mode(self) -> CompileMode:

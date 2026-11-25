@@ -73,7 +73,7 @@ class SealedGroupBuffer:
             reference_identity,
             estimated_bytes,
         )
-        self.trajectories = tuple(
+        self.trajectories: tuple[GRPOTrajectory, ...] = tuple(
             trajectory for group in self.groups for trajectory in group
         )
         self.consumed = False

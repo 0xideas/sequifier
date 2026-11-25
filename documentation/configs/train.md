@@ -164,9 +164,9 @@ run:
     enforce_determinism: false
   execution:
     device: cuda
+    distribution:
+      strategy: local
     supervised:
-      distribution:
-        strategy: local
       data_loading: {}
       compilation:
         torch_compile: outer
@@ -480,9 +480,9 @@ run:
     enforce_determinism: false
   execution:
     device: cpu
+    distribution:
+      strategy: local
     supervised:
-      distribution:
-        strategy: local
       data_loading: {}
       compilation:
         torch_compile: none

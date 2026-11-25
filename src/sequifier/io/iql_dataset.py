@@ -15,7 +15,7 @@ from sequifier.io.values import numeric_scalar
 class IQLBatch(TensorRecord):
     current: SequifierInputs
     successor: SequifierInputs
-    action: torch.Tensor | dict[str, torch.Tensor]
+    action: dict[str, torch.Tensor]
     reward: torch.Tensor
     bootstrap: torch.Tensor
 

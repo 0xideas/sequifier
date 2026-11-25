@@ -41,12 +41,7 @@ from sequifier.training.checkpoint_service import (
     CheckpointRestorer,
     CheckpointService,
 )
-from sequifier.training.distributed_strategy import (
-    DistributedDataParallelStrategy,
-    DistributedStrategy,
-    FullyShardedStrategy,
-    LocalStrategy,
-)
+from sequifier.training.distributed_strategy import DistributedStrategy, strategy_for
 from sequifier.training.loader_state import LoaderStateService
 from sequifier.training.loss import LossService
 from sequifier.training.metrics_service import MetricsService
@@ -115,28 +110,11 @@ class RunBuilder:
     def _strategy(
         self, config: Any, execution: ExecutionEnvironment, precision: PrecisionPolicy
     ) -> DistributedStrategy:
-        if not execution.distributed:
-            return LocalStrategy(device=execution.device)
-        if config.run.execution.supervised_settings.distribution.strategy == "fsdp":
-            return FullyShardedStrategy(
-                rank=execution.rank,
-                local_rank=execution.local_rank,
-                world_size=execution.world_size,
-                device=execution.device,
-                cpu_offload=bool(
-                    config.run.execution.supervised_settings.distribution.cpu_offload
-                ),
-                mixed_precision_dtype=precision.autocast_dtype,
-            )
-        return DistributedDataParallelStrategy(
-            rank=execution.rank,
-            local_rank=execution.local_rank,
-            world_size=execution.world_size,
-            device=execution.device,
-            find_unused_parameters=max(
-                len(config.dataset_training), len(config.interfaces)
-            )
-            > 1,
+        return strategy_for(
+            execution,
+            config.run.execution.distribution_settings,
+            find_unused=True,
+            mixed_precision_dtype=precision.autocast_dtype,
         )
 
     def _warm_up(self, run: TrainingRun) -> None:
@@ -145,6 +123,10 @@ class RunBuilder:
 
         manager = RandomStateManager(run.distributed.device)
         state = manager.capture_local()
+        buffers = [
+            (value, value.detach().to("cpu", copy=True))
+            for value in run.network.buffers()
+        ]
         # A single small image reaches ResNet BatchNorm as [1, channels, 1, 1].
         batch_size = (
             2
@@ -169,7 +151,11 @@ class RunBuilder:
                         features, metadata, interface_name=dataset.interface_name
                     )
         finally:
+            with torch.no_grad():
+                for value, original in buffers:
+                    value.copy_(original)
             manager.restore(state)
+        run.distributed.barrier()
 
     def _construct_loaders(self, run: TrainingRun) -> None:
         """Construct active phase loaders before final RNG restoration."""
@@ -291,7 +277,6 @@ class RunBuilder:
                         is not None
                     )
                     if strategy.gather_objects(done)[0]:
-                        strategy.finalize()
                         return None
         else:
             state = RunState(
@@ -314,7 +299,9 @@ class RunBuilder:
         ensure_export_preflight(config, strategy)
         network = build_transformer_network(
             config,
-            device=execution.device,
+            device=torch.device("cpu")
+            if config.run.execution.distribution_settings.strategy == "fsdp"
+            else execution.device,
             initialize=loaded is None,
             logger=logger,
         )

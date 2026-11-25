@@ -62,6 +62,12 @@ def training_plan_identity(config):
             "training_plan": True,
         },
     )
+    execution = values["run"]["execution"]
+    if (
+        execution.get("supervised")
+        or config.run.execution.distribution_settings.strategy == "local"
+    ):
+        execution.pop("distribution", None)
     values["training_plan"] = [phase_contract(phase) for phase in config.training_plan]
     return fingerprint(values)
 

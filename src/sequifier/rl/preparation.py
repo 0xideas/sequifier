@@ -19,7 +19,7 @@ from sequifier.rl.ppo_evaluation import require_evaluation_timer
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 
 
-def build_actor(config, *, artifact=None):
+def build_actor(config, *, artifact=None, device=None, initialize=True):
     execution = config.parent.execution
     name = config.policy.interface_name
     interface = execution.interface(name)
@@ -29,10 +29,22 @@ def build_actor(config, *, artifact=None):
         (other, value) for other, value in execution.interfaces.items() if other != name
     )
     execution = replace(execution, interfaces=interfaces)
+    if (
+        device is None
+        and config.parent.run.execution.distribution_settings.strategy == "fsdp"
+    ):
+        device = torch.device("cpu")
+    if device is None:
+        device = torch.device(config.parent.device)
+        if (
+            device.type == "cuda"
+            and config.parent.run.execution.distribution_settings.distributed
+        ):
+            device = torch.device("cuda", torch.cuda.current_device())
     network = build_transformer_network(
         execution,
-        device=torch.device(config.parent.device),
-        initialize=artifact is None,
+        device=device,
+        initialize=initialize and artifact is None,
         restored_history_interface=name
         if config.actor_initialization == "history_only"
         else None,

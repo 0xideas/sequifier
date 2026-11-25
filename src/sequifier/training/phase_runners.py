@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-import torch
-
 from sequifier.artifacts.dependencies import (
     DependencyManifest,
     add_initialization,
@@ -44,20 +42,12 @@ class SupervisedPhaseGroup:
     def release(self):
         self.compiled.parts.clear()
 
-    def run(self, incoming, resuming, identity, publication, revision):
-        from sequifier.runtime.context import ExecutionEnvironment
+    def run(self, incoming, resuming, identity, publication, revision, environment):
         from sequifier.training.supervised import execute_supervised
 
         config = self.config
         config.run.recovery.resume.policy = "required" if resuming else "never"
         add_initialization(self.dependencies, config, incoming)
-        environment = ExecutionEnvironment(
-            rank=0,
-            local_rank=0,
-            world_size=1,
-            device=torch.device(config.device),
-            distributed=False,
-        )
         execute_supervised(
             self.compiled,
             environment,
@@ -110,7 +100,7 @@ class PolicyPhaseGroup:
     def release(self):
         self.preparation = None
 
-    def run(self, incoming, resuming, identity, publication, revision):
+    def run(self, incoming, resuming, identity, publication, revision, environment):
         from sequifier.rl.learner import execute_policy
 
         assert self.preparation is not None
@@ -127,6 +117,7 @@ class PolicyPhaseGroup:
             identity=identity,
             publication=publication,
             preparation=self.preparation,
+            environment=environment,
             backbone_revision=revision if self.index == 0 else None,
         )
 

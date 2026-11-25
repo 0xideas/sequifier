@@ -215,7 +215,15 @@ class RunCheckpoint:
             if snapshot is None:
                 continue
             if snapshot.keys() != expected.keys() or any(
-                snapshot[k].shape != v.shape or snapshot[k].dtype != v.dtype
+                (
+                    snapshot[k].shape != v.shape
+                    and not (
+                        ".prediction_scales.log_scales." in k
+                        and snapshot[k].ndim == 0
+                        and v.shape == (1,)
+                    )
+                )
+                or snapshot[k].dtype != v.dtype
                 for k, v in expected.items()
             ):
                 raise ValueError(
@@ -243,9 +251,9 @@ class RunCheckpoint:
             active=active,
         )
 
-    def save(self, path, device, state=None):
+    def save(self, path, device, state=None, *, random=None):
         """Atomically commit the run and its algorithm-owned recovery state."""
-        self.random = capture_rng_state(device)
+        self.random = random if random is not None else capture_rng_state(device)
         self.phase_state = state
         model = ModelArtifact(
             ContractVersions.MODEL_ARTIFACT,

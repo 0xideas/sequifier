@@ -2,9 +2,48 @@
 
 Sequifier natively supports multi-GPU and multi-node training using PyTorch's `DistributedDataParallel` (DDP) and `FullyShardedDataParallel` (FSDP).
 
-## 1. Prerequisites: Preprocessing for Distributed Training
+## Policy and mixed plans
 
-To use distributed training, your data must be sharded into multiple files so that different GPUs can read different chunks simultaneously without memory bottlenecks.
+Set `run.execution.distribution` to configure the whole plan. The existing
+`run.execution.supervised.distribution` setting also applies to every phase
+of a mixed plan. When both settings are present they must agree.
+
+```yaml
+run:
+  execution:
+    device: cuda
+    distribution:
+      strategy: ddp
+      world_size: 4
+      backend: nccl
+```
+
+For FSDP2, set `strategy: fsdp` and supply `cpu_offload: true` or
+`cpu_offload: false`. Supervised phases retain their existing compilation
+settings. NCCL jobs use a Gloo group on the same ranks for CPU rollout data and
+recovery metadata. All hosts need shared access to input and artifact paths.
+
+Policy batch sizes and collection budgets apply to the **whole job**. Imitation
+divides a seeded decision order across ranks. DPO assigns both alternatives of a
+pair to one rank. IQL partitions each draw by position, preserving repeats.
+PPO divides each horizon across persistent per-rank simulator streams and
+computes GAE within each stream. GRPO assigns complete same-start groups,
+including their simulator workers, to the owning rank. Rank zero evaluates the
+prescribed online seeds. Sharded peers participate in the required model forwards.
+
+Resume with the same world size. The native policy checkpoint includes shared
+model and optimizer state and each rank's RNG and simulator state. Rank zero
+publishes the selected actor, sequence output and reports. The phase report
+includes per-rank timing for the current session, working-storage estimates and
+the process peak CUDA allocation. Scoring time measures host time inside active
+model forwards and overlaps collection and updates.
+
+The ten policy algorithm and strategy combinations await update-parity, recovery,
+and hardware qualification.
+
+## 1. Preprocessing for Distributed Supervised Training
+
+For distributed supervised training, your prepared data must be sharded into multiple files so that different GPUs can read different chunks simultaneously without memory bottlenecks.
 
 In your `preprocess.yaml`, you **must** write sharded output:
 
@@ -92,6 +131,6 @@ srun torchrun \
 
 ### Important Considerations for Multi-Node
 
-* **Batch Size:** The `batch_size` in your `train.yaml` is the **per-process** batch size. If `batch_size` is 100 and `world_size` is 32, each synchronized backward pass covers 3,200 samples. With gradient accumulation, the samples per optimizer update are `batch_size * world_size * accumulation_batches` (apart from a final partial accumulation window).
+* **Batch Size:** For supervised phases, `batch_size` is the **per-process** batch size. If `batch_size` is 100 and `world_size` is 32, each synchronized backward pass covers 3,200 samples. With gradient accumulation, the samples per optimizer update are `batch_size * world_size * accumulation_batches` (apart from a final partial accumulation window).
 * **Learning Rate:** You may need to scale your `learning_rate` up if you drastically increase your global batch size via distributed training.
 * **Data Access:** All nodes must have access to the same shared filesystem (e.g., NFS, GPFS) where the `project_root` and the sharded preprocessing output are stored.
