@@ -15,7 +15,7 @@ from pydantic import (
     model_validator,
 )
 
-from sequifier.config.rollout_config import InputBinding
+from sequifier.config.rollout_config import TrajectoryInputBinding
 from sequifier.fingerprints import fingerprint
 from sequifier.io.values import DomainValue
 from sequifier.trajectory.returns import remaining_return
@@ -95,7 +95,7 @@ class Trajectory(Record):
     ]
     episode_id: str = Field(min_length=1)
     seed: SeedHistory
-    bindings: list[InputBinding]
+    bindings: list[TrajectoryInputBinding]
     prediction_columns: list[str]
     transitions: list[Transition] = Field(min_length=1)
     collection_cutoff: bool

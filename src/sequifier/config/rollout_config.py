@@ -8,13 +8,17 @@ from sequifier.config.column_names import validate_column_names
 from sequifier.config.naming import ConfigModel
 
 
-class InputBinding(ConfigModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class TrajectoryInputBinding(ConfigModel):
+    """A recorded input producer, including model-generated input names."""
+
+    model_config = ConfigDict(frozen=True, revalidate_instances="subclass-instances")
 
     input: str = Field(min_length=1)
     source: Literal["prediction", "environment"]
     key: str = Field(min_length=1)
 
+
+class InputBinding(TrajectoryInputBinding):
     @field_validator("input")
     @classmethod
     def validate_input(cls, value):

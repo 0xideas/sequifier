@@ -8,7 +8,7 @@ from uuid import uuid4
 import torch
 
 from sequifier.config.policy_infer_config import PolicyRolloutConfig
-from sequifier.config.rollout_config import InputBinding
+from sequifier.config.rollout_config import TrajectoryInputBinding
 from sequifier.io.values import numeric_scalar, portable_fields
 from sequifier.rl.collection import PolicyCursor, PolicyDecision
 from sequifier.rl.environment import (
@@ -197,7 +197,7 @@ def collect_policy_rollout(
             format="sequifier.policy-trajectory",
             seed=seed,
             bindings=[
-                InputBinding(input=name, source="environment", key=name)
+                TrajectoryInputBinding(input=name, source="environment", key=name)
                 for name in spec.observation_columns
             ],
             prediction_columns=spec.action_columns,
