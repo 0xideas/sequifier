@@ -2,7 +2,7 @@
   <img src="./design/sequifier.png" alt="Sequifier" width="720">
 </p>
 
-# What is sequifier?
+## What is sequifier?
 
 Sequifier is the terraform for foundation modelling: It provides a declarative interface to data preparation, model architecture, training and optimization hyperparameters, and inference.
 
@@ -10,7 +10,7 @@ It provides shared infrastructure and guarantees to a wide range of foundation m
 
 Any implementation of a foundation model will operate under several constraints: computate constraints such as RAM, GPU memory, disk speed and device connectivity, scaling dimenstions such as process parallelisation and multi-gpu and multi-node training, and desirable properties such as efficiency, idempotency, early failure on misconfiguration, resumability and reproducibility. Sequifier aims to push out the pareto frontier on these dimensions and provide the best starting point for any de novo foundation modelling initiative.
 
-# How does it work?
+## How does it work?
 
 Sequifier has three core commands, `preprocess`, `train`, and `infer`. Each is configurable via a config file, that specifies the data layout and structure and the other attributes that you want from your model.
 
@@ -273,7 +273,9 @@ Inspired by order book transformer (TransLOB), sequifier includes the ability to
 
 #### Hashing
 
-Inspired by work in transaction foundation models, sequifier provides two hashing pathways: single-hashing, which occurs in preprocessing and isn't reversible. This is unavoidable, for if the cardinality of the variable is to be reduced, collisions will happen by definition. The alternative is multi-hashing, where each value is hashed multiple times, and each distinct input value is mapped to a unique *combination* of hash values. This uniqueness is enforced by sequifier, and enables reconstruction of the original value during inference. During training, the configured losses apply to the hash values, rather than the original domain.
+Inspired by work in transaction foundation models, sequifier provides two mechanisms to reduce the cardinality of a categorical variable: bucketing and hashing. These can be applied sequentially. Bucketing aggregates rare values, defined as either outside the top N most frequent values, or having a frequency below K, into a single value, or applies single-hashing to them.
+
+Hashing has two implementations, that sit in different places: single-hashing occurs in preprocessing and isn't reversible. This is unavoidable, for if the cardinality of the variable is to be reduced, collisions will happen by definition. Multi-hashing, where each value is hashed multiple times, and each distinct input value is mapped to a unique *combination* of hash values. This uniqueness is enforced by sequifier, and enables reconstruction of the original value during inference. During training, the configured losses apply to the hash values, rather than the original domain.
 
 
 ### Multi-Part Datasets
