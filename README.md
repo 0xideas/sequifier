@@ -101,13 +101,13 @@ Through configuration, most modern architectural variants such as RoPE, GQA, Swi
 You can train the transformer using supervised losses or reinforcement learning algorithms such as imitation learning, implicit Q learning (IQL), direct policy optimization (DPO), proximal policy optimization (PPO) or group relative policy optimization (GRPO).
 
 
-## Data Formats
+### Data Formats
 
 The core modelling primitive is the `itemPosition`: it represents the unit of the sequence that the core model learns to represent. At each `itemPosition` value, each input variable is projected into a latent space, and these are concatenated and ingested into the core model. An input variable can be real-valued, discrete/categorical, a uni- or multivariate sequence itself (this type is ingested using `structured input`), or an image (or equivalently, a frame from a video). Real-valued variables are passed to a fixed position in the core model, or transformed through a single neural layer, discrete variables are projected to an embedding space, sequences are fed through a small transformer model, and images are ingested through a ResNet model, which has either frozen weights from a separate training run, or is newly initialized. This is a high-level overview, with many of the specifics configurable.
 
 The second modelling primitive is the `static variable`. It is a variable which is either real-valued or categorical, and is embedded separately from the variables that vary with `itemPosition` - they stay constant across a whole individual sequence, and vary only between sequences. Each static variable is embedded separately and these embeddings are concatenated. This joint embedding for all static variables is prepended to the sequence of `itemPosition`-variant embeddings, and treated as the "first" token for any window based on that sequence.
 
-## Target Variables
+### Target Variables
 
 Sequifier currently supports categorical and real-valued target variables, but not images (sequences will be supported, but aren't yet). This is because training generative models for video outputs requires modelling approaches that are not supported by sequifier, and the recommendation is to use other frameworks that are specialised in the development of such models.
 
