@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 class ExecutablePolicy(nn.Module):
     """Shared input contract for native and exported policy execution."""
 
+    supports_entropy = True
     execution_config: ModelExecution
     interface_name: str
     config: ResolvedPolicyBinding

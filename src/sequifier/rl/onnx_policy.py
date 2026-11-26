@@ -11,6 +11,8 @@ from sequifier.rl.policy import ExecutablePolicy
 
 
 class OnnxPolicy(ExecutablePolicy):
+    supports_entropy = False
+
     def __init__(self, model, device):
         super().__init__()
         self.execution_config = model.execution

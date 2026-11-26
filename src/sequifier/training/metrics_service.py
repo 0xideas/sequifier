@@ -93,6 +93,9 @@ class MetricsService:
                 session_id=context.session_id,
                 evaluation_kind=context.kind,
                 epoch=context.epoch,
+                completed_epochs=max(
+                    0, context.phase_epoch - (context.kind != "epoch_end")
+                ),
                 batch=context.training_batch,
                 batches_total=context.training_batches_total,
                 global_step=context.global_step,

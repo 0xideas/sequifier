@@ -117,6 +117,12 @@ completed episodes, supply no intermediate value. The default objective requires
 a finite selected metric in the final phase’s report. The phase’s `best` or `last`
 handoff determines which actor and score are selected.
 
+All trials using the default objective must select the same metric and evaluation
+source. Resuming a study checks its recorded objective identity. Use a new study
+name for a different objective or for an older study whose trials predate this
+record. Policy trials have ten minutes to checkpoint after a pruning request
+before the search terminates the worker.
+
 Collection output manifests and their part directories are scoped to each trial.
 Later phases can consume those outputs through the base plan’s `type: rollout`
 source and producer phase name.

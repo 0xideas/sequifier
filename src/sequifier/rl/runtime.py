@@ -38,11 +38,13 @@ def collect_policy_rollout(
     action_selection: Literal["deterministic", "stochastic"] = "deterministic",
     random_seed: int = 1010,
     journal=None,
-    compute_entropy=True,
+    compute_entropy: bool | None = None,
 ) -> Trajectory:
     """Execute a supplied initial observation, preserving actual episode boundaries."""
     was_training, failed = policy.training, False
     try:
+        if compute_entropy is None:
+            compute_entropy = bool(getattr(policy, "supports_entropy", True))
         validate_online_adapter(adapter)
         require_seeded_reset(adapter)
         if (not isinstance(max_steps, int)) or max_steps < 1:

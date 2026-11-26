@@ -110,7 +110,10 @@ class ExecutionSettings(Settings):
             ):
                 raise ValueError("Conflicting run and supervised distribution settings")
             self.supervised = SupervisedExecution.model_validate(
-                {**supervised.model_dump(), "distribution": self.distribution}
+                {
+                    **supervised.model_dump(exclude_unset=True),
+                    "distribution": self.distribution,
+                }
             )
         return self
 

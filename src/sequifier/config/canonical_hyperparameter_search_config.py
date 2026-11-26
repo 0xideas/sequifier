@@ -34,6 +34,7 @@ from sequifier.config.training_resolution import (
     initialization_model_config,
     resolve_execution_settings,
 )
+from sequifier.fingerprints import file_checksum
 from sequifier.typechecking import beartype
 
 
@@ -553,6 +554,40 @@ class SearchRunSettings(ConfigModel):
     outputs: SearchOutputSettings
 
 
+def _monitor_identity(candidate, phase, monitor):
+    identity = {
+        "algorithm": phase.algorithm,
+        "monitor": monitor.model_dump(mode="json") if monitor else None,
+    }
+    if hasattr(phase.evaluation, "environment"):
+        environment = phase.evaluation.environment
+        if isinstance(environment, str):
+            environment = candidate.environments[environment]
+        identity["environment"] = environment.model_dump(mode="json")
+    elif monitor:
+        if phase.algorithm == "supervised":
+            references = [monitor]
+        else:
+            references = phase.evaluation.sources or phase.sources
+            identity["implicit_validation"] = phase.evaluation.sources is None
+        sources = {}
+        for ref in references:
+            dataset = candidate.datasets[ref.dataset]
+            view = dataset.views.get(ref.part)
+            parts = view.parts if view and view.parts else dataset.sources
+            sources[ref.source] = {
+                "view": view.model_dump(mode="json") if view else None,
+                "partition": dataset.partition.model_dump(mode="json")
+                if dataset.partition
+                else None,
+                "parts": {
+                    key: dataset.sources[key].model_dump(mode="json") for key in parts
+                },
+            }
+        identity["sources"] = sources
+    return identity
+
+
 class CanonicalHyperparameterSearchConfig(ConfigModel):
     """Search controls and a recursive sampler over one canonical train config."""
 
@@ -578,6 +613,25 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
     evaluation_metric_directions: list[Literal["min", "max"]] | None = None
     evaluation_metrics: list[str] | None = None
     _compiled_config: _CompiledValue = PrivateAttr()
+    _objective_identity: dict | None = PrivateAttr(default=None)
+
+    @property
+    def objective_identity(self):
+        if self.evaluation_script_path:
+            root = Path(self.run.project_root)
+            script = (root / self.evaluation_script_path).resolve()
+            identity = {
+                "script": str(script),
+                "script_sha256": file_checksum(script),
+                "metrics": self.evaluation_metrics,
+            }
+            if self.evaluation_inference_config_path:
+                path = Path(self.evaluation_inference_config_path)
+                path = (path if path.exists() else root / path).resolve()
+                identity["inference_config"] = str(path)
+                identity["inference_config_sha256"] = file_checksum(path)
+            return identity
+        return self._objective_identity
 
     @model_validator(mode="after")
     @beartype
@@ -696,6 +750,14 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
             elif self.evaluation_metric_directions != [direction]:
                 raise ValueError(
                     "search direction must match the final phase evaluation monitor"
+                )
+
+            identity = _monitor_identity(candidate, phase, monitor)
+            if self._objective_identity is None:
+                self._objective_identity = identity
+            elif self._objective_identity != identity:
+                raise ValueError(
+                    "Search candidates must use the same objective metric and evaluation source"
                 )
 
     @beartype

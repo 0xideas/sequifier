@@ -19,6 +19,7 @@ import yaml
 from loguru import logger
 from optuna.trial import TrialState
 
+from sequifier.artifacts.run_checkpoint import training_lock
 from sequifier.typechecking import beartype
 
 torch._dynamo.config.suppress_errors = True
@@ -49,6 +50,7 @@ class TrialEvaluations:
     """Follow the objective phase in its native model or dataset validation table."""
 
     def __init__(self, run_config, root):
+        self.single_phase = len(run_config.ordered_phases) == 1
         self.phase = run_config.ordered_phases[-1]
         self.monitor = self.phase.evaluation.monitor if self.phase.evaluation else None
         self.supervised = self.phase.algorithm == "supervised"
@@ -111,6 +113,7 @@ class TrialEvaluations:
             if not evaluation_id or evaluation_id in self.seen:
                 continue
             selected = None
+            phase_clock = False
             for row in rows:
                 if row["algorithm"] != self.phase.algorithm:
                     continue
@@ -123,10 +126,10 @@ class TrialEvaluations:
                     or row["part"] != self.monitor.part
                 ):
                     continue
-                if (
-                    row["metric"] == "epochs_completed"
-                    and self.phase.algorithm == "policy_imitation"
+                if row["metric"] == "epochs_completed" and (
+                    self.supervised or self.phase.algorithm == "policy_imitation"
                 ):
+                    phase_clock = True
                     self.completed_epochs = max(
                         self.completed_epochs, int(float(row["value"]))
                     )
@@ -142,7 +145,12 @@ class TrialEvaluations:
             value = float(selected["value"])
             if not math.isfinite(value):
                 continue
-            if self.supervised and selected["evaluation_kind"] == "epoch_end":
+            if (
+                self.supervised
+                and self.single_phase
+                and not phase_clock
+                and selected["evaluation_kind"] == "epoch_end"
+            ):
                 self.completed_epochs = max(
                     self.completed_epochs, int(selected["epoch"])
                 )
@@ -279,7 +287,7 @@ def objective(
             if ready and trial.should_prune():
                 prune_path.touch()
                 # Policy updates can include a full rollout before the next checkpoint.
-                timeout = None
+                timeout = 600.0
                 if evaluations.supervised:
                     try:
                         seconds = get_last_training_batch_timedelta(
@@ -501,6 +509,24 @@ def _optimize_distinct_trials(study: optuna.Study, config: Any, trials: int) -> 
         accepted_trials += 1
 
 
+def _bind_study_objective(study, identity):
+    key = "sequifier_objective"
+    stored = study.user_attrs.get(key)
+    if stored is None:
+        if study.get_trials(
+            deepcopy=False,
+            states=(TrialState.COMPLETE, TrialState.PRUNED, TrialState.RUNNING),
+        ):
+            raise ValueError(
+                "The persisted study has trials without a recorded objective identity. Use a new study name."
+            )
+        study.set_user_attr(key, identity)
+    elif stored != identity:
+        raise ValueError(
+            "The persisted study uses a different objective metric or evaluation source"
+        )
+
+
 @beartype
 def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     """Load config, create Optuna study, and optimize trials."""
@@ -521,17 +547,20 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
         "minimize" if direction == "min" else "maximize"
         for direction in (config.evaluation_metric_directions or ["min"])
     ]
-    study = optuna.create_study(
-        study_name=config.run.study_name,
-        directions=directions,
-        sampler=sampler,
-        storage=f"sqlite:///{storage_path}",
-        load_if_exists=True,
-    )
-    if [direction.name.lower() for direction in study.directions] != directions:
-        raise ValueError(
-            "The persisted study has different objective directions from this search"
+    with training_lock(Path(storage_path)):
+        study = optuna.create_study(
+            study_name=config.run.study_name,
+            directions=directions,
+            sampler=sampler,
+            storage=f"sqlite:///{storage_path}",
+            load_if_exists=True,
         )
+        if [direction.name.lower() for direction in study.directions] != directions:
+            raise ValueError(
+                "The persisted study has different objective directions from this search"
+            )
+
+        _bind_study_objective(study, config.objective_identity)
 
     trials = config.trials
     if trials is None and config.method != "grid":

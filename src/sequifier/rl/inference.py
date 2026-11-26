@@ -314,7 +314,6 @@ def infer_rollout(policy, history, config, identity):
         action_selection=config.action_selection,
         random_seed=config.seed,
         journal=rollout_journal(),
-        compute_entropy=config._model.onnx_schema is None,
     )
     trajectory.metadata.update(
         {

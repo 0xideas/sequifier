@@ -548,6 +548,7 @@ class StructuredMetricWriters:
         session_id: str,
         evaluation_kind: str,
         epoch: int,
+        completed_epochs: int | None = None,
         batch: int,
         batches_total: int,
         global_step: int,
@@ -599,6 +600,8 @@ class StructuredMetricWriters:
                 for target, value in baseline_target_losses.items()
             ),
         ]
+        if completed_epochs is not None:
+            measurements.insert(0, ("epochs_completed", TOTAL_TARGET, completed_epochs))
         if not self.validation_enabled:
             raise ValueError("Validation metrics are disabled for this dataset")
         if self._validation_full is None:

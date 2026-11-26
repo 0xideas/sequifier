@@ -64,6 +64,15 @@ class RoleCall:
         return self.rounds.forward(self.module, inputs, *args, **kwargs)
 
 
+@dataclass(frozen=True)
+class _RankFailure:
+    message: str
+
+
+class _PeerInferenceError(RuntimeError):
+    """The failure has already been observed by every rank in this round."""
+
+
 class InferenceRounds:
     """Match forwards while each simulator independently requests its next model role."""
 
@@ -99,7 +108,14 @@ class InferenceRounds:
         self.active = self.strategy.world_size > 1
         try:
             yield
-            if self.active and self.sharded:
+        except _PeerInferenceError:
+            raise
+        except Exception as error:
+            if self.active:
+                self.strategy.gather_objects(_RankFailure(str(error)))
+            raise
+        else:
+            if self.active:
                 self.submit(None, None, (), {})
         finally:
             self.active = False
@@ -108,6 +124,11 @@ class InferenceRounds:
     def submit(self, name, inputs, args, kwargs):
         while True:
             pending = self.strategy.gather_objects(name)
+            for rank, request in enumerate(pending):
+                if isinstance(request, _RankFailure):
+                    raise _PeerInferenceError(
+                        f"Inference rank {rank} failed: {request.message}"
+                    )
             chosen = next((role for role in pending if role is not None), None)
             if chosen is None:
                 return None

@@ -67,18 +67,22 @@ class CollectedSequences:
             else uuid4().hex
         )
         if self.output:
+            self.namespace = self.strategy.broadcast(self.namespace)
             if "__collection" in (
                 *self.policy.observation_columns,
                 *self.policy.static_columns,
             ):
                 raise ValueError("__collection is reserved for rollout diagnostics")
-            for part in self.parts:
-                path = Path(self.output.manifest_path).parent / part["path"]
-                if file_checksum(path) != part["sha256"]:
-                    raise ValueError(f"Committed sequence shard changed: {path}")
-                names = pl.read_parquet(path, columns=["sequenceId", "sequenceName"])
-                for seq, name in names.unique().iter_rows():
-                    register_sequence_name(self.names_by_id, seq, name)
+            on_writer(self.strategy, self._restore_parts)
+
+    def _restore_parts(self):
+        for part in self.parts:
+            path = Path(self.output.manifest_path).parent / part["path"]
+            if file_checksum(path) != part["sha256"]:
+                raise ValueError(f"Committed sequence shard changed: {path}")
+            names = pl.read_parquet(path, columns=["sequenceId", "sequenceName"])
+            for seq, name in names.unique().iter_rows():
+                register_sequence_name(self.names_by_id, seq, name)
 
     def checkpoint(self):
         return (
@@ -90,7 +94,7 @@ class CollectedSequences:
     def row(self, frame, action, reward, successor, terminated, truncated, group):
         record = action_record(action, self.policy)
         assert record is not None
-        row = decision_row(
+        return decision_row(
             f"{self.namespace}/{frame.episode_id}",
             frame.step_id,
             dict(frame.observation),
@@ -105,43 +109,60 @@ class CollectedSequences:
             truncated=truncated,
             group=group,
         )
-        register_sequence_name(self.names_by_id, row["sequenceId"], row["sequenceName"])
-        return row
 
     def _write(self, rows):
-        self.parts.extend(
+        names = {}
+
+        def checked_rows():
+            for row in rows:
+                register_sequence_name(names, row["sequenceId"], row["sequenceName"])
+                yield row
+
+        parts = list(
             write_parts(
                 self.output.manifest_path,
-                rows,
+                checked_rows(),
                 policy=self.policy,
                 observations=self.policy.observation_columns,
                 collection_type=_collection_type(self.algorithm, self.output),
             )
         )
 
+        return parts, names
+
     def record(self, buffer):
         if not self.output:
             return
-        # Serialize one owner's sealed rollout at a time to bound writer memory.
-        for owner in range(self.strategy.world_size):
-            parts = self.strategy.gather_for_writer(
-                buffer if self.strategy.rank == owner else None
-            )
+        try:
+            parts, names = [], {}
+            if buffer is not None:
+                write = self.ppo if self.algorithm == "ppo" else self.grpo
+                parts, names = write(buffer)
+            packet = parts, names, None
+        except Exception as error:
+            if self.strategy.world_size == 1:
+                raise
+            packet = [], {}, str(error)
+        gathered = self.strategy.gather_for_writer(packet)
 
-            def write_owner(part=parts[owner] if parts else None):
-                if part is not None:
-                    if self.algorithm == "ppo":
-                        self.ppo(part)
+        def commit():
+            new_parts = []
+            new_names = {}
+            for rank, (parts, names, error) in enumerate(gathered):
+                if error is not None:
+                    raise RuntimeError(f"Rollout writer rank {rank} failed: {error}")
+                new_parts.extend(parts)
+                for seq, name in names.items():
+                    if seq in self.names_by_id:
+                        register_sequence_name(self.names_by_id, seq, name)
                     else:
-                        self.grpo(part)
+                        register_sequence_name(new_names, seq, name)
+            self.parts.extend(new_parts)
+            self.names_by_id.update(new_names)
 
-            on_writer(self.strategy, write_owner)
-            del parts, write_owner
+        on_writer(self.strategy, commit)
 
     def ppo(self, buffer):
-        if not self.output:
-            return
-
         def rows():
             for i, step in enumerate(buffer.decisions):
                 row = self.row(
@@ -172,49 +193,47 @@ class CollectedSequences:
                 row["__collection"] = details
                 yield row
 
-        self._write(rows())
+        return self._write(rows())
 
     def grpo(self, buffer):
-        if self.output:
+        def rows():
+            for trajectory in buffer.trajectories:
+                for i, frame in enumerate(trajectory.frames):
+                    last = i + 1 == len(trajectory.actions)
+                    successor = (
+                        trajectory.final_observation
+                        if last
+                        else dict(trajectory.frames[i + 1].observation)
+                    )
+                    row = self.row(
+                        frame,
+                        trajectory.actions[i],
+                        trajectory.raw_rewards[i],
+                        successor,
+                        last and trajectory.terminated,
+                        last and trajectory.truncated,
+                        f"{self.namespace}/group-{trajectory.group_index}",
+                    )
+                    row["__collection"] = {
+                        "policy_version": trajectory.generation,
+                        "reference_identity": buffer.reference_identity,
+                        "group_index": trajectory.group_index,
+                        "sample_index": trajectory.sample_index,
+                        "start_token_json": json.dumps(
+                            trajectory.start_token, allow_nan=False, sort_keys=True
+                        ),
+                        "scaled_reward": trajectory.rewards[i],
+                        "old_log_probability": trajectory.old_log_probabilities[i],
+                        "reference_log_probability": trajectory.reference_log_probabilities[
+                            i
+                        ],
+                        "score": trajectory.score,
+                        "advantage": trajectory.advantage,
+                        "cutoff_reason": trajectory.cutoff_reason if last else None,
+                    }
+                    yield row
 
-            def rows():
-                for trajectory in buffer.trajectories:
-                    for i, frame in enumerate(trajectory.frames):
-                        last = i + 1 == len(trajectory.actions)
-                        successor = (
-                            trajectory.final_observation
-                            if last
-                            else dict(trajectory.frames[i + 1].observation)
-                        )
-                        row = self.row(
-                            frame,
-                            trajectory.actions[i],
-                            trajectory.raw_rewards[i],
-                            successor,
-                            last and trajectory.terminated,
-                            last and trajectory.truncated,
-                            f"{self.namespace}/group-{trajectory.group_index}",
-                        )
-                        row["__collection"] = {
-                            "policy_version": trajectory.generation,
-                            "reference_identity": buffer.reference_identity,
-                            "group_index": trajectory.group_index,
-                            "sample_index": trajectory.sample_index,
-                            "start_token_json": json.dumps(
-                                trajectory.start_token, allow_nan=False, sort_keys=True
-                            ),
-                            "scaled_reward": trajectory.rewards[i],
-                            "old_log_probability": trajectory.old_log_probabilities[i],
-                            "reference_log_probability": trajectory.reference_log_probabilities[
-                                i
-                            ],
-                            "score": trajectory.score,
-                            "advantage": trajectory.advantage,
-                            "cutoff_reason": trajectory.cutoff_reason if last else None,
-                        }
-                        yield row
-
-            self._write(rows())
+        return self._write(rows())
 
     def publish(self):
         if not self.output or self.strategy.rank != 0:

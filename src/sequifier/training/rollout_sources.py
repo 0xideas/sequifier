@@ -13,6 +13,7 @@ from sequifier.config.train_config import (
 )
 from sequifier.fingerprints import fingerprint
 from sequifier.runtime.plan import continuation_groups
+from sequifier.training.distributed_strategy import on_writer
 
 
 def first_consumer(config):
@@ -120,19 +121,14 @@ class PendingGroup:
                 source_dependencies = data.dependencies
                 if source.preprocessing_config_path:
                     config_path = root / source.preprocessing_config_path
-                    source_dependencies.add(config_path)
-                    metadata = None
-                    if strategy is None or strategy.rank == 0:
-                        metadata = prepare_source(
-                            path, config_path, root, parent.seed, source_dependencies
-                        )
-                    if strategy is not None:
-                        metadata, recorded = strategy.broadcast(
-                            (metadata, source_dependencies.identity)
-                            if strategy.rank == 0
-                            else None
-                        )
-                        source_dependencies.include(recorded)
+                    metadata = _prepare_on_writer(
+                        strategy,
+                        path,
+                        config_path,
+                        root,
+                        parent.seed,
+                        source_dependencies,
+                    )
                     spec = DatasetPartSpecModel(
                         type="prepared", metadata_config_path=str(metadata)
                     )
@@ -158,6 +154,17 @@ class PendingGroup:
             resolved, resolved.training_plan, self.index, prepared
         )
         return group, dependencies
+
+
+def _prepare_on_writer(strategy, manifest, config_path, root, seed, dependencies):
+    def prepare():
+        dependencies.add(config_path)
+        metadata = prepare_source(manifest, config_path, root, seed, dependencies)
+        return metadata, dependencies.identity
+
+    metadata, recorded = prepare() if strategy is None else on_writer(strategy, prepare)
+    dependencies.include(recorded)
+    return metadata
 
 
 def prepare_source(manifest, config_path, root, seed, dependencies):
