@@ -137,10 +137,10 @@ monitor is identified in the operational log. Policy iteration clocks count comm
 contains several optimizer steps. Policy visualizations display the actual
 monitor names on a linear scale and do not invent baseline measurements.
 
-Hyperparameter search accepts supervised plans. Policy and mixed plans are not yet
-supported. Its default objective is the final phase's evaluation monitor; the
-search direction must match. Explicit output destinations are isolated per
-sampled run.
+Hyperparameter search reads the selected metric from the final phase report for
+supervised, policy, and mixed plans. The monitor supplies the default optimization
+direction. Each sampled run has its own training outputs, including any rollout
+collection manifests. See the [hyperparameter search guide](../configs/hyperparameter-search.md).
 
 ## Inference and collection outputs
 

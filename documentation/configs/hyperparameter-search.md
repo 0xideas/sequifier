@@ -3,9 +3,8 @@
 `sequifier hyperparameter-search` searches over complete canonical training
 configurations with Optuna. It supports Bayesian optimization, random sampling,
 finite grid search, cooperative pruning, and custom single- or multi-objective
-evaluation. Supervised plans are supported; policy and mixed plans are not yet
-supported. The final phase monitor supplies the default objective; configure the
-matching `min`/`max` search direction. See
+evaluation. Supervised, policy, and mixed plans use the final phase’s selected
+monitor value and optimization direction by default. See
 [Training artifacts](../training/artifacts.md).
 
 ```console
@@ -77,6 +76,50 @@ their canonical validation paths.
 `model_name` and `project_root` cannot appear in `parameters`. Generated model
 names use `[study_name]-run-[index]`, and `run.project_root` is controlled by the
 search run field.
+
+## Policy and mixed plans
+
+Use the phase names and role names from the base training config. For example,
+to tune a PPO phase named `online_control` after supervised pretraining:
+
+```yaml
+base_config_path: train-supervised-ppo.yaml
+run:
+  study_name: control-search
+  outputs:
+    trial_config_directory: configs/hp-search
+method: bayesian
+trials: 20
+pruning_warmup_iterations: 3
+parameters:
+  phases:
+    online_control:
+      clip_epsilon:
+        $choices: [0.1, 0.2, 0.3]
+      optimization:
+        actor:
+          learning_rate:
+            $range: {low: 0.00001, high: 0.001, log: true}
+```
+
+| Final phase | Default search objective |
+| --- | --- |
+| Supervised | Loss on the monitored evaluation source |
+| Imitation or IQL | Minimize held-out action negative log-likelihood |
+| DPO | Minimize held-out preference loss |
+| PPO | Maximize mean completed return by default, or use the configured episode monitor |
+| GRPO | Maximize mean score |
+
+Intermediate values come from the final phase. Policy trials report at phase-local
+iteration numbers, so changing the length of an earlier phase does not shift the
+pruner’s comparison points. Unavailable evaluations, such as a return with no
+completed episodes, supply no intermediate value. The default objective requires
+a finite selected metric in the final phase’s report. The phase’s `best` or `last`
+handoff determines which actor and score are selected.
+
+Collection output manifests and their part directories are scoped to each trial.
+Later phases can consume those outputs through the base plan’s `type: rollout`
+source and producer phase name.
 
 ## Parameter expressions
 
@@ -170,11 +213,12 @@ parameters:
 | `trials` | `int` | Except grid | - | Target total number of completed or pruned runs in the persisted study. |
 | `sampler_seed` | `int` or `null` | No | `null` | Sampler seed. Training seeds belong in canonical `parameters`. |
 | `prune_trials` | `bool` | No | `true` | Enables cooperative pruning. Distributed pruning remains experimental. |
-| `pruning_warmup_epochs` | `int` or `null` | No | `null` | Complete epochs before pruning may begin. Mutually exclusive with batch warmup. |
-| `pruning_warmup_batches` | `int` or `null` | No | `null` | Training batches before pruning may begin. Mutually exclusive with epoch warmup. |
+| `pruning_warmup_epochs` | `int` or `null` | No | `null` | Completed epochs before pruning a supervised or imitation objective phase. |
+| `pruning_warmup_batches` | `int` or `null` | No | `null` | Global training steps before pruning a supervised objective phase. |
+| `pruning_warmup_iterations` | `int` or `null` | No | `null` | Updates completed in the policy objective phase before pruning. Choose one warmup unit per search. |
 | `evaluation_metrics` | `list[str]` or `null` | No | `null` | Metric names expected from a custom evaluation script. |
-| `evaluation_metric_directions` | `list[min\|max]` or `null` | With metrics | `null` | One optimization direction per metric. |
-| `evaluation_script_path` | `str` or `null` | With metrics | `null` | Script invoked with the best exported model's evaluation ID. |
+| `evaluation_metric_directions` | `list[min\|max]` or `null` | With metrics | `null` | One direction per custom metric. Without a script, an explicit direction must match the final phase monitor. |
+| `evaluation_script_path` | `str` or `null` | With metrics | `null` | Script invoked with the selected model's evaluation ID. |
 | `evaluation_inference_config_path` | `str` or `null` | No | `null` | Inference config run before the custom evaluation script. |
 
 For grid search, omitting `trials` runs the complete finite grid. If it is
@@ -186,9 +230,10 @@ toward the target.
 
 ## Custom evaluation
 
-Without custom metrics, Sequifier minimizes the best validation loss. With one
-metric it performs single-objective optimization; with several it records the
-Pareto front.
+A custom evaluation script scores the published model with the metrics and
+directions you specify. Multi-objective studies record a Pareto front.
+Intermediate pruning uses the training monitor for a single objective with
+a matching direction.
 
 ```yaml
 evaluation_metrics:
@@ -202,7 +247,7 @@ evaluation_script_path: scripts/evaluate.py
 ```
 
 The evaluation script receives the exported model's evaluation ID, formatted
-as `<run-name>-best-<epoch>`, as its only
+as the filename stem of the run manifest’s `model_path`, as its only
 argument. It must write
 `outputs/evaluations/[evaluation-id].json` under `project_root`, containing all
 configured metric names. Extra metrics are allowed but produce a warning and

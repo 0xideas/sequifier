@@ -19,6 +19,7 @@ from sequifier.rl.policy import Policy
 from sequifier.rl.role_execution import ActionForward, InferenceRounds
 from sequifier.rl.telemetry import TelemetryJournal
 from sequifier.runtime.plan import metric_improved, stop_scope
+from sequifier.runtime.pruning import pruning_requested
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 from sequifier.runtime.stopping import StoppingState
 from sequifier.training.distributed_strategy import (
@@ -559,7 +560,8 @@ class PhaseSession:
 
     def checkpoint(self, schedule, payload=None):
         # A scheduled evaluation may just have triggered early stopping.
-        if not (schedule.checkpoint or self.stopping.triggered):
+        prune = pruning_requested(self.context.run, self.strategy)
+        if not (schedule.checkpoint or self.stopping.triggered or prune):
             return
         started = time.monotonic()
         extra = payload() if payload is not None else {}
@@ -621,6 +623,8 @@ class PhaseSession:
         self.last_checkpoint_time = schedule.timestamp
         if schedule.timed_snapshot:
             self.last_snapshot_time = schedule.timestamp
+        if prune:
+            raise SystemExit(143)
 
     def finish(self, clocks, provenance):
         if self.context.metrics is not None:

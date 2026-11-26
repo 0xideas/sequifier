@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import os
 import time
 from contextlib import nullcontext
 from copy import deepcopy
@@ -40,7 +39,6 @@ from sequifier.integration.contexts import (
     StepIdentity,
     ValidationCompleted,
 )
-from sequifier.logging_paths import model_log_directory
 from sequifier.runtime.plan import (
     NORMAL_COMPLETION,
     PhaseOutcome,
@@ -48,6 +46,7 @@ from sequifier.runtime.plan import (
     run_phases,
     stop_scope,
 )
+from sequifier.runtime.pruning import pruning_requested
 from sequifier.runtime.random_state import RandomState
 from sequifier.runtime.stopping import StoppingState
 from sequifier.training.checkpoint_service import CheckpointRequest
@@ -178,22 +177,7 @@ class TrainingEngine:
         return result
 
     def _check_pruning(self, run: Any) -> None:
-        if os.getenv("SEQUIFIER_HYPERPARAMETER_SEARCH_RUN") is None:
-            return
-        should_prune = False
-        if run.distributed.rank == 0:
-            path = (
-                model_log_directory(run.config.project_root, run.config.model_name)
-                / f"{run.config.model_name}.prune"
-            )
-            should_prune = path.exists()
-        if run.distributed.world_size > 1:
-            signal = torch.tensor(
-                [int(should_prune)], device=run.distributed.device, dtype=torch.int32
-            )
-            torch.distributed.broadcast(signal, src=0)
-            should_prune = bool(signal.item())
-        if should_prune:
+        if pruning_requested(run.config, run.distributed):
             raise SystemExit(143)
 
     def _update_monitor(

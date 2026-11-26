@@ -7,7 +7,7 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
-from torch.multiprocessing.spawn import spawn
+from torch.multiprocessing.spawn import ProcessExitedException, spawn
 
 from sequifier.artifacts.dependencies import supervised_dependencies
 from sequifier.artifacts.run_checkpoint import checkpoint_path, training_lock
@@ -135,18 +135,23 @@ def launch_training(
             global_rank=dist.get_rank(),
         )
     if distribution.distributed and not {"RANK", "WORLD_SIZE"} <= os.environ.keys():
-        spawn(
-            train_worker,
-            args=(
-                distribution.world_size,
-                config,
-                integration_specs,
-                (),
-                semantic_optimizer_grouping,
-            ),
-            nprocs=distribution.world_size,
-            join=True,
-        )
+        try:
+            spawn(
+                train_worker,
+                args=(
+                    distribution.world_size,
+                    config,
+                    integration_specs,
+                    (),
+                    semantic_optimizer_grouping,
+                ),
+                nprocs=distribution.world_size,
+                join=True,
+            )
+        except ProcessExitedException as error:
+            if error.exit_code == 143:
+                raise SystemExit(143) from error
+            raise
         if config.run_mode != "supervised":
             from sequifier.training.coordinator import published_training_result
 
