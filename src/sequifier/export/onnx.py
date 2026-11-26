@@ -8,6 +8,7 @@ import tempfile
 import uuid
 import warnings
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -323,6 +324,8 @@ class OnnxModelExporter:
         batch_size: int,
         training: bool,
         metadata: dict[str, str] | None = None,
+        validate_outputs: Callable[[tuple[Tensor, ...], dict[str, Tensor]], None]
+        | None = None,
     ) -> Path:
         import re
         from importlib.metadata import version
@@ -501,6 +504,14 @@ class OnnxModelExporter:
                             raise ValueError(
                                 "ONNX artifact differs from its export reference"
                             )
+                if validate_outputs is not None:
+                    validate_outputs(
+                        inputs,
+                        {
+                            item["name"]: torch.from_numpy(value)
+                            for item, value in zip(schema.outputs, outputs, strict=True)
+                        },
+                    )
                 published = []
                 try:
                     for external_file in external_files.values():

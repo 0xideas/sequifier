@@ -10,6 +10,19 @@ from sequifier.rl.attachment import bind_policy
 from sequifier.rl.policy import ExecutablePolicy
 
 
+def unpack_policy_outputs(config, outputs):
+    actions, probabilities, latents, components = {}, {}, {}, {}
+    for index, (name, field) in enumerate(config.actions.items()):
+        actions[name] = outputs[f"action_{index}"]
+        if field.type == "categorical":
+            probabilities[name] = outputs[f"probabilities_{index}"]
+        else:
+            latents[name] = outputs[f"latent_{index}"]
+            components[name] = outputs[f"component_{index}"]
+    record = action_record_layout(config).pack(actions, latents, components)
+    return record, outputs["joint_log_probability"], probabilities
+
+
 class OnnxPolicy(ExecutablePolicy):
     supports_entropy = False
 
@@ -81,16 +94,7 @@ class OnnxPolicy(ExecutablePolicy):
             raise ValueError(
                 "ONNX policy returned non-finite decisions or probabilities"
             )
-        actions, probabilities, latents, components = {}, {}, {}, {}
-        for index, (name, field) in enumerate(self.config.actions.items()):
-            actions[name] = outputs[f"action_{index}"]
-            if field.type == "categorical":
-                probabilities[name] = outputs[f"probabilities_{index}"]
-            else:
-                latents[name] = outputs[f"latent_{index}"]
-                components[name] = outputs[f"component_{index}"]
-        record = action_record_layout(self.config).pack(actions, latents, components)
-        return record, outputs["joint_log_probability"], probabilities
+        return unpack_policy_outputs(self.config, outputs)
 
     def predict_actions(self, inputs, deterministic, generator, *, probabilities):
         record, scores, conditional = self._select(

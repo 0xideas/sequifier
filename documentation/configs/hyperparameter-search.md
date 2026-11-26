@@ -118,7 +118,12 @@ a finite selected metric in the final phase’s report. The phase’s `best` or 
 handoff determines which actor and score are selected.
 
 All trials using the default objective must select the same metric and evaluation
-source. Resuming a study checks its recorded objective identity. Use a new study
+source. Online trials use the same evaluation seeds, step and time limits, and
+action selection. A GRPO score monitor also fixes the reward scale. Generated
+evaluation partitions require the same numeric run seed across trials because
+that seed determines the held-out episodes or preference pairs.
+Search drivers for the same study run serially and share its total trial budget.
+Resuming a study checks its recorded objective identity. Use a new study
 name for a different objective or for an older study whose trials predate this
 record. Policy trials have ten minutes to checkpoint after a pruning request
 before the search terminates the worker.

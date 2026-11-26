@@ -564,6 +564,17 @@ def _monitor_identity(candidate, phase, monitor):
         if isinstance(environment, str):
             environment = candidate.environments[environment]
         identity["environment"] = environment.model_dump(mode="json")
+        identity["episodes"] = phase.evaluation.model_dump(
+            mode="json",
+            include={
+                "seeds",
+                "max_episode_steps",
+                "timeout_seconds",
+                "action_selection",
+            },
+        )
+        if phase.algorithm == "grpo" and monitor.metric == "score_mean":
+            identity["reward_scale"] = phase.reward_scale
     elif monitor:
         if phase.algorithm == "supervised":
             references = [monitor]
@@ -574,7 +585,19 @@ def _monitor_identity(candidate, phase, monitor):
         for ref in references:
             dataset = candidate.datasets[ref.dataset]
             view = dataset.views.get(ref.part)
-            parts = view.parts if view and view.parts else dataset.sources
+            if dataset.partition:
+                seed = candidate.run.reproducibility.seed
+                if seed == "random":
+                    raise ValueError(
+                        "A generated evaluation partition requires a fixed run seed for search"
+                    )
+                identity["partition_seed"] = seed
+            # Partition membership depends on the entire population before view filtering.
+            parts = (
+                view.parts
+                if view and view.parts and not dataset.partition
+                else dataset.sources
+            )
             sources[ref.source] = {
                 "view": view.model_dump(mode="json") if view else None,
                 "partition": dataset.partition.model_dump(mode="json")

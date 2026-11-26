@@ -23,7 +23,9 @@ For FSDP2, set `strategy: fsdp` and supply `cpu_offload: true` or
 settings. NCCL jobs use a Gloo group on the same ranks for CPU rollout data and
 recovery metadata. All hosts need shared access to input and artifact paths.
 
-Policy batch sizes and collection budgets apply to the **whole job**. Imitation
+Policy batch sizes, environment-step budgets and group counts apply to the **whole job**.
+Each rank independently enforces `collection.max_buffer_bytes` on its local rollout.
+Four active ranks can therefore retain up to four times that configured rollout estimate. Imitation
 divides a seeded decision order across ranks. DPO assigns both alternatives of a
 pair to one rank. IQL partitions each draw by position, preserving repeats.
 PPO divides each horizon across persistent per-rank simulator streams and

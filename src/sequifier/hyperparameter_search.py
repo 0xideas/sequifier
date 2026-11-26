@@ -19,7 +19,6 @@ import yaml
 from loguru import logger
 from optuna.trial import TrialState
 
-from sequifier.artifacts.run_checkpoint import training_lock
 from sequifier.typechecking import beartype
 
 torch._dynamo.config.suppress_errors = True
@@ -533,12 +532,22 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     config = load_hyperparameter_search_config(config_path, skip_metadata)
 
     os.makedirs(os.path.join(config.run.project_root, "state", "optuna"), exist_ok=True)
-    sampler = create_sampler(config)
 
     storage_path = os.path.join(
         config.run.project_root, "state", "optuna", f"{config.run.study_name}.db"
     )
 
+    # The accepted-run index owns the trial YAML, marker and artifact paths.
+    # Hold a study-specific lock until all trial results have been committed.
+    import fcntl
+
+    with open(f"{storage_path}.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _run_study(config, storage_path)
+
+
+def _run_study(config, storage_path):
+    sampler = create_sampler(config)
     is_multivariate = (
         config.evaluation_metrics is not None and len(config.evaluation_metrics) > 1
     )
@@ -547,20 +556,19 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
         "minimize" if direction == "min" else "maximize"
         for direction in (config.evaluation_metric_directions or ["min"])
     ]
-    with training_lock(Path(storage_path)):
-        study = optuna.create_study(
-            study_name=config.run.study_name,
-            directions=directions,
-            sampler=sampler,
-            storage=f"sqlite:///{storage_path}",
-            load_if_exists=True,
+    study = optuna.create_study(
+        study_name=config.run.study_name,
+        directions=directions,
+        sampler=sampler,
+        storage=f"sqlite:///{storage_path}",
+        load_if_exists=True,
+    )
+    if [direction.name.lower() for direction in study.directions] != directions:
+        raise ValueError(
+            "The persisted study has different objective directions from this search"
         )
-        if [direction.name.lower() for direction in study.directions] != directions:
-            raise ValueError(
-                "The persisted study has different objective directions from this search"
-            )
 
-        _bind_study_objective(study, config.objective_identity)
+    _bind_study_objective(study, config.objective_identity)
 
     trials = config.trials
     if trials is None and config.method != "grid":

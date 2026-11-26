@@ -211,17 +211,30 @@ class RealPredictionDistribution:
                     "real transform latents must be finite and match actions"
                 )
             comparable = supplied & ~atoms
-            if not torch.equal(self._transform(latent[comparable]), value[comparable]):
+            # Portable FP64 actions can differ by a few last bits between
+            # ORT and native sigmoid/softplus implementations.
+            transformed = self.field.lower is not None or self.field.upper is not None
+            tolerance = (
+                8 * torch.finfo(self.dtype).eps
+                if transformed and self.dtype == torch.float64
+                else 0.0
+            )
+            if not torch.allclose(
+                self._transform(latent[comparable]),
+                value[comparable],
+                rtol=tolerance,
+                atol=tolerance,
+            ):
                 raise ValueError(
                     "recorded real latent does not reconstruct its executed action"
                 )
         lower, upper = self.field.lower, self.field.upper
         invert = ~supplied & ~atoms
-        if lower is not None and (value[invert] <= lower).any():
+        if lower is not None and ((value < lower) | (invert & (value == lower))).any():
             raise ValueError(
                 "real endpoints require a declared atom or a recorded transform latent"
             )
-        if upper is not None and (value[invert] >= upper).any():
+        if upper is not None and ((value > upper) | (invert & (value == upper))).any():
             raise ValueError(
                 "real endpoints require a declared atom or a recorded transform latent"
             )

@@ -69,10 +69,6 @@ class _RankFailure:
     message: str
 
 
-class _PeerInferenceError(RuntimeError):
-    """The failure has already been observed by every rank in this round."""
-
-
 class InferenceRounds:
     """Match forwards while each simulator independently requests its next model role."""
 
@@ -83,6 +79,7 @@ class InferenceRounds:
         self.defer_deadline = False
         self.sharded = isinstance(strategy, FullyShardedStrategy)
         self.active = False
+        self.failure_reported = False
 
     def forward(self, module, inputs, *args, **kwargs):
         started = perf_counter()
@@ -106,12 +103,11 @@ class InferenceRounds:
     def scope(self, *, defer_deadline=False):
         self.defer_deadline = defer_deadline
         self.active = self.strategy.world_size > 1
+        self.failure_reported = False
         try:
             yield
-        except _PeerInferenceError:
-            raise
         except Exception as error:
-            if self.active:
+            if self.active and not self.failure_reported:
                 self.strategy.gather_objects(_RankFailure(str(error)))
             raise
         else:
@@ -126,7 +122,9 @@ class InferenceRounds:
             pending = self.strategy.gather_objects(name)
             for rank, request in enumerate(pending):
                 if isinstance(request, _RankFailure):
-                    raise _PeerInferenceError(
+                    # Collector cleanup may wrap the exception before scope sees it.
+                    self.failure_reported = True
+                    raise RuntimeError(
                         f"Inference rank {rank} failed: {request.message}"
                     )
             chosen = next((role for role in pending if role is not None), None)

@@ -8,6 +8,7 @@ from torch import nn
 
 from sequifier.contract_versions import ContractVersions
 from sequifier.export.onnx import OnnxModelExporter
+from sequifier.io.batch import SequifierInputs
 from sequifier.model.execution_schema import (
     MODEL_CONFIG_KEY,
     POLICY_GRAPH_KEY,
@@ -17,6 +18,7 @@ from sequifier.model.prediction_distribution import RealPredictionDistribution
 from sequifier.rl.action_plan import ActionDecision
 from sequifier.rl.checkpoint import load_policy
 from sequifier.rl.joint_distribution import JointActionDistribution
+from sequifier.rl.onnx_policy import unpack_policy_outputs
 
 
 def _real_selection(distribution, stochastic, uniform, normal):
@@ -106,6 +108,33 @@ class PolicyGraph(nn.Module):
             ),
         )
 
+    @torch.no_grad()
+    def validate_outputs(self, inputs, outputs):
+        """Compare ORT actions with native selection and replay their conditional scores."""
+        history = SequifierInputs(*self.inputs.bind(inputs))
+        joint = self.actor.distribution(history, input_encoding="model")
+        record, scores, probabilities = unpack_policy_outputs(
+            self.actor.config, outputs
+        )
+        deterministic = inputs[-1][:, 0] == 0
+        native = joint.mode()
+        for key, expected in native.items():
+            _check_output(key, record[key][deterministic], expected[deterministic])
+
+        decision = joint.plan.from_record(record)
+        _check_output("joint_log_probability", scores, joint.log_prob(decision))
+        for name, expected in joint.categorical_probabilities(decision).items():
+            _check_output(name, probabilities[name], expected)
+
+
+def _check_output(name, actual, expected):
+    if actual.shape != expected.shape or not (
+        torch.allclose(actual, expected, rtol=2e-4, atol=2e-5)
+        if expected.is_floating_point()
+        else torch.equal(actual, expected)
+    ):
+        raise ValueError(f"ONNX output {name!r} differs from native policy execution")
+
 
 def export_policy_graphs(config, artifact, paths):
     for name, path in paths.items():
@@ -127,12 +156,14 @@ def export_policy_graphs(config, artifact, paths):
                 {**contract, "interfaces": {name: interface_contract}}
             ),
         }
+        graph = PolicyGraph(actor, inputs)
         OnnxModelExporter().export_graph(
-            PolicyGraph(actor, inputs),
+            graph,
             schema,
             path,
             interface_name=name,
             batch_size=config.run.export.prediction.onnx.batch_size,
             training=False,
+            validate_outputs=graph.validate_outputs,
             metadata=metadata,
         )
