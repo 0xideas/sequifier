@@ -4,27 +4,27 @@
 
 # What is sequifier?
 
-Sequifier is the short, efficient, scalable path from tabular sequences to your own transformer model.
+Sequifier is the terraform for foundation modelling: It provides a declarative interface to data preparation, model architecture, training and optimization hyperparameters, and inference.
 
-Its three core commands, `preprocess`, `train`, and `infer`, are configurable.
-Preprocessing can use multiple CPU workers for eligible workloads, and training
-supports multiple GPUs.
+It provides shared infrastructure and guarantees to a wide range of foundation modelling applications that are individually too small to sustain their own ecosystem, unlike language modelling, audio and image or video generation.
 
-They enable you to go from multivariate sequence data to a model that ingests such data, and emits either (a) this data, (b) a subset, (c) other variables or (d) embeddings.
+Any implementation of a foundation model will operate under several constraints: computate constraints such as RAM, GPU memory, disk speed and device connectivity, scaling dimenstions such as process parallelisation and multi-gpu and multi-node training, and desirable properties such as efficiency, idempotency, early failure on misconfiguration, resumability and reproducibility. Sequifier aims to push out the pareto frontier on these dimensions and provide the best starting point for any de novo foundation modelling initiative.
 
-If input and target variables are the same, it supports full autoregressive inference.
+# How does it work?
+
+Sequifier has three core commands, `preprocess`, `train`, and `infer`. Each is configurable via a config file, that specifies the data layout and structure and the other attributes that you want from your model.
+
+They enable you to go from multivariate sequence data, images and/or video to a model that ingests such data, and emits either multivariate sequence data (but not images/video) or embeddings.
+
+If input and target variables are the same, or a missing input variables can be computed from target variables, it supports full autoregressive inference.
 
 Through configuration, most modern architectural variants such as RoPE, GQA, SwiGLU, and RMSNorm are supported. The ambition is to follow the frontier when industrial-grade implementations become available.
 
-The process looks like this:
+You can train the transformer using supervised losses or reinforcement learning algorithms such as imitation learning, implicit Q learning (IQL), direct policy optimization (DPO), proximal policy optimization (PPO) or group relative policy optimization (GRPO).
 
-<p align="center">
-  <img src="./design/sequifier-illustration.png" alt="Sequifier preprocessing, training, and inference workflow" width="900">
-</p>
+## What can I use it for?
 
-## Examples from the literature
-
-Multivariate tabular transformers have *many* applications.
+Multivariate transformers have *many* applications.
 
 These independent references illustrate some of them; inclusion does not imply that the cited work used or is affiliated with sequifier.
 
@@ -85,7 +85,7 @@ These independent references illustrate some of them; inclusion does not imply t
 
 Sequifier aims to standardise model implementation across these fields, to make them comparable, transfer learnings between domains, and converge on optimal solutions faster.
 
-## Value Proposition
+## Empowering researchers
 
 For the individual researcher, sequifier cuts the development time of a model significantly: typically, some preprocessing and the subsequent model evaluation are specific to the modelling problem, but all the steps in between are taken care of.
 
@@ -94,7 +94,13 @@ This enables:
 - rapid prototyping on a configurable architecture
 - trusted implementation (you can't create bugs inadvertently)
 - scaling preprocessing across cores and training across GPUs and nodes
-- hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
+- hyperparameter optimization using Optuna
+
+## Production-grade model lifecycles
+
+Not every foundation model has a research team behind it: some will be trained and fine tuned automatically for individual users or user segments, or different deployments, machines, or domains of various kinds, with the specifics depending on the application. This creates considerable complexity in any real life deployment of foundation models.
+
+Defining and training such models using sequifier reduces that complexity significantly: it makes the management of model versions and iterations much easier, facilitates provenance and change tracking, and makes reproduction of any trained checkpoint much simpler. Instead of several complex codebases glued together with hacky scripts, you get clean configs and standardized artefacts, that can be rerun in isolation.
 
 ## The Seven Commands
 
@@ -156,41 +162,15 @@ The `sequifier` commands should typically be run in the project root.
 
 Within YOUR_PROJECT_NAME, you can also add other folders for additional steps, such as `notebooks` or `scripts` for pre- or postprocessing, and `analysis`, `visualizations` or `evals` for files you generate in other, manual steps.
 
-### Data Transformations in Sequifier
+## Data Formats
 
-The basic input data format is this:
+The core modelling primitive is the `itemPosition`: it represents the unit of the sequence that the core model learns to represent. At each `itemPosition` value, each input variable is projected into a latent space, and these are concatenated and ingested into the core model. An input variable can be real-valued, discrete/categorical, a uni- or multivariate sequence itself (this type is ingested using `structured input`), or an image (or equivalently, a frame from a video). Real-valued variables are passed to a fixed position in the core model, or transformed through a single neural layer, discrete variables are projected to an embedding space, sequences are fed through a small transformer model, and images are ingested through a ResNet model, which has either frozen weights from a separate training run, or is newly initialized. This is a high-level overview, with many of the specifics configurable.
 
-| sequenceId | itemPosition | column1 | column2 | ... |
-| --- | --- | --- | --- | --- |
-| 0 | 0 | "high" | 12.3 | ... |
-| 0 | 1 | "high" | 10.2 | ... |
-| ... | ... | ... | ... | ... |
-| 1 | 0 | "medium" | 20.6 | ... |
-| ... | ... | ... | ... | ... |
+The second modelling primitive is the `static variable`. It is a variable which is either real-valued or categorical, and is embedded separately from the variables that vary with `itemPosition` - they stay constant across a whole individual sequence, and vary only between sequences. Each static variable is embedded separately and these embeddings are concatenated. This joint embedding for all static variables is prepended to the sequence of `itemPosition`-variant embeddings, and treated as the "first" token for any window based on that sequence.
 
-The two columns "sequenceId" and "itemPosition" have to be present, and there must be one or more feature columns.
+## Target Variables
 
-`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. Each stored subsequence contains the number of positions selected by `splits.<name>.window_length`; `max_target_offset` reserves positions within that window for future targets.
-
-| sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [window_length - 1] | [window_length - 2] | ... | 0 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 0 | 0 | 0 | column1 | "high" | "high" | ... | "low" |
-| 0 | 0 | 0 | 0 | column2 | 12.3 | 10.2 | ... | 14.9 |
-| ... | ... | ... | ... | ... | ... | ... | ... | ... |
-| 1 | 0 | 15 | 0 | column1 | "medium" | "high" | ... | "medium" |
-| 1 | 0 | 15 | 0 | column2 | 20.6 | 18.5 | ... | 21.6 |
-| ... | ... | ... | ... | ... | ... | ... | ... | ... |
-
-Generative inference returns a row-oriented table with the predicted target
-columns plus identifiers for the source sequence and model window:
-
-| sequenceId | subsequenceId | windowStartOffset | itemPosition | column1 | column2 | ... |
-| --- | --- | --- | --- | --- | --- | --- |
-| 0 | 0 | 0 | 963 | "medium" | 8.9 | ... |
-| 0 | 0 | 0 | 964 | "low" | 6.3 | ... |
-| ... | ... | ... | ... | ... | ... | ... |
-| 1 | 4 | 0 | 732 | "medium" | 14.4 | ... |
-| ... | ... | ... | ... | ... | ... | ... |
+Sequifier currently supports categorical and real-valued target variables, but not images (sequences will be supported, but aren't yet). This is because training generative models for video outputs requires modelling approaches that are not supported by sequifier, and the recommendation is to use other frameworks that are specialised in the development of such models.
 
 ### Complete Example of Training and Inferring a Transformer Model
 
@@ -240,36 +220,11 @@ Once you have your data in the input format described above, you can train a tra
 
 ## Key Features
 
-### Causal Modelling
+### Optimisation Objectives
 
-Causal transformers are the core architecture in sequifier. Their training objective is to 'predict the next token', or, in the multivariate case, the next value for each target variable.
+#### Causal Modelling
 
-To train a causal transformer, use the default causal objective. If the target value of interest is further in the future, set `target_offset` to a value higher than 1.
-
-`prediction_length` controls how many consecutive positions at the end of a
-window are returned during inference. For example, with `target_offset: 1` and
-`prediction_length: 3`, the three outputs predict the next token after each of
-the last three input positions. This is not LLM-style multi-token prediction,
-where one input position predicts several future tokens. During training, the
-current loss calculation uses all valid decoded positions, regardless of
-`prediction_length`.
-
-### Autoregressive Inference
-
-Autoregressive inference is allowed when the model is causal, all input variables are target variables, `target_offset` equals 1 and `prediction_length` equals 1. It is enabled by setting `generation_steps` to the desired positive count. The number of generation_steps will be generated starting from the *first* complete subsequence in a sequence.
-
-It iteratively predicts future values, by returning predictions at step t-1 as input for generating a prediction at t. Predictions for categorical target variables can be made using argmax or sampling.
-
-For dependencies between multiple outputs at the same time step, the
-`autoregressive_transformer` decoder models targets in explicit
-`target_columns` order. It supports categorical and real targets, parallel
-teacher forcing during training and validation, greedy generation during
-inference, composite decoder branches, shared categorical tables, and optional
-input/output weight tying. Probabilities from this decoder are conditioned on
-the preceding greedy same-step predictions, so external per-column sampling is
-rejected for its targets.
-
-### Causal Modelling Variants
+Predict the values the target variables take at the next `itemPosition`. The generalisation of "next-token prediction".
 
 #### Final-value Causal Modelling
 
@@ -279,113 +234,47 @@ In final-value causal models, the final value of each target variable within the
 
 Next-occurrence causal modelling is a generalisation of final-value causal modelling: instead of taking the last value of each target variable as target, it takes the next value at a position where another categorical variable matches a criterion value as target. To illustrate this, final-value causal modelling is equivalent to next-occurrence causal modelling where the criterion variable is 'is_last', which is '0' up to the last position, where it is '1', and the criterion value is '1'. The values at the last position are projected 'back' across the subsequence, only now, we also have the option to use a different criterion variable, set it to '1' at multiple locations, and train the model to predict 'next relevant event', rather than just 'last event'.
 
-### Causal Embedding Model
+#### BERT Model
 
-sequifier also supports the export of causal embeddings, instead of predictions. It requires the following settings: `run.export.embedding: {pt: {}}` in the training config and `task: embedding` in the inference config. Selected activations are restricted to the configured final `prediction_length` positions and concatenated in configuration order along the feature dimension.
+Masks for BERT-style training are sampled from a distribution that is parametrized in the training config, and applies with sampled span lengths to several adjacent `itemPositions`, up to a configured "mask-budget". Masked values are replaced either with a mask token, a random sample, or left unchanged (in which case it operates as a mask on losses only). Per-target variable masking is currently not supported.
 
-If you are interested in activations *other* than the last backbone layer, you can configure the exact layers you want to contribute to the export using `embedding_layer_names`. You can pass an ordered list, such as `[backbone.layers.1, decoder.branches.default.hidden_blocks.0]`, and the activations of these layers will be concatenated and output.
+### Training Algorithms
 
-Layer names follow the network hierarchy using zero-based indices: `backbone.layers.<index>` selects a transformer block output, `backbone.final_norm` the normalized backbone output, and `decoder.branches.<branch>.hidden_blocks.<index>` an MLP decoder hidden-block output; the same scheme applies to BERT embedding models.
+Sequifier supports supervised learning, where conventional supervised losses are applied to individual real-valued and categorical target variables separately and then aggregated, and several reinforcement learning algoirthms. These are behaviour cloning, implicit Q learning, direct policy optimisation, proximal policy optimisation and group relative policy optimisation.
 
-Backbone selectors contribute `model_dim` activations. Decoder MLP hidden-block selectors contribute their configured hidden width and receive the same flattened `support_length * model_dim` windows used during training. The default, `embedding_layer_names: [backbone.final_norm]`, preserves the final normalised backbone representation.
+### Outputs
 
-### BERT Model
+#### Predictions
 
-Sequifier also supports training and inference of BERT-style masked reconstruction models.
+For causal models, predictions consist in `prediction_length` output values per target variable and input window.
 
-Configuration:
+#### Autoregressive Generation
 
-- Preprocessing: Set `max_target_offset: 0` for equal-width input and target windows.
-- Training: Select `learning.objective.type: bert` and configure masking in the same objective, and set decoder `prediction_length` equal to `context_length`. Enable generative and/or embedding export according to the desired inference.
-- Inference: Set `task: forecast` to reconstruct explicitly masked input, or `task: embedding` to output contextual representations.
+For autoregressive inference, either all the input variables must also be target variables, or those inputs that aren't target variables must be derivable from target variables, through a simulator or something like it. The derivation logic must be integrated into inference through the forecast rollout adapter. The `prediction_length` must be set to 1.
 
-Technical Details: BERT-style models use bidirectional attention and learn by reconstructing positions sampled according to the phase’s masking settings. Inference does not apply random masking; inputs that should be reconstructed must be masked explicitly, for example using `mask_column` during preprocessing. Embedding inference returns one contextual representation for every valid position in the input window.
+#### Probabilities
 
-### Structured Ingestion
+Probabilities can be output for categorical target variables and are returned as one row per target variable per `itemPosition`, with the categories to which each probability applies in the columns.
 
-Structured ingestion allows the model to learn relationships for configured sets of input variables *before* they are passed to the transformer backbone.
+#### Embeddings
 
-This enables more constrained representation learning within these subspaces, and provides a structural inductive bias and may reduce parameters, depending on configuration. It can be helpful to think of them as smaller submodules that learn local structure before passing the extracted information to the transformer for longer-range dependencies.
+Embeddings can be exported per `itemPosition`, and are configurable: by default the activations of the last core model layer are exported, but other layers can be used when set in  `embedding_layer_names`. If multiple layers are specified, the activations from the named layers are concatenated and output as on large embedding. Each row of output embeddings is an `itemPosition` for a given sequence, and the columns are the positions in the embedding space.
 
-The key modalities are self-attention, pooling, 1D, 2D and 3D convolutions, and adding learned or rotary axis embeddings.
 
-Image ingestion reads named image or video views from their original folders.
-Each view uses a frame rate relative to `itemPosition` or timestamps aligned
-through a configured time column; a trainable
-ResNet or frozen pretrained backbone embeds each image. Views can enter a
-composite branch or occupy cells in a structured layout. A separate single
-image can condition the whole sequence through one prefix embedding. See the
-[image source configuration](documentation/configs/preprocess.md#image-and-video-sources)
-and [image ingestion configuration](documentation/configs/train.md#image-ingestion).
+### Model Architecture Elements
 
-#### Repeated child collections
+#### Causal Decoding of Target Variables
 
-Named depth layouts represent a fixed-capacity collection of child rows at each
-outer sequence position. A `depth_transformer` ingestion branch encodes the
-valid children, pools them through a CLS token, and emits one vector per outer
-position for the temporal transformer backbone. It can be combined with shallow
-features in nested composite ingestion branches.
-
-The preprocessing metadata and PT payload carry each layout's capacity and
-validity mask. Portable PT and ONNX models retain that execution contract. See
-the [preprocessing guide](documentation/configs/preprocess.md#named-depth-layouts),
-[training guide](documentation/configs/train.md#depth-encoders-and-nested-composites),
-and [inference guide](documentation/configs/infer.md#portable-depth-models-and-dropout-modes).
+By default, sequifier decodes the global latent state into target variables in parallel, and independently from each other. The sampled value of one target variable has no influence on the probability distribution of any other target variable. A causal decoder head changes this: the target variables are predicted one by one, and the materialised value for a target variable conditions all subsequent target variable predictions for that `itemPosition`.
 
 #### Temporal Convolution
 
-Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
+Inspired by order book transformer (TransLOB), sequifier includes the ability to apply convolutions across variables and across `itemPositions` (but not both at the same time). This is the only mechanism which breaks the atomicity of the `itemPosition` primitive: values of a given input variable across `itemPositions` are passed through a small convolutional neural network, and thereby the earlier values are "mixed into" the latent representation of a given `itemPosition`. For early `itemPositions`, the sequence is padded with zeros.
 
-`temporal_conv` uses causal, left-padded convolutions by default (`causal: true`).
-For causal models, keep the default `orientation: within_item_position` when
-using `post_conv_normalization: layer_norm` or `rmsnorm`. With
-`orientation: within_column`, these norms operate across the full time axis, so
-earlier positions can depend on later ones despite the causal convolution and
-the transformer's attention mask. If `within_column` is needed in a causal
-model, set `post_conv_normalization: none`.
+#### Hashing
 
-#### Categorical multi-hash embeddings and targets
+Inspired by work in transaction foundation models, sequifier provides two hashing pathways: single-hashing, which occurs in preprocessing and isn't reversible. This is unavoidable, for if the cardinality of the variable is to be reduced, collisions will happen by definition. The alternative is multi-hashing, where each value is hashed multiple times, and each distinct input value is mapped to a unique *combination* of hash values. This uniqueness is enforced by sequifier, and enables reconstruction of the original value during inference. During training, the configured losses apply to the hash values, rather than the original domain.
 
-An interface can hash canonical categorical IDs for input embeddings and target
-supervision. Configure `categorical_hashing` on the model interface, keyed by
-logical column name:
-
-```yaml
-model:
-  interfaces:
-    default:
-      input_columns:
-      - product_id
-      target_columns:
-      - product_id
-      categorical_hashing:
-        product_id:
-          type: multi_hash
-          num_buckets: 4096
-          num_hashes: 3
-          seed: 42
-      ingestion:
-        type: embedding
-        output_dim: 128
-```
-
-The `categorical_hashing` field belongs to the interface. Its settings drive
-both the input embedding and target heads for `product_id`; do not put a
-`hashing` field under `ingestion`. See the
-[training guide](documentation/configs/train.md#categorical-multi-hash-embeddings-and-targets)
-for a two-column example and the required target loss configuration.
-
-`type: qr` uses quotient and remainder heads; `num_hashes` is always 2. Each
-hash component gets an equal share of the logical target's `loss_weights`
-entry. Class weights are unavailable for hash targets. The model resolves
-component predictions against the allowed canonical IDs and reports the
-logical column as usual. The resolver contributes no training loss. No hash
-columns are needed in stored data. Preprocessing cardinality hashing remains
-independent: a category collapsed there still decodes as `[hash_bucket:k]`.
-Configure model hashing through the interface-level `categorical_hashing` field.
-
-In an `autoregressive_transformer` decoder branch, a hashed target must be the
-last target in that branch's `target_columns` order.
 
 ### Multi-Part Datasets
 
@@ -408,7 +297,7 @@ For the full guide on how to configure a distributed run, check the [multi-GPU t
 
 ### System Requirements
 
-Sequifier currently runs on MacOS and Ubuntu.
+Sequifier currently runs on MacOS and Linux.
 
 ## Citation
 
@@ -425,5 +314,3 @@ Please cite with:
 }
 
 ```
-
-Policy runs support ordered imitation, IQL, DPO, GRPO and PPO phases; see the [policy learning guide](documentation/policy-learning.md).
