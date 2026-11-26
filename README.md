@@ -4,23 +4,28 @@
 
 ## What is sequifier?
 
-Sequifier is the terraform for foundation modelling: It provides a declarative interface to data preparation, model architecture, training and optimization hyperparameters, and inference.
+Sequifier is the *terraform for foundation modelling*: It provides a declarative interface to data preparation, model architecture, training and optimization hyperparameters, and inference.
 
 It provides shared infrastructure and guarantees to a wide range of foundation modelling applications that are individually too small to sustain their own ecosystem, unlike language modelling, audio and image or video generation.
 
 Any implementation of a foundation model will operate under several constraints: computate constraints such as RAM, GPU memory, disk speed and device connectivity, scaling dimenstions such as process parallelisation and multi-gpu and multi-node training, and desirable properties such as efficiency, idempotency, early failure on misconfiguration, resumability and reproducibility. Sequifier aims to push out the pareto frontier on these dimensions and provide the best starting point for any de novo foundation modelling initiative.
 
-## How does it work?
+#### Empowering researchers
 
-Sequifier has three core commands, `preprocess`, `train`, and `infer`. Each is configurable via a config file, that specifies the data layout and structure and the other attributes that you want from your model.
+For the individual researcher, sequifier cuts the development time of a model significantly: typically, some preprocessing and the subsequent model evaluation are specific to the modelling problem, but all the steps in between are taken care of.
 
-They enable you to go from multivariate sequence data, images and/or video to a model that ingests such data, and emits either multivariate sequence data (but not images/video) or embeddings.
+This enables:
 
-If input and target variables are the same, or a missing input variables can be computed from target variables, it supports full autoregressive inference.
+- rapid prototyping on a configurable architecture
+- trusted implementation (you can't create bugs inadvertently)
+- scaling preprocessing and training across machines
+- hyperparameter optimization using Optuna
 
-Through configuration, most modern architectural variants such as RoPE, GQA, SwiGLU, and RMSNorm are supported. The ambition is to follow the frontier when industrial-grade implementations become available.
+#### Production-grade model lifecycles
 
-You can train the transformer using supervised losses or reinforcement learning algorithms such as imitation learning, implicit Q learning (IQL), direct policy optimization (DPO), proximal policy optimization (PPO) or group relative policy optimization (GRPO).
+Not every foundation model has a research team behind it: some will be trained and fine tuned automatically for individual users or user segments, or different deployments, machines, or domains of various kinds, with the specifics depending on the application. This creates considerable complexity in any real life deployment of foundation models.
+
+Defining and training such models using sequifier reduces that complexity significantly: it makes the management of model versions and iterations much easier, facilitates provenance and change tracking, and makes reproduction of any trained checkpoint much simpler. Instead of several complex codebases glued together with hacky scripts, you get clean configs and standardized artefacts, that can be rerun in isolation.
 
 ## What can I use it for?
 
@@ -85,22 +90,27 @@ These independent references illustrate some of them; inclusion does not imply t
 
 Sequifier aims to standardise model implementation across these fields, to make them comparable, transfer learnings between domains, and converge on optimal solutions faster.
 
-## Empowering researchers
+## How does it work?
 
-For the individual researcher, sequifier cuts the development time of a model significantly: typically, some preprocessing and the subsequent model evaluation are specific to the modelling problem, but all the steps in between are taken care of.
+Sequifier has three main stages, preprocessing, training, and inference. Each is configurable via a config file, that specifies the data layout and structure and the other attributes that you want from your model.
 
-This enables:
+You can go from multivariate sequence data, images and/or video to a model that ingests such data, and emits either multivariate sequence data (but not images/video) or embeddings, in a few commands.
 
-- rapid prototyping on a configurable architecture
-- trusted implementation (you can't create bugs inadvertently)
-- scaling preprocessing across cores and training across GPUs and nodes
-- hyperparameter optimization using Optuna
+Through configuration, most modern architectural variants such as RoPE, GQA, SwiGLU, and RMSNorm are supported. The ambition is to follow the frontier when industrial-grade implementations become available.
 
-## Production-grade model lifecycles
+You can train the transformer using supervised losses or reinforcement learning algorithms such as imitation learning, implicit Q learning (IQL), direct policy optimization (DPO), proximal policy optimization (PPO) or group relative policy optimization (GRPO).
 
-Not every foundation model has a research team behind it: some will be trained and fine tuned automatically for individual users or user segments, or different deployments, machines, or domains of various kinds, with the specifics depending on the application. This creates considerable complexity in any real life deployment of foundation models.
 
-Defining and training such models using sequifier reduces that complexity significantly: it makes the management of model versions and iterations much easier, facilitates provenance and change tracking, and makes reproduction of any trained checkpoint much simpler. Instead of several complex codebases glued together with hacky scripts, you get clean configs and standardized artefacts, that can be rerun in isolation.
+## Data Formats
+
+The core modelling primitive is the `itemPosition`: it represents the unit of the sequence that the core model learns to represent. At each `itemPosition` value, each input variable is projected into a latent space, and these are concatenated and ingested into the core model. An input variable can be real-valued, discrete/categorical, a uni- or multivariate sequence itself (this type is ingested using `structured input`), or an image (or equivalently, a frame from a video). Real-valued variables are passed to a fixed position in the core model, or transformed through a single neural layer, discrete variables are projected to an embedding space, sequences are fed through a small transformer model, and images are ingested through a ResNet model, which has either frozen weights from a separate training run, or is newly initialized. This is a high-level overview, with many of the specifics configurable.
+
+The second modelling primitive is the `static variable`. It is a variable which is either real-valued or categorical, and is embedded separately from the variables that vary with `itemPosition` - they stay constant across a whole individual sequence, and vary only between sequences. Each static variable is embedded separately and these embeddings are concatenated. This joint embedding for all static variables is prepended to the sequence of `itemPosition`-variant embeddings, and treated as the "first" token for any window based on that sequence.
+
+## Target Variables
+
+Sequifier currently supports categorical and real-valued target variables, but not images (sequences will be supported, but aren't yet). This is because training generative models for video outputs requires modelling approaches that are not supported by sequifier, and the recommendation is to use other frameworks that are specialised in the development of such models.
+
 
 ## The Seven Commands
 
@@ -128,11 +138,6 @@ The processing and visualization commands have dedicated documentation pages:
 - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
 - [visualize-training documentation](./documentation/commands/visualize-training.md)
 
-## Other Materials
-
-To get the full documentation, visit [sequifier.com](https://sequifier.com)
-
-For changes in each published version, see the [release notes](https://github.com/0xideas/sequifier/releases).
 
 ## Structure of a Sequifier Project
 
@@ -161,16 +166,6 @@ YOUR_PROJECT_NAME/
 The `sequifier` commands should typically be run in the project root.
 
 Within YOUR_PROJECT_NAME, you can also add other folders for additional steps, such as `notebooks` or `scripts` for pre- or postprocessing, and `analysis`, `visualizations` or `evals` for files you generate in other, manual steps.
-
-## Data Formats
-
-The core modelling primitive is the `itemPosition`: it represents the unit of the sequence that the core model learns to represent. At each `itemPosition` value, each input variable is projected into a latent space, and these are concatenated and ingested into the core model. An input variable can be real-valued, discrete/categorical, a uni- or multivariate sequence itself (this type is ingested using `structured input`), or an image (or equivalently, a frame from a video). Real-valued variables are passed to a fixed position in the core model, or transformed through a single neural layer, discrete variables are projected to an embedding space, sequences are fed through a small transformer model, and images are ingested through a ResNet model, which has either frozen weights from a separate training run, or is newly initialized. This is a high-level overview, with many of the specifics configurable.
-
-The second modelling primitive is the `static variable`. It is a variable which is either real-valued or categorical, and is embedded separately from the variables that vary with `itemPosition` - they stay constant across a whole individual sequence, and vary only between sequences. Each static variable is embedded separately and these embeddings are concatenated. This joint embedding for all static variables is prepended to the sequence of `itemPosition`-variant embeddings, and treated as the "first" token for any window based on that sequence.
-
-## Target Variables
-
-Sequifier currently supports categorical and real-valued target variables, but not images (sequences will be supported, but aren't yet). This is because training generative models for video outputs requires modelling approaches that are not supported by sequifier, and the recommendation is to use other frameworks that are specialised in the development of such models.
 
 ### Complete Example of Training and Inferring a Transformer Model
 
@@ -300,6 +295,12 @@ For the full guide on how to configure a distributed run, check the [multi-GPU t
 ### System Requirements
 
 Sequifier currently runs on MacOS and Linux.
+
+## Other Materials
+
+To get the full documentation, visit [sequifier.com](https://sequifier.com)
+
+For changes in each published version, see the [release notes](https://github.com/0xideas/sequifier/releases).
 
 ## Citation
 
