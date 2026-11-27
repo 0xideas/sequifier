@@ -114,7 +114,8 @@ class EpisodeDecisions(EpisodeFeatures):
         episode = self.episodes[index]
         length = self.lengths[index]
         actions = [
-            action_index(value, self.config) for value in episode.actions[:length]
+            action_index(episode.decision(step).action, self.config)
+            for step in range(length)
         ]
         returns = (
             return_labels(episode, length, self.config.returns.gamma)

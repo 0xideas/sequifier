@@ -95,8 +95,12 @@ argmax/locations, without claiming a global joint mode.
 Inputs retain the complete scalar/static/depth/image/mask execution schema.
 Prepared sources reuse depth masks and image stores; tables may contain nested
 Parquet payloads. Each `feedback.<input>` entry names its `action` and optional `initial` value for the first decision.
-`decision_position` defaults to `-1` and selects one existing decoder position,
-not an action block. Historical likelihoods use only observations available then.
+The policy next-action offset is 1. History ends at row `i`, and the action and
+its outcome are recorded on row `i+1`. Imitation, preference scoring, and IQL
+read the executed action from that arrival. The episode reader aligns the action
+with the history before scoring. `decision_position` selects a slot within the
+decoder output (the last slot by default, `-1`). The physical target row is
+always one step after the decision.
 Return conditioning requires an existing `__policy_return` input and known offline
 tails or online `initial_desired_return`.
 

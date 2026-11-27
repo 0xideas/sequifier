@@ -10,7 +10,7 @@ import polars as pl
 import torch
 from loguru import logger
 
-from sequifier.config.column_names import INCOMING_ACTION_PRESENT
+from sequifier.config.column_names import INCOMING_ACTION_PRESENT, next_item_coordinates
 from sequifier.config.inference_common import inference_image_store
 from sequifier.config.policy_infer_config import ResolvedPolicyInferenceConfig
 from sequifier.helpers import configure_determinism
@@ -199,7 +199,7 @@ def _indexed_policy_frames(view, spec, config):
             continue
         start, end = bounds[sequence]
         for first, stop in view.covered_intervals(sequence, start, end):
-            if view.has_arrival_rows and config.rollout is None:
+            if config.rollout is None:
                 # A split owns the arriving target. Predict it from its predecessor.
                 owned = max(first, start - 1)
                 stop -= 1
@@ -247,9 +247,7 @@ def _stored_policy_frames(source, spec, config):
         sequence = rows["sequenceId"][0]
         low, high = bounds[sequence]
         start = max(low, rows["itemPosition"][0])
-        if config.rollout is None and (getattr(metadata, "provenance", None) or {}).get(
-            "action_columns"
-        ):
+        if config.rollout is None:
             start = max(low - 1, rows["itemPosition"][0])
             high = min(high, rows["itemPosition"][-1] + 1) - 1
         if start >= high or start > rows["itemPosition"][-1]:
@@ -392,7 +390,7 @@ def infer_rollout(policy, history, config, identity):
             "model_interface": config.model_interface,
             "seed_row_index": rollout.seed_row_index,
             "seed_origin": seed_origin(
-                config, identity["sequenceId"], identity["itemPosition"]
+                config, identity["sequenceId"], identity["decisionItemPosition"]
             ),
             "enforce_determinism": config.enforce_determinism,
             "seed": config.seed,
@@ -623,7 +621,7 @@ def _decision_histories(frames, spec, config, row_key, *, seed_index=None):
                             "sequenceId": sequence,
                             "subsequenceId": index,
                             "windowStartOffset": 0,
-                            "itemPosition": position,
+                            **next_item_coordinates(position),
                         },
                     )
                 index += 1

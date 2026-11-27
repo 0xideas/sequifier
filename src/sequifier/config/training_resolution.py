@@ -43,7 +43,6 @@ from sequifier.helpers import (
     ModelWindowView,
     derive_target_column_types,
     normalize_path,
-    resolve_window_view,
 )
 from sequifier.io.indexed_sequences import IndexedView, is_indexed_view
 from sequifier.model.execution_options import ModelExecutionOptions
@@ -776,10 +775,7 @@ def resolve_execution_settings(
         values["training_objective"] = (
             supervised[-1].learning.objective_name("causal") if supervised else "policy"
         )
-    if (
-        values["training_objective"] in {"policy", "bert"}
-        and "target_offset" not in values
-    ):
+    if values["training_objective"] == "bert" and "target_offset" not in values:
         values["target_offset"] = 0
     run_execution.precision.layer_type_dtypes = dtypes
     run_execution.max_concat_tensors = max_concat
@@ -1059,7 +1055,7 @@ def resolve_training_run(
                 dataset_storage or ResolvedInterfaceStorage.from_metadata(value)
             )
 
-            resolve_window_view(selected_storage.storage_layout, interface.window_view)
+            selected_storage.validate_view(interface.window_view)
         if dataset_metadata is not None and value is not dataset_metadata:
             # Fitting or an explicit declaration must agree with the encoded supervised data.
             features = _part_features(dataset_metadata, spec)

@@ -8,11 +8,7 @@ import pyarrow as pa
 
 from sequifier.io.atomic import atomic_path
 from sequifier.io.preprocessing_workspace import preprocessing_workspace
-from sequifier.io.sequence import (
-    TransitionColumns,
-    register_sequence_name,
-    seed_metadata,
-)
+from sequifier.io.sequence import register_sequence_name, seed_metadata
 from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.row_layout import ACTION_METADATA, TrajectoryRowLayout
 from sequifier.trajectory.sequence_output import arrival_table, publish_sequences
@@ -21,14 +17,12 @@ from sequifier.trajectory.tables import SEQUENCE_NAME_COLUMN
 
 
 def episode_table(sequence, episode, layout, policy, *, first_position=None):
-    transitions = episode.transitions or TransitionColumns()
     first_position = (
         episode.first_position if first_position is None else first_position
     )
     rows = []
     for offset in range(len(episode.actions) + 1):
-        action = episode.incoming_actions[offset]
-        step = transitions.at(offset - 1) if offset else {}
+        decision = episode.decision(offset - 1) if offset else None
         rows.append(
             layout.row(
                 {
@@ -39,10 +33,10 @@ def episode_table(sequence, episode, layout, policy, *, first_position=None):
                 },
                 episode.observation(offset),
                 episode.static_inputs,
-                action=action,
-                reward=step.get("rewards"),
-                terminated=step.get("terminated"),
-                truncated=step.get("truncated"),
+                action=decision.action if decision else episode.previous_action,
+                reward=decision.reward if decision else None,
+                terminated=decision.terminated if decision else None,
+                truncated=decision.truncated if decision else None,
                 masked=episode.observation_masks[offset],
             )
         )

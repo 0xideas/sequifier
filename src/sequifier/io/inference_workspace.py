@@ -165,9 +165,8 @@ def inference_workspace(request, *, random_seed, skip_metadata):
         identity["run"]["reproducibility"]["seed"] = "random"
     if request.task == "policy":
         identity["policy_input_layout_version"] = ContractVersions.POLICY_INPUT_LAYOUT
-    if request.task == "policy" and not request.rollout:
-        # Invalidate cached tables when policy prediction semantics change.
-        identity["prediction_table_version"] = ContractVersions.POLICY_PREDICTION_TABLE
+    if request.task in {"policy", "forecast"} and not request.rollout:
+        identity["prediction_table_version"] = ContractVersions.PREDICTION_TABLE
     if getattr(request.output, "output_probabilities", False):
         identity["probability_table_version"] = ContractVersions.PROBABILITY_TABLE
     identity["skip_metadata"] = skip_metadata

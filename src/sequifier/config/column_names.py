@@ -1,10 +1,13 @@
-"""Reserved names in authored feature and output column declarations."""
+"""Prediction coordinates and reserved names in column declarations."""
 
+NEXT_ACTION_OFFSET = 1
 PREDICTION_COORDINATES = (
     "sequenceId",
     "subsequenceId",
     "windowStartOffset",
     "itemPosition",
+    "decisionItemPosition",
+    "targetItemPosition",
 )
 ACTION_LOG_PROBABILITY = "action_log_probability"
 INCOMING_ACTION_PRESENT = "incomingActionPresent"
@@ -24,6 +27,16 @@ _STORAGE_COLUMNS = {
     "attention_valid_mask",
     "target_valid_mask",
 }
+
+
+def next_item_coordinates(decision_position):
+    """Output coordinates for a one-step prediction, scalar or column-wise."""
+    target_position = decision_position + NEXT_ACTION_OFFSET
+    return {
+        "itemPosition": target_position,
+        "decisionItemPosition": decision_position,
+        "targetItemPosition": target_position,
+    }
 
 
 def validate_column_names(names, field, *, allowed=(), prefixes=()):

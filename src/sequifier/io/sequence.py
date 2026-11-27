@@ -4,6 +4,7 @@ These records describe data, independently of the simulator, collection context
 length, prediction bindings, preprocessing or the algorithm that will consume it.
 """
 
+from dataclasses import dataclass
 from functools import cached_property
 
 import polars as pl
@@ -18,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from sequifier.config.column_names import NEXT_ACTION_OFFSET
 from sequifier.io.values import DomainValue, domain_scalar
 
 # Physical fields are kept separate from model features at the same coordinate.
@@ -129,6 +131,16 @@ class ContextObservation(BaseModel):
         )
 
 
+@dataclass(frozen=True, slots=True)
+class EpisodeDecision:
+    decision_position: int
+    target_position: int
+    action: dict[str, DomainValue]
+    reward: float | None
+    terminated: bool | None
+    truncated: bool | None
+
+
 class SequenceEpisode(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
@@ -196,6 +208,23 @@ class SequenceEpisode(BaseModel):
     @property
     def positions(self):
         return range(self.first_position, self.first_position + len(self.actions) + 1)
+
+    def decision(self, step: int) -> EpisodeDecision:
+        """Read the action and available outcomes of one episode-local decision."""
+        if not 0 <= step < len(self.actions):
+            raise IndexError(step)
+        position = self.first_position + step
+        action = self.incoming_actions[step + NEXT_ACTION_OFFSET]
+        assert action is not None
+        outcome = self.transitions.at(step) if self.transitions else {}
+        return EpisodeDecision(
+            decision_position=position,
+            target_position=position + NEXT_ACTION_OFFSET,
+            action=action,
+            reward=outcome.get("rewards"),
+            terminated=outcome.get("terminated"),
+            truncated=outcome.get("truncated"),
+        )
 
     def observation(self, index: int) -> dict:
         return {column: values[index] for column, values in self.observations.items()}

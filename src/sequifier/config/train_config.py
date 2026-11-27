@@ -346,6 +346,10 @@ def validate_training_contract(run, model, phases, settings: ModelExecutionOptio
         stage_objective = get_objective_class(
             learning.objective_name(settings.training_objective)
         )
+        if stage_objective.name == "policy":
+            stage_objective.validate_window_view(
+                settings.context_length, settings.target_offset
+            )
         if stage_objective.uses_causal_attention and settings.attention != "causal":
             task = (
                 "forward prediction"

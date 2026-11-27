@@ -44,7 +44,7 @@ class ContractVersions:
     INFERENCE_WORKSPACE = 101
     POLICY_INPUT_LAYOUT = 104
     PROBABILITY_TABLE = 100
-    POLICY_PREDICTION_TABLE = 105
+    PREDICTION_TABLE = 106
 
     # Algorithm and implementation identities used in fingerprints and seeds.
     HASH_CODEC = 100

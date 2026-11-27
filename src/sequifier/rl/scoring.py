@@ -19,7 +19,7 @@ def sequence_log_probabilities(actor, episode, start, end, chunk_size, *, rounds
             (view.episode_inputs(episode, t, None) for t in positions), actor.device
         ) as inputs:
             actions = action_batch(
-                [episode.actions[t] for t in positions],
+                [episode.decision(t).action for t in positions],
                 actor.config,
                 device=actor.device,
                 encoded=False,

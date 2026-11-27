@@ -8,6 +8,7 @@ from typing import Any, Generic, Literal, Optional, TypeVar
 import numpy as np
 from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
+from sequifier.config.column_names import NEXT_ACTION_OFFSET, PREDICTION_COORDINATES
 from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
@@ -123,7 +124,9 @@ def _merge_loaded_execution_values(
         values[field] = loaded_value
 
 
-def _execution_values(settings: Any, interface: Any) -> dict[str, Any]:
+def _execution_values(
+    settings: Any, interface: Any, *, policy: bool = False
+) -> dict[str, Any]:
     return {
         "model_interface": interface.name,
         "input_columns": list(interface.input_columns),
@@ -137,7 +140,7 @@ def _execution_values(settings: Any, interface: Any) -> dict[str, Any]:
         "target_column_types": dict(interface.target_column_types),
         "training_objective": settings.training_objective,
         "context_length": settings.context_length,
-        "target_offset": settings.target_offset,
+        "target_offset": NEXT_ACTION_OFFSET if policy else settings.target_offset,
         "prediction_length": interface.decoder.prediction_length,
         "decoder_support_length": interface.decoder.support_length,
     }
@@ -315,7 +318,7 @@ def _resolve_policy_inference(
         and request.rollout.environment.units != policy.units
     ):
         raise ValueError("rollout environment units differ from policy artifact")
-    reserved = {"sequenceId", "subsequenceId", "windowStartOffset", "itemPosition"}
+    reserved = set(PREDICTION_COORDINATES)
     if reserved & set(policy.actions) or (
         request.output_probabilities and "action_log_probability" in policy.actions
     ):
@@ -331,7 +334,7 @@ def _resolve_policy_inference(
     authored = request.model_dump(exclude_unset=True)
     _merge_loaded_execution_values(
         authored,
-        _execution_values(execution.options, interface),
+        _execution_values(execution.options, interface, policy=True),
         f"policy artifact {model_path!r}",
     )
     from sequifier.io.prepare_inference import (
@@ -465,7 +468,9 @@ def _policy_training_route(values):
         _merge_loaded_execution_values(
             values,
             _execution_values(
-                loaded.resolved.execution.options, loaded.resolved.interface(interface)
+                loaded.resolved.execution.options,
+                loaded.resolved.interface(interface),
+                policy=True,
             ),
             f"training dataset {name!r}",
         )

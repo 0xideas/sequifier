@@ -41,29 +41,26 @@ class IQLTransitionDataset:
                 raise ValueError(
                     f"IQL episode {episode.episode_id!r} lacks required transition columns: {missing}"
                 )
-            assert transitions is not None
             for step in range(length):
-                location = (
-                    f"IQL episode {episode.episode_id!r} "
-                    f"step {episode.first_position + step}"
-                )
-                reward = numeric_scalar(transitions.rewards[step], f"{location} reward")
+                decision = episode.decision(step)
+                location = f"IQL episode {episode.episode_id!r} step {decision.decision_position}"
+                reward = numeric_scalar(decision.reward, f"{location} reward")
                 if not torch.isfinite(torch.tensor(reward, dtype=torch.float32)):
                     raise ValueError(f"{location}: reward exceeds finite float32 range")
 
     def validate_normalization(self, interface):
         for episode, length in zip(self.decisions.episodes, self.decisions.lengths):
             step = length - 1
-            if self._ends_at_horizon(episode, step):
+            if self._ends_at_horizon(episode, episode.decision(step)):
                 continue
             inputs = self.view.successor_inputs(episode, step)
             checked_policy_features(inputs, interface)
 
-    def _ends_at_horizon(self, episode, step):
+    def _ends_at_horizon(self, episode, decision):
         # A fragment beginning at zero with a previous action has no known offset.
         known_offset = episode.starts_episode or episode.first_position > 0
         horizon = self.view.config.episode_horizon
-        return known_offset and episode.first_position + step + 1 == horizon
+        return known_offset and decision.target_position == horizon
 
     def __len__(self):
         return len(self.decisions)
@@ -71,19 +68,19 @@ class IQLTransitionDataset:
     def __getitem__(self, index):
         episode_index, step = self.decisions.locate(index)
         episode = self.decisions.episodes[episode_index]
-        transitions = episode.transitions
-        ends_at_horizon = self._ends_at_horizon(episode, step)
+        decision = episode.decision(step)
+        ends_at_horizon = self._ends_at_horizon(episode, decision)
         current = self.view.episode_inputs(episode, step, None)
         next_inputs = self.view.successor_inputs(episode, step)
         return IQLBatch(
             current=current,
             successor=next_inputs,
             action=action_batch(
-                [episode.actions[step]], self.decisions.config, encoded=False
+                [decision.action], self.decisions.config, encoded=False
             ),
-            reward=torch.tensor([transitions.rewards[step]], dtype=torch.float32),
+            reward=torch.tensor([decision.reward], dtype=torch.float32),
             bootstrap=torch.tensor(
-                [not ends_at_horizon and not transitions.terminated[step]],
+                [not ends_at_horizon and not decision.terminated],
                 dtype=torch.bool,
             ),
         )

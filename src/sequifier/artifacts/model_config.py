@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from sequifier.config.column_names import NEXT_ACTION_OFFSET
 from sequifier.config.components import BackboneComponentConfig
 from sequifier.config.metadata import validate_tensor_payload_contract
 from sequifier.config.model_interface import (
@@ -11,7 +12,7 @@ from sequifier.config.model_interface import (
     ResolvedModelInterface,
 )
 from sequifier.contract_versions import ContractVersions, require_contract_version
-from sequifier.helpers import ModelWindowView, resolve_window_view
+from sequifier.helpers import ModelWindowView
 from sequifier.model.execution import ModelExecution
 from sequifier.model.execution_options import (
     DEFAULT_MAX_CONCAT_TENSORS,
@@ -148,6 +149,10 @@ def model_execution_from_model_config(
     context_length = int(values["context_length"])
     target_offset = int(values.get("target_offset", 1))
     objective = str(values["training_objective"])
+    # Older policy artifacts described the decoder label slot rather than the
+    # physical arrival row. Their weights and decision histories are compatible.
+    if objective == "policy" and target_offset == 0:
+        target_offset = NEXT_ACTION_OFFSET
     options = ModelExecutionOptions(
         training_objective=objective,
         forward_attention=values.get("forward_attention"),
@@ -171,7 +176,7 @@ def model_execution_from_model_config(
         validate_interface_versions(interface)
         interface, storage = split_interface_storage(interface)
         if storage is not None:
-            resolve_window_view(storage.storage_layout, window_view)
+            storage.validate_view(window_view)
             interface_storage[name] = storage
         fields = dict(interface)
         actual_schema = ExecutionSchema.from_dict(fields.pop("execution_schema"))

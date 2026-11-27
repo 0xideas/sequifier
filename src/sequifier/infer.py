@@ -13,6 +13,7 @@ import torch
 from beartype.typing import Iterator
 from loguru import logger
 
+from sequifier.config.column_names import next_item_coordinates
 from sequifier.config.infer_config import ResolvedInferenceConfig, load_inferer_config
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
@@ -1176,12 +1177,19 @@ def infer_generative(
                     )
 
         assert preds is not None
+        coordinates = {"itemPosition": item_positions_for_preds}
+        if (
+            config.window_view.target_offset == 1
+            and config.training_objective in {"causal", "final_value", "policy"}
+            and inferer.prediction_length == 1
+        ):
+            coordinates = next_item_coordinates(item_positions_for_preds - 1)
         predictions = pl.DataFrame(
             {
                 "sequenceId": sequence_ids_for_preds,
                 "subsequenceId": subsequence_ids_for_preds,
                 "windowStartOffset": window_offsets_for_preds,
-                "itemPosition": item_positions_for_preds,
+                **coordinates,
                 **{
                     target_column: preds[target_column].flatten()
                     for target_column in inferer.target_columns

@@ -308,7 +308,7 @@ selection, read/write formats, device, seed, `enforce_determinism` and batch siz
 | `action_selection` | `deterministic`; sequential mode/location choices, or `stochastic` sampling |
 | `desired_return` | null; fixed budget for return-conditioned policies |
 | `input.desired_return_column` | `desired_return`; per-row budget when no fixed budget is supplied |
-| `input.action_columns` | {}; recorded current-action column mappings |
+| `input.action_columns` | {}; recorded incoming-action column mappings |
 | `output.output_probabilities` | false; include joint log probability and write separate target-specific categorical probability files |
 | `rollout` | null; execute in an online policy environment instead of writing prediction rows |
 
@@ -317,13 +317,13 @@ Policy prediction and rollout group rows by `sequenceId` and order them by
 be non-null integers. If your source uses `episode` and `step` for these roles,
 map them to `sequenceId` and `itemPosition` before preprocessing.
 Policy predictions and rollouts read available preceding context at split boundaries.
-Only split-owned decisions get output rows or seed indices. Use
+The split owns a prediction by its target row and a rollout seed by its observation row. Use
 `rollout.seed_history: current` for a fresh one-observation reset.
 
 Optional assertions `assertions.input_columns`, `assertions.static_columns`,
 `assertions.target_columns`, `assertions.column_data_types`, `assertions.target_column_types`, `assertions.training_objective`,
 `assertions.context_length`, `assertions.target_offset`, `assertions.prediction_length` and `assertions.decoder_support_length` must
-match the selected artifact. Unknown/cross-route options fail even at default values.
+match the selected policy contract. For policy prediction, the action target offset is always 1. Unknown/cross-route options fail even at default values.
 Policy rejects external per-column sampling, dropout, category decoding,
 autoregression and `generation_steps`. Policy accepts `input.training_route` to select a
 prepared dataset view. For an in-memory training partition, select `input.layout: raw` and supply the inference table and its original preprocessing metadata.
@@ -357,9 +357,14 @@ input:
 
 With a named split, the metadata selects the physical input. An indexed view
 supplies its own fitted metadata for artifact validation. A policy prediction on
-a named trajectory split uses each owned arrival as a target. The prediction
-carries the coordinate of its input observation, one position before that arrival.
-A fresh prediction view can request the next action at every observation. With ordinary input tables, use `input.action_columns` if the
+a named split uses each covered target with an available predecessor. A policy
+decision from row 7 emits `decisionItemPosition=7`, `targetItemPosition=8`
+and `itemPosition=8`, matching a one-step forecast. Join predictions to recorded
+actions on `sequenceId` and `itemPosition`. Older policy prediction files used
+`itemPosition` for the decision row.
+A fresh prediction view can request the next action at every observation,
+including the final one. Its target coordinate can extend beyond the input.
+With ordinary input tables, use `input.action_columns` if the
 physical column names differ from the policy action names. Feedback at a decision
 uses the incoming action recorded alongside the observation at that position.
 

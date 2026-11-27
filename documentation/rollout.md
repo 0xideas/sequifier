@@ -107,7 +107,9 @@ arrivals produced by its own actions.
 
 Use the manifest as `preprocessing_data_path` for supervised learning. History
 through position `i` predicts the action on row `i+1`. The final row supplies
-the last target. A split owns a label by its target coordinate. The derived
+the last target. A split owns a label by its target coordinate. In policy and
+one-step forecast prediction files, `itemPosition` identifies that target row.
+Rollout seed coordinates identify the observation where the decision starts. The derived
 numeric feature `incomingActionPresent` distinguishes reset from a recorded zero
 action. Forecast rollouts populate this feature automatically when it is a model input.
 An observation mask hides sensor features while retaining recorded action feedback.

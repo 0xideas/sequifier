@@ -157,7 +157,7 @@ class PreferenceDataset:
                 # Validate every selected decision and all its causal inputs before training.
                 for step in range(span.start, span.end):
                     inputs = view.episode_inputs(episode, step, None)
-                    action = action_index(episode.actions[step], config)
+                    action = action_index(episode.decision(step).action, config)
                     digest.update(
                         fingerprint(
                             {

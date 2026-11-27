@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from sequifier.config.column_names import NEXT_ACTION_OFFSET
 from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
@@ -148,32 +149,20 @@ class CausalObjective(Objective):
     name = "causal"
 
 
-class PolicyObjective(Objective):
-    """Causal attention with same-position action labels, never future labels."""
+class PolicyObjective(CausalObjective):
+    """History through row i predicts the action recorded on row i + 1.
+
+    Episode-based learners supply this already-aligned action to the decoder.
+    Stored supervised windows gather it using the physical target offset.
+    """
 
     name = "policy"
-    forward_looking = False
-
-    @classmethod
-    @beartype
-    def default_target_offset(cls) -> int:
-        return 0
 
     @classmethod
     @beartype
     def validate_window_view(cls, context_length: int, target_offset: int) -> None:
-        if target_offset != 0:
-            raise ValueError("Policy views require target_offset=0")
-
-    @classmethod
-    @beartype
-    def item_positions(
-        cls, start_positions: np.ndarray, context_length: int, prediction_length: int
-    ) -> np.ndarray:
-        return (
-            start_positions[:, None]
-            + np.arange(context_length - prediction_length, context_length)[None, :]
-        ).reshape(-1)
+        if target_offset != NEXT_ACTION_OFFSET:
+            raise ValueError("Policy views require target_offset=1")
 
 
 class FinalValueObjective(CausalObjective):

@@ -145,7 +145,11 @@ collection manifests. See the [hyperparameter search guide](../configs/hyperpara
 ## Inference and collection outputs
 
 Forecast and policy predictions share `sequenceId`, `subsequenceId`,
-`windowStartOffset`, `itemPosition` and named prediction columns. Independent policy rows use distinct sequence IDs and item position zero. `windowStartOffset` is
+`windowStartOffset`, `itemPosition` and named prediction columns. Policy and
+one-step causal forecasts include `decisionItemPosition` and `targetItemPosition`.
+The latter equals `itemPosition` and is one greater than the decision position.
+A prediction from an independent observation at position zero has target position one.
+`windowStartOffset` is
 relative to the subsequence. Each policy decision materializes a single window
 in its subsequence, so its offset is zero. Categorical probabilities
 are separate target-specific files under

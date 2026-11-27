@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 
 import torch
 
+from sequifier.config.column_names import NEXT_ACTION_OFFSET
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.contract_versions import ContractVersions
@@ -61,7 +62,7 @@ def encode_feature(value, column: str, config: PolicyEpisodeSpec):
 
 
 class PolicyWindowView:
-    """At decision t, expose o_t and a_(t-1), and supervise a_t separately.
+    """History ends at row i. The executed action label comes from row i + 1.
 
     Previous actions are decoder-local IDs at this boundary. They are converted
     to the persisted input vocabulary here; the start token is input-only.
@@ -70,10 +71,12 @@ class PolicyWindowView:
     def __init__(self, config: ResolvedPolicyBinding):
         self.config = config
         self._categorical_codecs = {}
-        self.view = ModelWindowView(config.context_length, "policy", 0)
+        self.view = ModelWindowView(config.context_length, "policy", NEXT_ACTION_OFFSET)
         self.resolved = resolve_window_view(
             StoredWindowLayout(
-                config.context_length, 0, ContractVersions.STORED_WINDOW_LAYOUT
+                config.context_length + NEXT_ACTION_OFFSET,
+                NEXT_ACTION_OFFSET,
+                ContractVersions.STORED_WINDOW_LAYOUT,
             ),
             self.view,
         )

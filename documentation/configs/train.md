@@ -322,6 +322,10 @@ several future tokens as in LLM multi-token prediction. Training currently
 computes loss over all valid decoded positions, regardless of
 `prediction_length`. Forward prediction phases require causal attention to keep future inputs out of these predictions.
 
+The policy objective requires `target_offset: 1`. A stored window gathers the
+action from the next row. An episode-based learner receives that same action
+already paired with its decision history.
+
 To train a next-occurrence objective, declare the trigger
 in each supervised phase's `learning` settings:
 
