@@ -49,6 +49,11 @@ from sequifier.rl.run_state import (
     PolicyRunResult,
     require_equal,
 )
+from sequifier.rl.selection import (
+    PolicyCandidate,
+    load_candidate,
+    policy_evaluation_identity,
+)
 from sequifier.rl.telemetry import TelemetryJournal
 from sequifier.runtime.plan import (
     PhaseOutcome,
@@ -184,6 +189,7 @@ def execute_policy(
     preparation=None,
     backbone_revision=None,
     environment=None,
+    previous_commit=None,
 ):
     from sequifier.training.distributed_strategy import (
         LocalStrategy,
@@ -193,6 +199,11 @@ def execute_policy(
 
     device = environment.device if environment else torch.device(config.parent.device)
     settings = config.parent.run.execution
+    evaluation_execution = {
+        "device": device.type,
+        "precision": settings.precision.model_dump(mode="json"),
+        "distribution": settings.distribution_settings.model_dump(mode="json"),
+    }
     precision = PrecisionPolicy.from_settings(settings, device)
     strategy = (
         strategy_for(
@@ -224,6 +235,7 @@ def execute_policy(
         config,
         plan,
         run_id=identity.run_id if identity is not None else None,
+        previous_commit=previous_commit,
     )
     resuming = recovery is not None
     terminal = recovery is not None and (
@@ -430,6 +442,22 @@ def execute_policy(
             initialization["actor_initialization"] = recovery.initialization
         actor.eval()
         reference, reference_identity = references.resolve(actor, phase_index)
+        evaluation = policy_evaluation_identity(
+            phase,
+            representation.identity,
+            evaluation_execution,
+            validation=(
+                data_contract[position][1]
+                if data_contract[position] is not None
+                else None
+            ),
+            adapter=adapter_contract.get(f"{phase_index}.evaluation"),
+            reference=reference_identity,
+        )
+        incoming_best = PolicyCandidate()
+        if current_state is None and phase.model_selection.scope == "compatible_phases":
+            previous = recovery.completed[-1] if recovery.completed else previous_commit
+            incoming_best = load_candidate(previous, evaluation)
 
         def commit(state):
             representation.validate_actor(actor, f"phases.{phase.name}.actor")
@@ -471,6 +499,7 @@ def execute_policy(
                 if transition.continues_optimizer
                 else None,
                 preserve_optimizer=transition.preserves_optimizer,
+                incoming_best=incoming_best,
             )
             with compiled_policies(
                 config.parent.run.execution.policy_compile_mode, actor, reference
@@ -520,15 +549,17 @@ def execute_policy(
             }
         )
         return PhaseOutcome(
-            (replace(execution, result=result), telemetry_position), result.stop_scope
+            (replace(execution, result=result), telemetry_position, evaluation),
+            result.stop_scope,
         )
 
     def commit_phase(transition, outcome):
         nonlocal actor
-        execution, position = outcome.result
+        execution, position, evaluation = outcome.result
         actor = execution.actor
         commit = on_writer(
-            strategy, lambda: recovery.finish_phase(execution, position, checkpoint)
+            strategy,
+            lambda: recovery.finish_phase(execution, position, evaluation, checkpoint),
         )
         save_checkpoint(commit=commit)
         if not writer:

@@ -629,6 +629,8 @@ freezing and training duration do not affect compatibility. BERT phases have
 different evaluation-mask seeds and therefore start separate histories. Set
 `model_selection.scope: phase` to explicitly start a new history; the default is
 `compatible_phases`. Stopping patience remains phase-local.
+Policy phases use the same scope settings with their own
+[evaluation compatibility rules](../policy-learning.md#authoring-and-optimization).
 Best handoff, stopping and plateau
 scheduling require an evaluation monitor. See [ownership](ownership.md#phase-settings).
 

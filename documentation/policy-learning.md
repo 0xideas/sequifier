@@ -34,11 +34,26 @@ arguments; grouped optimizer plans set their own rates. Policy schedulers advanc
 on optimizer steps; plateau/compound schedulers are unsupported. `OneCycleLR.total_steps` is derived from the phase budget;
 an explicitly supplied value must match that budget. Unknown roles fail validation.
 
-Imitation, DPO and GRPO default to `batch_size: 32`, `accumulation_batches: 1`,
-`evaluation.cadence: {iterations: 1}` and `checkpoints.cadence: {iterations: 1}`. Accumulation uses actual
-example counts, including partial batches. Network stochastic layers are disabled
-while gradients remain enabled. Best handoff keeps the earliest finite best on ties;
-last handoff keeps the latest transaction. Final updates always evaluate.
+Imitation, DPO and GRPO default to `batch_size: 32` and `accumulation_batches: 1`.
+Accumulation uses actual example counts, including partial batches. Network
+stochastic layers are disabled while gradients remain enabled.
+
+Set `checkpoints.cadence: {iterations: N}` on a phase to retain a snapshot every
+`N` committed iterations. The default is 10 for imitation, DPO, PPO and GRPO,
+and 100 for IQL. Phase completion retains a snapshot even when the final
+iteration falls between cadence points. Evaluation has its own cadence and
+still runs on the final update.
+
+Best handoff keeps the earliest finite best on ties. Consecutive policy phases
+carry that candidate forward when they share an actor representation and an
+evaluation contract. Offline phases compare the held-out data and scoring
+settings, including reference weights and beta for DPO. Online phases compare
+the evaluation environment, seeds, episode limits, action selection, and score
+definition. Set `model_selection.scope: phase` to start a fresh best history.
+`handoff: last` still passes the latest weights, and stopping patience remains
+phase-local. The report's `provenance.selected_phase_index` identifies the phase
+that produced the selected weights.
+
 See [continuation rules](configs/train.md#optimization-across-phases) for
 `optimizer_state: continue`; its default is `reset`.
 

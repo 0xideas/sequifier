@@ -17,6 +17,7 @@ from sequifier.rl.compilation import compile_critics
 from sequifier.rl.phase_optimization import PhaseOptimization, PhaseRoles
 from sequifier.rl.policy import Policy
 from sequifier.rl.role_execution import ActionForward, InferenceRounds
+from sequifier.rl.selection import PolicyCandidate
 from sequifier.rl.telemetry import TelemetryJournal
 from sequifier.runtime.plan import cadence_due, stop_scope, timed_checkpoints_due
 from sequifier.runtime.precision import PrecisionPolicy
@@ -95,6 +96,7 @@ class PhaseExecution:
     weights: dict[str, torch.Tensor]
     result: PhaseResult
     continuation: OptimizerContinuation | None
+    best: PolicyCandidate
 
 
 @dataclass(frozen=True)
@@ -135,6 +137,7 @@ class PhaseContext(Generic[PhaseType, DataType]):
     preserve_optimizer: bool = False
     global_step_offset: int = 0
     strategy: DistributedStrategy = field(default_factory=LocalStrategy)
+    incoming_best: PolicyCandidate = field(default_factory=PolicyCandidate)
 
     @property
     def index(self):
@@ -219,8 +222,12 @@ class PhaseSession:
         self.last_snapshot_time = self.last_checkpoint_time
         self.telemetry = context.telemetry
         self.monitor = context.phase.evaluation.monitor
-        selection = self.state.get("selection", {})
-        self.best = HandoffCandidate(**selection.get("best", {}))
+        selection = self.state["selection"] if self.state else {}
+        self.best = (
+            PolicyCandidate(**selection["best"])
+            if self.state
+            else context.incoming_best
+        )
         self.last_metric = selection.get("last_metric")
         if self.state:
             for role, saved in self.state["optimization"].items():
@@ -364,12 +371,14 @@ class PhaseSession:
         if metric is not None and not math.isfinite(metric):
             raise ValueError(f"non-finite selection metric {self.monitor.metric}")
         self.last_metric = metric
-        self.best = self.best.observe(
+        best = self.best.observe(
             metric,
             self.transaction,
             self.monitor.direction,
             lambda: self.strategy.capture_model_state(self.context.actor.network),
         )
+        if best is not self.best:
+            self.best = PolicyCandidate(**vars(best), phase_index=self.context.index)
         if self._count_stopping:
             self.stopping.observe(
                 self.context.phase.stopping,
@@ -597,6 +606,11 @@ class PhaseSession:
                 provenance={
                     **provenance,
                     "model_interface": actor.interface_name,
+                    "selected_phase_index": (
+                        self.best.phase_index
+                        if phase.handoff == "best"
+                        else self.context.index
+                    ),
                     "trainable_parameters": self.mask_ids,
                     "resolved_seeds": {
                         "run": self.context.identity.run_seed,
@@ -637,4 +651,4 @@ class PhaseSession:
             if self.strategy.rank == 0:
                 actor.network.load_state_dict(weights)
             restore_rng_state(self.strategy.device, random)
-        return PhaseExecution(actor, weights, result, continuation)
+        return PhaseExecution(actor, weights, result, continuation, self.best)

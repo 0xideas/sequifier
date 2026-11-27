@@ -42,7 +42,17 @@ class SupervisedPhaseGroup:
     def release(self):
         self.compiled.parts.clear()
 
-    def run(self, incoming, resuming, identity, publication, revision, environment):
+    def run(
+        self,
+        incoming,
+        resuming,
+        identity,
+        publication,
+        revision,
+        environment,
+        *,
+        previous_commit=None,
+    ):
         from sequifier.training.supervised import execute_supervised
 
         config = self.config
@@ -100,7 +110,17 @@ class PolicyPhaseGroup:
     def release(self):
         self.preparation = None
 
-    def run(self, incoming, resuming, identity, publication, revision, environment):
+    def run(
+        self,
+        incoming,
+        resuming,
+        identity,
+        publication,
+        revision,
+        environment,
+        *,
+        previous_commit=None,
+    ):
         from sequifier.rl.learner import execute_policy
 
         assert self.preparation is not None
@@ -118,6 +138,7 @@ class PolicyPhaseGroup:
             publication=publication,
             preparation=self.preparation,
             environment=environment,
+            previous_commit=previous_commit,
             backbone_revision=revision if self.index == 0 else None,
         )
 

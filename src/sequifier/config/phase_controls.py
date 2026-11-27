@@ -115,15 +115,8 @@ class PhaseControls(ConfigModel):
         cadence = self.evaluation.cadence if self.evaluation is not None else None
         return cadence.iterations if cadence is not None else 1
 
-    @property
-    def checkpoint_interval_iterations(self):
-        cadence = self.checkpoints.cadence
-        return cadence.iterations if cadence else 1
-
     @model_validator(mode="after")
     def validate_lifecycle(self):
-        if self.algorithm != "supervised" and self.model_selection.scope == "phase":
-            raise ValueError("model_selection.scope is a supervised phase setting")
         clock = "epochs" if self.algorithm == "supervised" else "iterations"
         for label, cadence in (
             ("checkpoints", self.checkpoints.cadence),

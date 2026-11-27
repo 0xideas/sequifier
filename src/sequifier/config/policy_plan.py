@@ -22,7 +22,6 @@ from sequifier.config.phase_controls import (
     EpochBudget,
     EvaluationTriggers,
     IterationBudget,
-    PhaseCheckpoints,
     PhaseControls,
 )
 from sequifier.config.policy_optimization import OptimizationConfig
@@ -72,7 +71,15 @@ class PhaseConfig(PhaseControls):
     model_interface: str | None = None
     trainability: TrainabilityConfig = Field(default_factory=TrainabilityConfig)
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor",)
+    default_checkpoint_interval_iterations: ClassVar[int] = 10
     optimization: dict[str, OptimizationConfig] = Field(default_factory=dict)
+
+    @property
+    def checkpoint_interval_iterations(self) -> int:
+        cadence = self.checkpoints.cadence
+        if cadence is not None and cadence.iterations is not None:
+            return cadence.iterations
+        return self.default_checkpoint_interval_iterations
 
     def optimizer_step_budget(self, training_size=None):
         raise NotImplementedError("built-in phase must declare its optimizer budget")
@@ -134,13 +141,11 @@ class PolicyImitationPhaseConfig(BatchedPhaseConfig, OfflinePhaseConfig):
 
 class IQLPhaseConfig(OfflinePhaseConfig):
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor", "value", "critic")
+    default_checkpoint_interval_iterations: ClassVar[int] = 100
     algorithm: Literal["iql"]
     history_initialization: Literal["random", "phase_start_actor"] = "random"
     evaluation: OfflineEvaluationConfig = Field(
         default_factory=lambda: OfflineEvaluationConfig(cadence=Cadence(iterations=100))
-    )
-    checkpoints: PhaseCheckpoints = Field(
-        default_factory=lambda: PhaseCheckpoints(cadence=Cadence(iterations=100))
     )
     budget: IterationBudget
     batch_size: int = Field(default=64, gt=0)

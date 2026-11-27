@@ -430,6 +430,7 @@ def _run_learning_plan(config, prepared, environment):
             PhasePublication(save_progress, global_step_offset=group_offset),
             revision or {},
             environment,
+            previous_commit=completed[index - 1] if index else None,
         )
         native_records, current = strategy.broadcast(
             (completed.records(), state["active"])
