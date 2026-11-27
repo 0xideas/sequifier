@@ -76,7 +76,7 @@ def validate_collection_scores(actor, value, buffer, batch_size):
 
 def update_ppo(session, value, buffer):
     actor, phase = session.context.actor, session.context.phase
-    policy_version, clocks = session.transaction, session.steps
+    policy_version = session.transaction
     strategy = session.strategy
     partition = RolloutPartition(strategy, len(buffer) if buffer else 0)
     if buffer:
@@ -150,10 +150,12 @@ def update_ppo(session, value, buffer):
                 phase,
             )
             scale = strategy.world_size / len(group) if active else 0.0
-            (
+            session.optimization["actor"].backward(
                 (policy_loss - phase.entropy_coefficient * entropy).sum() * scale
-            ).backward()
-            (phase.value_coefficient * value_loss.sum() * scale).backward()
+            )
+            session.optimization["value"].backward(
+                phase.value_coefficient * value_loss.sum() * scale
+            )
             if active:
                 totals.add(metrics)
                 ratio_chunks.append(metrics["ratio"].detach().cpu())
@@ -185,6 +187,7 @@ def update_ppo(session, value, buffer):
         )
 
     residual_variance, target_variance = variance(residuals), variance(targets)
+    clocks = session.steps
     result: dict[str, Any] = {
         key: strategy.sum(total) / count for key, total in totals.items()
     }

@@ -42,9 +42,10 @@ from sequifier.integration.contexts import (
 from sequifier.runtime.plan import (
     NORMAL_COMPLETION,
     PhaseOutcome,
-    metric_improved,
+    cadence_due,
     run_phases,
     stop_scope,
+    timed_checkpoints_due,
 )
 from sequifier.runtime.pruning import pruning_requested
 from sequifier.runtime.random_state import RandomState
@@ -193,13 +194,14 @@ class TrainingEngine:
         if not math.isfinite(value):
             return value
         run.state.last_validation_metric = value
-        if metric_improved(value, run.state.selection.metric, monitor.direction):
+
+        def capture():
             weights = run.distributed.capture_model_state(run.network)
-            run.state.selection = HandoffCandidate(
-                value,
-                run.state.optimizer_step,
-                weights if run.distributed.rank == 0 else None,
-            )
+            return weights if run.distributed.rank == 0 else None
+
+        run.state.selection = run.state.selection.observe(
+            value, run.state.optimizer_step, monitor.direction, capture
+        )
         return value
 
     def _publish(self, run: Any, network: Any, epoch: int) -> dict[str, Any]:
@@ -294,13 +296,6 @@ class TrainingEngine:
         config = run.config
         state = run.state
         phases = run.plan.phases
-        time_checkpoint_intervals_enabled = bool(
-            config.run.recovery.latest_checkpoint_interval_minutes is not None
-            or any(
-                view.checkpoints.snapshot_interval_minutes is not None
-                for view in phases
-            )
-        )
         defer_ddp_gradient_sync = bool(
             isinstance(
                 run.callable_network,
@@ -319,7 +314,7 @@ class TrainingEngine:
         last_snapshot = time.monotonic()
         access = run.optimization.access(run.network)
         run.integrations.emit(ModelReady(access=access))
-        run.optimization.optimizer.zero_grad(set_to_none=True)
+        run.optimization.zero_grad()
         boundary = capture_runtime_boundary(run)
         boundary_identity: StepIdentity | None = None
         batch_in_progress = False
@@ -653,37 +648,21 @@ class TrainingEngine:
                         )
                     if update.step_after:
                         flush()
-                    now = time.monotonic()
-                    snapshot_due = update.snapshot or bool(
-                        update.step_after
-                        and phase.checkpoints.snapshot_interval_minutes is not None
-                        and now - last_snapshot
-                        >= phase.checkpoints.snapshot_interval_minutes * 60
-                    )
-                    latest_due = bool(
-                        update.step_after
-                        and config.run.recovery.latest_checkpoint_interval_minutes
-                        is not None
-                        and now - last_latest
-                        >= config.run.recovery.latest_checkpoint_interval_minutes * 60
-                    )
-                    if (
-                        run.distributed.world_size > 1
-                        and update.step_after
-                        and time_checkpoint_intervals_enabled
-                    ):
-                        checkpoint_due = torch.tensor(
-                            [
-                                int(latest_due) if run.distributed.rank == 0 else 0,
-                                int(snapshot_due) if run.distributed.rank == 0 else 0,
-                            ],
-                            device=run.distributed.device,
-                            dtype=torch.int32,
+                    timed_snapshot, latest_due = (
+                        timed_checkpoints_due(
+                            run.distributed,
+                            now=time.monotonic(),
+                            snapshot_minutes=phase.checkpoints.snapshot_interval_minutes,
+                            latest_minutes=(
+                                config.run.recovery.latest_checkpoint_interval_minutes
+                            ),
+                            last_snapshot=last_snapshot,
+                            last_latest=last_latest,
                         )
-                        torch.distributed.broadcast(checkpoint_due, src=0)
-                        latest_due = bool(checkpoint_due[0].item())
-                        snapshot_due = bool(checkpoint_due[1].item())
-                    if snapshot_due:
+                        if update.step_after
+                        else (False, False)
+                    )
+                    if update.snapshot or timed_snapshot:
                         if (
                             phase.evaluation_sources
                             and phase.evaluation is not None
@@ -746,9 +725,10 @@ class TrainingEngine:
                         ),
                     )
                     if phase.evaluation_sources
-                    and (
-                        phase_epoch % phase.evaluation_interval_epochs == 0
-                        or phase_epoch == phase.budget.epochs
+                    and cadence_due(
+                        phase_epoch,
+                        phase.evaluation_interval_epochs,
+                        final=phase_epoch == phase.budget.epochs,
                     )
                     else EvaluationResult()
                 )
@@ -780,10 +760,10 @@ class TrainingEngine:
                     completion_reason = "early_stopping"
                 boundary = capture_runtime_boundary(run)
                 boundary_identity = last_identity
-                if (
-                    phase_stop
-                    or phase_epoch % phase.checkpoint_interval_epochs == 0
-                    or phase_epoch == phase.budget.epochs
+                if phase_stop or cadence_due(
+                    phase_epoch,
+                    phase.checkpoint_interval_epochs,
+                    final=phase_epoch == phase.budget.epochs,
                 ):
                     run.checkpoints.save(
                         CheckpointRequest(f"epoch-{current_epoch}", last_identity),
@@ -839,17 +819,17 @@ class TrainingEngine:
             )
         except BaseException:
             if committing or update_failed:
-                run.optimization.optimizer.zero_grad(set_to_none=True)
+                run.optimization.zero_grad()
                 raise
             if batch_in_progress and not batch_committed:
-                run.optimization.optimizer.zero_grad(set_to_none=True)
+                run.optimization.zero_grad()
                 pending = None
             else:
                 flush()
             for name, positions in pending_metric_positions.items():
                 run.metrics.writers[name].restore_positions(state.run_id, positions)
             restore_runtime_boundary(run, boundary)
-            run.optimization.optimizer.zero_grad(set_to_none=True)
+            run.optimization.zero_grad()
             if run.distributed.world_size == 1:
                 run.checkpoints.save(
                     CheckpointRequest("latest", boundary_identity), run

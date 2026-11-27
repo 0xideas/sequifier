@@ -86,7 +86,7 @@ def update_grpo(session, buffer: SealedGroupBuffer | None):
                 actor.evaluate_actions(inputs, actions), old, ref, advantage, phase
             )
             scale = strategy.world_size / len(group) / length if active else 0.0
-            (values[0].sum() * scale).backward()
+            session.optimization["actor"].backward(values[0].sum() * scale)
             if active:
                 totals.add(dict(zip(totals, values)), length)
         scored += len(group)

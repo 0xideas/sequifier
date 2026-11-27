@@ -13,7 +13,7 @@ from sequifier.contract_versions import ContractVersions
 from sequifier.fingerprints import file_checksum
 from sequifier.io.atomic import write_json_atomic
 from sequifier.io.output_paths import run_manifest_path
-from sequifier.runtime.plan import NORMAL_COMPLETION
+from sequifier.runtime.plan import NORMAL_COMPLETION, metric_improved
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,17 @@ class HandoffCandidate:
     metric: float | None = None
     transaction: int | None = None
     weights: dict[str, Tensor] | None = None
+
+    def observe(
+        self,
+        metric: float | None,
+        transaction: int,
+        direction: str,
+        capture: Callable[[], dict[str, Tensor] | None],
+    ) -> "HandoffCandidate":
+        if metric is not None and metric_improved(metric, self.metric, direction):
+            return HandoffCandidate(float(metric), transaction, capture())
+        return self
 
     def require_weights(self) -> dict[str, Tensor]:
         if self.weights is None:

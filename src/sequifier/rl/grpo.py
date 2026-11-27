@@ -214,7 +214,8 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 release_image_cache_entries(actor, context.reference)
                 return record
 
-            session.complete_online_update(
+            session.complete_update(
+                online=True,
                 final=groups == phase.budget.groups,
                 training=training_metrics,
                 evaluate=lambda: session.evaluate_online(

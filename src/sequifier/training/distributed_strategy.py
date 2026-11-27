@@ -198,6 +198,7 @@ class DistributedDataParallelStrategy(LocalStrategy):
 class FullyShardedStrategy(DistributedDataParallelStrategy):
     cpu_offload: bool = False
     mixed_precision_dtype: torch.dtype | None = None
+    preserve_io_dtype: bool = False
 
     def prepare_network(self, network: nn.Module) -> PreparedNetwork:
         from packaging import version
@@ -252,6 +253,14 @@ class FullyShardedStrategy(DistributedDataParallelStrategy):
         )
         for layer in layers:
             fully_shard(layer, **kwargs)
+        if self.mixed_precision_dtype is not None and self.preserve_io_dtype:
+            # Policy inputs include recorded actions in domain units. Scoring
+            # outputs may also require more precision than the model parameters.
+            kwargs["mp_policy"] = MixedPrecisionPolicy(
+                param_dtype=self.mixed_precision_dtype,
+                reduce_dtype=self.mixed_precision_dtype,
+                cast_forward_inputs=False,
+            )
         fully_shard(network, **kwargs)
         self.barrier()
         return PreparedNetwork(network, network)
@@ -357,7 +366,12 @@ class FullyShardedStrategy(DistributedDataParallelStrategy):
 
 
 def strategy_for(
-    environment, settings, *, find_unused=False, mixed_precision_dtype=None
+    environment,
+    settings,
+    *,
+    find_unused=False,
+    mixed_precision_dtype=None,
+    preserve_io_dtype=False,
 ) -> DistributedStrategy:
     if not environment.distributed:
         return LocalStrategy(device=environment.device)
@@ -373,6 +387,7 @@ def strategy_for(
             **options,
             cpu_offload=settings.cpu_offload,
             mixed_precision_dtype=mixed_precision_dtype,
+            preserve_io_dtype=preserve_io_dtype,
         )
     return DistributedDataParallelStrategy(
         **options, find_unused_parameters=find_unused

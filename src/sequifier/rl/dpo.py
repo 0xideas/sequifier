@@ -150,7 +150,9 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
                 loss_total += float(loss) * scale
             for side, sign in enumerate((1, -1)):
                 for chunk in chunks(actor, side):
-                    (sign * coefficient * chunk.sum()).backward()
+                    session.optimization["actor"].backward(
+                        sign * coefficient * chunk.sum()
+                    )
         session.step()
         session.complete_update(
             final=update == phase.budget.iterations,

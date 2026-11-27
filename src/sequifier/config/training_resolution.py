@@ -723,9 +723,11 @@ def resolve_execution_settings(
     values = model.execution.model_dump(exclude_unset=True) if model else {}
     if prediction_view := values.pop("prediction_view", None):
         values["training_objective"] = prediction_view
-    run_execution = config.run.execution.supervised or SupervisedExecution()
-    dtypes = run_execution.precision.layer_type_dtypes
-    max_concat = run_execution.max_concat_tensors
+    execution = config.run.execution
+    precision = execution.precision
+    supervised_execution = execution.supervised or SupervisedExecution()
+    dtypes = precision.layer_type_dtypes
+    max_concat = supervised_execution.max_concat_tensors
     source = None
     history_only = config.actor_initialization == "history_only"
     if config.initialize_from:
@@ -757,14 +759,14 @@ def resolve_execution_settings(
             values[field] = actual
         source_dtypes = source.options.layer_type_dtypes
         if (
-            "layer_type_dtypes" in run_execution.precision.model_fields_set
+            "layer_type_dtypes" in precision.model_fields_set
             and dtypes != source_dtypes
         ):
             raise ValueError(
-                "run.execution.supervised.precision.layer_type_dtypes differs from initialize_from"
+                "run.execution.precision.layer_type_dtypes differs from initialize_from"
             )
         dtypes = source_dtypes
-        if "max_concat_tensors" not in run_execution.model_fields_set:
+        if "max_concat_tensors" not in supervised_execution.model_fields_set:
             max_concat = source.options.max_concat_tensors
     assert model is not None
     assert model.backbone is not None
@@ -777,13 +779,19 @@ def resolve_execution_settings(
         )
     if values["training_objective"] == "bert" and "target_offset" not in values:
         values["target_offset"] = 0
-    run_execution.precision.layer_type_dtypes = dtypes
-    run_execution.max_concat_tensors = max_concat
+    precision.layer_type_dtypes = dtypes
+    supervised_execution.max_concat_tensors = max_concat
     training = ModelExecutionOptions(
         **values, layer_type_dtypes=dtypes, max_concat_tensors=max_concat
     )
-    if run_execution.distribution.strategy == "fsdp" and dtypes is not None:
+    if execution.distribution_settings.strategy == "fsdp" and dtypes is not None:
         raise ValueError("FSDP does not support manual layer pre-casting")
+    if (
+        precision.layer_autocast
+        and (dtypes or {}).get("linear") == "float16"
+        and any(phase.algorithm != "supervised" for phase in config.ordered_phases)
+    ):
+        raise ValueError("Policy phases require BF16 when layer_autocast is enabled")
     validate_training_contract(config.run, model, config.ordered_phases, training)
     return model, training, source
 

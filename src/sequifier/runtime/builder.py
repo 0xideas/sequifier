@@ -202,7 +202,7 @@ class RunBuilder:
         )
         config, plan, parts = group_data.config, group_data.plan, group_data.parts
         precision = PrecisionPolicy.from_settings(
-            config.run.execution.supervised_settings, execution.device
+            config.run.execution, execution.device
         )
         strategy = self._strategy(config, execution, precision)
         random_manager = RandomStateManager(execution.device)

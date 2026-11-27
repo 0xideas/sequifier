@@ -200,7 +200,7 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
             for role, loss in losses.items():
                 if not torch.isfinite(loss):
                     raise ValueError(f"non-finite IQL {role} objective")
-                (loss * scale).backward()
+                session.optimization[role].backward(loss * scale)
             del batch
         session.step()
         _polyak(session.networks["target_q1"], q1, phase.target_update_rate)

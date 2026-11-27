@@ -41,6 +41,29 @@ def metric_improved(value, best, direction, min_delta=0) -> bool:
     return value < best - min_delta if direction == "min" else value > best + min_delta
 
 
+def cadence_due(progress: int, interval: int | None, *, final: bool) -> bool:
+    return final or (interval is not None and progress % interval == 0)
+
+
+def timed_checkpoints_due(
+    strategy,
+    *,
+    now: float,
+    snapshot_minutes: float | None,
+    latest_minutes: float | None,
+    last_snapshot: float,
+    last_latest: float,
+) -> tuple[bool, bool]:
+    """Use the writer's wall clock for both kinds of timed checkpoint."""
+    if snapshot_minutes is None and latest_minutes is None:
+        return False, False
+    due = (
+        snapshot_minutes is not None and now - last_snapshot >= 60 * snapshot_minutes,
+        latest_minutes is not None and now - last_latest >= 60 * latest_minutes,
+    )
+    return strategy.broadcast(due)
+
+
 @dataclass(frozen=True)
 class PhaseTransition(Generic[Phase]):
     index: int

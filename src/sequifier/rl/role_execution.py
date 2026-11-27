@@ -8,6 +8,7 @@ from time import perf_counter
 import torch
 from torch import nn
 
+from sequifier.runtime.precision import PrecisionPolicy
 from sequifier.training.distributed_strategy import FullyShardedStrategy
 
 
@@ -72,8 +73,9 @@ class _RankFailure:
 class InferenceRounds:
     """Match forwards while each simulator independently requests its next model role."""
 
-    def __init__(self, strategy):
+    def __init__(self, strategy, precision: PrecisionPolicy):
         self.strategy = strategy
+        self.precision = precision
         self.modules = {}
         self.scoring_seconds = 0.0
         self.defer_deadline = False
@@ -83,7 +85,8 @@ class InferenceRounds:
 
     def forward(self, module, inputs, *args, **kwargs):
         started = perf_counter()
-        result = module(inputs, *args, **kwargs)
+        with self.precision.autocast():
+            result = module(inputs, *args, **kwargs)
         self.scoring_seconds += perf_counter() - started
         return result
 

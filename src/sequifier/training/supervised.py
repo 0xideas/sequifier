@@ -1,7 +1,5 @@
 """Launch supervised workers and execute a native supervised run."""
 
-import torch
-
 from sequifier.helpers import configure_determinism, configure_logger
 from sequifier.integration import IntegrationManager
 from sequifier.runtime.builder import RunBuilder
@@ -29,7 +27,6 @@ def execute_supervised(
     else:
         config, dataset_names = group, tuple(group.dataset_training)
     settings = config.run.execution.supervised_settings
-    torch.set_float32_matmul_precision(settings.precision.float32_matmul_precision)
     logger = configure_logger(
         config.project_root,
         log_model_name or config.model_name,

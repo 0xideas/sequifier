@@ -47,7 +47,6 @@ from sequifier.rl.run_state import (
     PhaseContext,
     PolicyPhaseIdentity,
     PolicyRunResult,
-    clone_weights,
     require_equal,
 )
 from sequifier.rl.telemetry import TelemetryJournal
@@ -57,6 +56,7 @@ from sequifier.runtime.plan import (
     run_phases,
     validate_continuation,
 )
+from sequifier.runtime.precision import PrecisionPolicy
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 from sequifier.training.metrics import progress_after
 
@@ -191,17 +191,21 @@ def execute_policy(
         strategy_for,
     )
 
+    device = environment.device if environment else torch.device(config.parent.device)
+    settings = config.parent.run.execution
+    precision = PrecisionPolicy.from_settings(settings, device)
     strategy = (
         strategy_for(
             environment,
-            config.parent.run.execution.distribution_settings,
+            settings.distribution_settings,
             find_unused=True,
+            mixed_precision_dtype=precision.autocast_dtype,
+            preserve_io_dtype=True,
         )
         if environment
-        else LocalStrategy(device=torch.device(config.parent.device))
+        else LocalStrategy(device=device)
     )
     writer = strategy.rank == 0
-    torch.set_float32_matmul_precision("highest")
     configure_determinism(
         config.parent.seed, config.parent.run.reproducibility.enforce_determinism
     )
@@ -331,6 +335,7 @@ def execute_policy(
     )
     logger.info(f"Starting training for {config.model_name}, run {identity.run_id}")
     if recovery is None:
+        incoming_actor = LocalStrategy(device=device).capture_model_state(actor.network)
         recovery = RunCheckpoint(
             plan,
             representation,
@@ -341,9 +346,9 @@ def execute_policy(
                 "path": config.initialize_from,
                 "transfer": actor.transfer_report,
                 "backbone_parent_revision_id": parent_revision_id,
-                "weight_hash": weight_fingerprint(actor.network.state_dict()),
+                "weight_hash": weight_fingerprint(incoming_actor),
             },
-            clone_weights(actor.network),
+            incoming_actor,
             capture_rng_state(strategy.device),
             completed=CommittedPhases(config.phases, config.phase_offset),
             run_id=identity.run_id,
@@ -460,6 +465,7 @@ def execute_policy(
                 adapter_contract,
                 metrics=metrics,
                 strategy=strategy,
+                precision=precision,
                 global_step_offset=step_offset,
                 continuation=recovery.continuation
                 if transition.continues_optimizer
@@ -557,9 +563,9 @@ def execute_policy(
         commit_phase,
         start=recovery.phase_index,
         stopped=recovery.stopped,
-        replay=lambda: publication.replay_native(recovery.completed)
-        if writer
-        else None,
+        replay=lambda: (
+            publication.replay_native(recovery.completed) if writer else None
+        ),
         optimizer_continues=lambda phase: phase.optimizer_state == "continue",
     )
 

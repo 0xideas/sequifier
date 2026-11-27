@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 from torch import dtype, float16, nn
 from torch.amp.grad_scaler import GradScaler
@@ -30,18 +30,6 @@ from sequifier.integration.controls import apply_training_directive
 from sequifier.model.parameter_catalog import ParameterCatalog
 from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_class
 from sequifier.optimizers.plan import CompositeOptimizer, route_optimizer_parameters
-
-
-def create_optimizer(spec, parameters, learning_rate, *, parameter_catalog=None):
-    """Build an optimizer with the same ownership rules for every learner."""
-    if isinstance(spec, OptimizerPlan):
-        if parameter_catalog is None:
-            raise ValueError("An optimizer plan requires a parameter catalog.")
-        return CompositeOptimizer(
-            route_optimizer_parameters(spec, parameter_catalog, parameters)
-        )
-    optimizer_class: Any = get_optimizer_class(spec.name)
-    return optimizer_class(parameters, lr=learning_rate, **spec.arguments)
 
 
 @dataclass(frozen=True)
@@ -129,19 +117,23 @@ class OptimizationRuntime:
         layer_type_dtypes: dict[str, str] | None = None,
         autocast_dtype: dtype | None = None,
     ) -> "OptimizationRuntime":
-        optimizer = create_optimizer(
-            training.optimizer,
-            parameters,
-            training.learning_rate,
-            parameter_catalog=parameter_catalog,
-        )
-        scheduler_class = get_scheduler_class(training.scheduler.name)
-        scheduler_arguments = dict(training.scheduler.arguments)
-        if isinstance(training.optimizer, OptimizerPlan):
-            scheduler_arguments = resolve_plan_scheduler_arguments(
-                training.optimizer, training.scheduler
+        spec = training.optimizer
+        arguments = training.scheduler.arguments
+        if isinstance(spec, OptimizerPlan):
+            if parameter_catalog is None:
+                raise ValueError("An optimizer plan requires a parameter catalog.")
+            optimizer = CompositeOptimizer(
+                route_optimizer_parameters(
+                    spec, parameter_catalog, cast(Iterable[nn.Parameter], parameters)
+                )
             )
-        scheduler = scheduler_class(optimizer, **scheduler_arguments)
+            arguments = resolve_plan_scheduler_arguments(spec, training.scheduler)
+        else:
+            optimizer_class: Any = get_optimizer_class(spec.name)
+            optimizer = optimizer_class(
+                parameters, lr=training.learning_rate, **spec.arguments
+            )
+        scheduler = get_scheduler_class(training.scheduler.name)(optimizer, **arguments)
         # GradScaler cannot unscale FP16 optimizer gradients. Explicitly pre-cast
         # FP16 parameters use ordinary, unscaled backward/optimizer steps.
         has_fp16_parameters = any(
@@ -180,7 +172,7 @@ class OptimizationRuntime:
         integrations: IntegrationManager,
         network: nn.Module,
     ) -> None:
-        self.scaler.scale(loss).backward()
+        self.backward(loss)
         if integrations.enabled:
             integrations.emit(
                 BackwardCompleted(
@@ -260,25 +252,16 @@ class OptimizationRuntime:
                     reason=None if directive is None else directive.reason,
                 )
             )
-        previous_scale = self.scaler.get_scale()
         applied = False
         if not skip and has_gradients:
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            applied = (
-                not self.scaler.is_enabled()
-                or self.scaler.get_scale() >= previous_scale
-            )
+            applied = self.apply_optimizer()
         elif has_gradients:
             self.scaler.update()
         overflow = has_gradients and not skip and not applied
         if applied:
-            self.optimizer_step += 1
-            if self.scheduler_policy.step_on == "optimizer_step":
-                if directive is None or not directive.skip_scheduler_step:
-                    self.step_scheduler()
-            elif directive is not None and directive.skip_scheduler_step:
-                self.skip_next_scheduler_step = True
+            self.record_optimizer_step(
+                skip_scheduler=bool(directive and directive.skip_scheduler_step)
+            )
             if integrations.enabled:
                 integrations.emit(
                     OptimizerStepCompleted(
@@ -295,12 +278,31 @@ class OptimizationRuntime:
                         ),
                     )
                 )
-        self.optimizer.zero_grad(set_to_none=True)
+        self.zero_grad()
         return StepResult(
             applied=applied,
             overflow=overflow,
             stop_requested=bool(directive is not None and directive.stop_after_step),
         )
+
+    def zero_grad(self) -> None:
+        self.optimizer.zero_grad(set_to_none=True)
+
+    def backward(self, loss: Any) -> None:
+        self.scaler.scale(loss).backward()
+
+    def apply_optimizer(self) -> bool:
+        previous_scale = self.scaler.get_scale()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        return self.scaler.get_scale() >= previous_scale
+
+    def record_optimizer_step(self, *, skip_scheduler: bool = False) -> None:
+        self.optimizer_step += 1
+        if skip_scheduler:
+            self.skip_next_scheduler_step = self.scheduler_policy.step_on == "epoch"
+        elif self.scheduler_policy.step_on == "optimizer_step":
+            self.step_scheduler()
 
     def step_scheduler(self, metric: float | None = None) -> bool:
         if self.skip_next_scheduler_step:

@@ -43,9 +43,9 @@ DistributionSettings = Annotated[
 
 
 class PrecisionSettings(Settings):
-    layer_type_dtypes: dict[str, str] | None = None
     layer_autocast: bool = False
     float32_matmul_precision: Literal["highest", "high", "medium"] = "highest"
+    layer_type_dtypes: dict[str, str] | None = None
 
 
 CompileMode = Literal["outer", "inner", "none"]
@@ -73,7 +73,6 @@ class DataLoadingSettings(Settings):
 
 class SupervisedExecution(Settings):
     distribution: DistributionSettings = Field(default_factory=LocalDistribution)
-    precision: PrecisionSettings = Field(default_factory=PrecisionSettings)
     compilation: CompilationSettings = Field(default_factory=CompilationSettings)
     data_loading: DataLoadingSettings = Field(default_factory=DataLoadingSettings)
     max_concat_tensors: ConcatLimit = DEFAULT_MAX_CONCAT_TENSORS
@@ -99,6 +98,7 @@ class ExecutionSettings(Settings):
     offline: OfflineExecution | None = None
     policy: PolicyExecution | None = None
     distribution: DistributionSettings | None = None
+    precision: PrecisionSettings = Field(default_factory=PrecisionSettings)
 
     @model_validator(mode="after")
     def resolve_distribution(self):

@@ -163,7 +163,8 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                 session.update_seconds += perf_counter() - update_start
                 del buffer
             env_steps += horizon
-            session.complete_online_update(
+            session.complete_update(
+                online=True,
                 final=env_steps == phase.budget.env_steps,
                 training={
                     **record,

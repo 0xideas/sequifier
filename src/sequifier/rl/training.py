@@ -93,7 +93,7 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
                 loss = _action_nll(actor, batch).sum() * scale / len(group)
                 if not torch.isfinite(loss):
                     raise ValueError("non-finite imitation action likelihood")
-                loss.backward()
+                session.optimization["actor"].backward(loss)
                 total += float(loss.detach())
                 del batch
         session.step()

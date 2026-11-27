@@ -121,30 +121,6 @@ class RoleOptimizationConfig(ConfigModel):
             }
         )
 
-    def build(self, module, *, step_budget=None):
-        from sequifier.model.parameter_catalog import ParameterCatalog
-        from sequifier.training.optimization import create_optimizer
-
-        optimizer = create_optimizer(
-            self.optimizer,
-            [p for p in module.parameters() if p.requires_grad],
-            self.learning_rate,
-            parameter_catalog=ParameterCatalog(module)
-            if isinstance(self.optimizer, OptimizerPlan)
-            else None,
-        )
-        scheduler = self.scheduler
-        if scheduler.name == "OneCycleLR":
-            scheduler = self.resolve_budget(step_budget).scheduler
-        arguments = (
-            resolve_plan_scheduler_arguments(self.optimizer, scheduler)
-            if isinstance(self.optimizer, OptimizerPlan)
-            else scheduler.arguments
-        )
-        return optimizer, get_scheduler_class(self.scheduler.name)(
-            optimizer, **arguments
-        )
-
 
 class OptimizationConfig(RoleOptimizationConfig):
     """Policy roles advance their schedulers once per applied optimizer update."""

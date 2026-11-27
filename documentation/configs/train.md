@@ -11,6 +11,11 @@ adapter, and a decoder. Phases own batching, learning, trainability and lifecycl
 sequifier train --config-path configs/train.yaml
 ```
 
+## Training precision
+
+`run.execution.precision` controls precision across supervised and policy
+phases. See [autocast and matrix precision](../training/resource-controls.md#autocast-and-matrix-precision).
+
 ## Minimal named configuration
 
 This example trains a causal model for one epoch on a preprocessed categorical
@@ -170,7 +175,6 @@ run:
       data_loading: {}
       compilation:
         torch_compile: outer
-      precision: {}
   recovery: {}
   logging: {}
   outputs: {}
@@ -490,7 +494,6 @@ run:
       data_loading: {}
       compilation:
         torch_compile: none
-      precision: {}
   recovery: {}
   logging: {}
   outputs: {}

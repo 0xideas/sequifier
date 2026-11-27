@@ -15,13 +15,9 @@ def validate_runner_settings(
         raise ValueError("run.execution.policy requires a policy phase")
     if not supervised and execution.supervised is not None:
         raise ValueError("run.execution.supervised requires a supervised phase")
-    if (
-        policy
-        and execution.supervised
-        and execution.supervised.precision.layer_type_dtypes
-    ):
+    if policy and execution.precision.layer_type_dtypes:
         raise ValueError(
-            "Mixed plans require a policy-compatible model without manual layer pre-casting"
+            "Plans with policy phases do not support manual layer pre-casting"
         )
     if not supervised and run.logging.log_interval_batches is not None:
         raise ValueError("Batch logging requires a supervised phase")
