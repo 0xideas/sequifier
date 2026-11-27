@@ -1,5 +1,5 @@
 rollout:
-  trajectory_path: outputs/ppo-rollout.json
+  output: {manifest_path: outputs/ppo-rollout/manifest.json}
   seed_row_index: 0
   max_episode_steps: 8
   max_steps: 8

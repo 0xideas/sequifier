@@ -87,14 +87,16 @@ class SplitWindowPlan:
     stride: int
     ratios: tuple[float, ...]
     alignment: PredictionAlignment | None
+    arrivals: bool = False
 
     @classmethod
-    def from_settings(cls, settings):
+    def from_settings(cls, settings, *, arrivals=False):
         return cls(
             tuple(settings.window_lengths),
             settings.resolved_window_stride,
             tuple(settings.split_ratios or ()),
             PredictionAlignment.from_settings(settings),
+            arrivals,
         )
 
     def validate_training_share(self, row_counts: Sequence[float]):
@@ -144,6 +146,7 @@ class SplitWindowPlan:
                         self.alignment
                         if self.alignment and split in self.alignment.splits
                         else None,
+                        arrivals=self.arrivals,
                     ),
                 )
 
@@ -178,19 +181,32 @@ class WindowPlacement:
 
     @classmethod
     def for_split(
-        cls, first, low, high, width, stride, alignment=None, *, begin=0, end=None
+        cls,
+        first,
+        low,
+        high,
+        width,
+        stride,
+        alignment=None,
+        *,
+        begin=0,
+        end=None,
+        arrivals=False,
     ):
         """Place all or a slice of the windows in a nonempty target interval."""
         if high > np.iinfo(np.int64).max:
             raise ValueError("splitEndItemPosition falls outside signed Int64.")
-        count = window_count(high - low, width, stride, alignment)
+        context_start = (
+            max(first, low - width + 1) if arrivals and alignment is None else low
+        )
+        count = window_count(high - context_start, width, stride, alignment)
         end = count if end is None else end
         if not 0 <= begin <= end <= count:
             raise ValueError(f"Window slice [{begin}, {end}) is outside [0, {count})")
         indices = np.arange(begin, end, dtype=np.int64)
         if alignment is None:
-            first = low
-            distance = high - low - width
+            first = context_start
+            distance = high - first - width
             if count <= 1:
                 offsets = np.full(len(indices), distance, dtype=np.int64)
             else:

@@ -7,9 +7,13 @@ PREDICTION_COORDINATES = (
     "itemPosition",
 )
 ACTION_LOG_PROBABILITY = "action_log_probability"
-TRANSITION_COLUMNS = ("reward", "terminated", "truncated", "bootstrap_allowed")
+INCOMING_ACTION_PRESENT = "incomingActionPresent"
+TRANSITION_COLUMNS = ("reward", "terminated", "truncated")
+ARRIVAL_AUXILIARY_COLUMNS = (*TRANSITION_COLUMNS, "actionMetadata", "__collection")
 _STORAGE_COLUMNS = {
     "sequenceName",
+    "groupId",
+    "actionMetadata",
     "startItemPosition",
     "leftPadLength",
     "rightPadLength",
@@ -30,7 +34,7 @@ def validate_column_names(names, field, *, allowed=(), prefixes=()):
         for name in names
         if (name in reserved or name.startswith(("__", "depth_valid_mask:")))
         and name not in allowed
-        and (name == "__executed_action" or not name.startswith(prefixes))
+        and not name.startswith(prefixes)
     )
     if conflicts:
         raise ValueError(f"{field} uses reserved Sequifier column names: {conflicts}")

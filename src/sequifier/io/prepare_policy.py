@@ -5,11 +5,11 @@ from dataclasses import replace
 from functools import cache
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
 
 import polars as pl
 import pyarrow as pa
 
+from sequifier.config.column_names import INCOMING_ACTION_PRESENT
 from sequifier.config.depth_layout import (
     DepthLayoutRegistryModel,
     depth_mask_metadata_key,
@@ -24,11 +24,7 @@ from sequifier.io.feature_fitting import (
     FittingRules,
     cast_input_columns,
 )
-from sequifier.io.indexed_sequences import (
-    PREFIX_IMAGE,
-    IndexedSequenceWriter,
-    IndexedView,
-)
+from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_split_assignments
 from sequifier.io.preprocessing_workspace import (
     indexed_preparation,
@@ -36,13 +32,9 @@ from sequifier.io.preprocessing_workspace import (
 )
 from sequifier.io.sample_order import curriculum_columns, curriculum_storage_column
 from sequifier.io.sequence import (
-    CONTEXT_COLUMN,
-    CONTEXT_RECORDS,
-    DOMAIN_CONTEXT,
     DOMAIN_OBSERVATIONS,
     DOMAIN_STATIC,
-    DOMAIN_SUCCESSORS,
-    OBSERVATION_MASK,
+    seed_metadata,
     with_domain_record,
 )
 from sequifier.io.window_placement import (
@@ -51,19 +43,10 @@ from sequifier.io.window_placement import (
     split_intervals,
 )
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
-from sequifier.trajectory.export import EpisodeTableEncoder
+from sequifier.trajectory.export import episode_table
+from sequifier.trajectory.row_layout import ACTION_METADATA, TrajectoryRowLayout
 from sequifier.trajectory.table_schema import cast_episode_table
-from sequifier.trajectory.tables import (
-    ACTION_RECORD,
-    PREVIOUS_ACTION_RECORD,
-    REWARD_COLUMN,
-    SUCCESSOR_PREFIX,
-    TRANSITION_FLAGS,
-    TableEpisodeReference,
-    executed_action_columns,
-    project_actions,
-    scan_tables,
-)
+from sequifier.trajectory.tables import REWARD_COLUMN, TRANSITION_FLAGS, scan_tables
 
 
 def _preparation_inputs(config):
@@ -75,12 +58,9 @@ def _preparation_inputs(config):
     resolved = config.resolved_source()
     if (
         config.read_format == "sequence"
-        and resolved.kind != "trajectory"
         and (resolved.manifest or {}).get("format") != "sequifier.sequence-data"
     ):
-        raise ValueError(
-            "read_format: sequence requires a sequence manifest or trajectory"
-        )
+        raise ValueError("read_format: sequence requires a sequence manifest")
     if config.read_format in {"csv", "parquet"} and (
         resolved.kind != "table"
         or any(
@@ -112,86 +92,17 @@ def _preparation_inputs(config):
     return resolved, original
 
 
-def _validate_unfingerprinted_store(config, destination, provenance):
-    hint = "choose a new indexed_output_path"
-    if not provenance.get("policy_binding"):
-        raise ValueError(f"Published dataset lacks a recorded policy binding; {hint}")
-    policy = config.resolved_policy()
-    if provenance["policy_binding"] != policy.task_binding.model_dump(mode="json"):
-        raise ValueError(f"Published dataset has a different policy binding; {hint}")
-
-    view = IndexedView.load(destination / "0.split.json")
-    metadata = view.metadata()
-    layout = {**config.split_metadata(), **config.window_metadata()}
-    if any(getattr(metadata, key, None) != value for key, value in layout.items()):
-        raise ValueError(
-            f"Published dataset has a different split or window layout; {hint}"
-        )
-    if (config.mask_column and config.mask_column != metadata.raw_mask_column) or set(
-        config.indexed_passthrough
-    ) - set(metadata.indexed_passthrough):
-        raise ValueError(
-            f"Published dataset has different mask or passthrough settings; {hint}"
-        )
-    static = [name for name in policy.static_columns if name != PREFIX_IMAGE]
-    derived = ["__policy_return"] if policy.return_conditioned else []
-    if (
-        set(static) != set(metadata.static_columns)
-        or (PREFIX_IMAGE in policy.static_columns)
-        != bool(metadata.preconditioning_image)
-        or derived != metadata.indexed_derived_features
-    ):
-        raise ValueError(
-            f"Published dataset has different static or derived features; {hint}"
-        )
-
-    encoder = EpisodeTableEncoder(policy)
-    actions = executed_action_columns(policy.actions, encoder.columns)
-    view.validate_resources()
-    view.validate_item_columns(
-        (encoder.columns - set(policy.static_columns))
-        | set(actions.values())
-        | set(policy.previous_action_inputs)
-        | set(config.indexed_passthrough),
-        struct_fields={
-            name: policy.actions for name in (ACTION_RECORD, PREVIOUS_ACTION_RECORD)
-        },
-    )
-
-
 def prepare_policy(config):
     destination = Path(config.project_root) / config.indexed_output_path
     with preprocessing_workspace(
         destination, indexed=True, resume=not config.reprocess
     ) as work:
-        if work is None:
-            published = json.loads((destination / "dataset.json").read_text())
-            provenance = published.get("provenance", {})
-            if not provenance.get("policy_binding") or "preparation" not in provenance:
-                _validate_unfingerprinted_store(config, destination, provenance)
-                return
         resolved, original = _preparation_inputs(config)
-        # Omitted layout options must also match datasets published before they
-        # were available in policy preparation.
-        layout_fields = {
-            "read_format",
-            "selected_columns",
-            "column_data_types",
-            "static_data_path",
-            "static_categorical_columns",
-            "static_real_columns",
-            "depth_layouts",
-            "image_sources",
-            "preconditioning_image",
-            "time_alignment_column",
-            "curriculum_column",
-            "use_precomputed_maps",
-        }
-        exclusions: dict[str, Any] = dict.fromkeys(
-            layout_fields - config.model_fields_set, True
+        exclusions = (
+            {}
+            if "execution" in config.run.model_fields_set
+            else {"run": {"execution": True}}
         )
-        if "execution" not in config.run.model_fields_set:
-            exclusions["run"] = {"execution": True}
         config, identity = indexed_preparation(
             config,
             destination,
@@ -345,7 +256,7 @@ def _prepare_policy(config, writer, resolved, original, identity):
         )
     source_episodes = EpisodeCorpus([resolved], policy).view()
     decisions = EpisodeDecisions(source_episodes, policy)
-    plan = SplitWindowPlan.from_settings(config)
+    plan = SplitWindowPlan.from_settings(config, arrivals=True)
     fractions = plan.ratios
     split_count = len(config.splits)
     assigned = {}
@@ -372,7 +283,16 @@ def _prepare_policy(config, writer, resolved, original, identity):
     if missing := depth_masks - set(observations):
         raise ValueError(f"Policy preparation lacks depth masks: {sorted(missing)}")
     features = [name for name in observations if name not in media_inputs | depth_masks]
-    encoder = EpisodeTableEncoder(policy)
+    layout = TrajectoryRowLayout(
+        policy.observation_columns,
+        policy.static_columns,
+        policy.actions,
+        mask_column=policy.raw_mask_column
+        or resolved.declaration.mask_column
+        or (resolved.manifest or {}).get("mask_column"),
+        aliases=resolved.declaration.action_columns
+        or (resolved.manifest or {}).get("action_columns"),
+    )
     episodes = decisions.episodes
     schema_path = writer.workspace / "episode-schema.arrow"
     if schema_path.exists():
@@ -380,7 +300,7 @@ def _prepare_policy(config, writer, resolved, original, identity):
     else:
         schema = None
         for index, episode in enumerate(source_episodes):
-            current = encoder.table(index, episode).schema
+            current = episode_table(index, episode, layout, policy).schema
             schema = (
                 current
                 if schema is None
@@ -390,15 +310,15 @@ def _prepare_policy(config, writer, resolved, original, identity):
             raise ValueError("Policy preparation requires eligible episodes")
         with atomic_path(schema_path) as temporary:
             temporary.write_bytes(schema.serialize().to_pybytes())
-    action_columns = executed_action_columns(policy.actions, encoder.columns)
+    action_columns = layout.actions
     actions = list(action_columns.values())
-    # A shared self-feedback/target column stores the executed action, as in
-    # supervised next-step prediction. Policy windows obtain its lag from the
-    # separate previous-action record, including at a fragment boundary.
+    # Dedicated feedback names alias the action on the same observation row.
     feedback = [
-        name for name, action in policy.previous_action_inputs.items() if name != action
+        name
+        for name, action in policy.previous_action_inputs.items()
+        if name != action_columns[action]
     ]
-    temporal = features + actions + feedback
+    temporal = features + actions + feedback + [INCOMING_ACTION_PRESENT]
     columns = temporal + static
     if config.selected_columns is not None:
         missing = (
@@ -435,16 +355,14 @@ def _prepare_policy(config, writer, resolved, original, identity):
         name
         for name in config.indexed_passthrough
         if name not in (REWARD_COLUMN, *TRANSITION_FLAGS)
+        and not (name == "__collection" and name in schema.names)
     ]
     reserved = {
         *columns,
         *derived,
         *schema.names,
         policy.raw_mask_column,
-        "__decision",
-        DOMAIN_CONTEXT,
         DOMAIN_STATIC,
-        DOMAIN_SUCCESSORS,
         DOMAIN_OBSERVATIONS,
     }
     if collisions := reserved.intersection(auxiliary):
@@ -505,13 +423,10 @@ def _prepare_policy(config, writer, resolved, original, identity):
             frame = pl.DataFrame({column: episode.observations[column]})
         elif column in episode.static_inputs:
             frame = pl.DataFrame(
-                {column: [episode.static_inputs[column]] * len(episode.item_positions)}
+                {column: [episode.static_inputs[column]] * (len(episode.actions) + 1)}
             )
         else:
-            reference = episodes.source(index)
-            if not isinstance(reference, TableEpisodeReference):
-                raise ValueError(f"Missing recorded split_column {column!r}")
-            frame = reference.decision_columns(episode.item_positions, [column])
+            frame = episodes.source(index).source_columns(episode.positions, [column])
         values = _add_normalized_split_column(
             frame, column, config.split_values, episode.episode_id
         )[SPLIT_VALUE_COLUMN]
@@ -535,9 +450,11 @@ def _prepare_policy(config, writer, resolved, original, identity):
 
     def episode_rows(index):
         episode = episodes[index]
-        table = encoder.table(decisions.sequence_ids[index], episode)
+        table = episode_table(decisions.sequence_ids[index], episode, layout, policy)
         return _action_features(
-            pl.from_arrow(cast_episode_table(table, schema)), policy, action_columns
+            pl.from_arrow(cast_episode_table(table, schema)),
+            policy,
+            action_columns,
         )
 
     raw_schema = _action_features(
@@ -549,7 +466,9 @@ def _prepare_policy(config, writer, resolved, original, identity):
         columns
         if frozen is None
         else [
-            name for name in actions + feedback if name not in frozen.column_data_types
+            name
+            for name in [*actions, *feedback, INCOMING_ACTION_PRESENT]
+            if name not in frozen.column_data_types
         ]
     )
     metadata = dict(frozen) if frozen is not None else {}
@@ -582,16 +501,19 @@ def _prepare_policy(config, writer, resolved, original, identity):
             if not config.normalize_on_all_data and assigned.get(index, 0) != 0:
                 continue
             rows = episode_rows(index)
-            length = decisions.lengths[index]
+            length = decisions.lengths[index] + 1
             if not config.normalize_on_all_data and index not in assigned:
-                bounds = episode_bounds(index) or split_intervals(len(rows), fractions)
+                bounds = episode_bounds(index) or split_intervals(
+                    len(episodes[index].actions) + 1, fractions
+                )
                 length = min(length, bounds[0][1])
             rows = rows.head(length)
             if rows.is_empty():
                 continue
             for frame, selected in (
-                (rows.filter(~pl.col(OBSERVATION_MASK)), features),
-                (rows, actions + feedback),
+                (rows.filter(~pl.col(layout.mask_column)), features),
+                (rows.slice(1), actions + feedback),
+                (rows, [INCOMING_ACTION_PRESENT]),
                 (rows.head(1), static),
             ):
                 selected = [name for name in selected if name in fit_columns]
@@ -601,9 +523,9 @@ def _prepare_policy(config, writer, resolved, original, identity):
                             layouts.column_to_layout[name]
                         )
                         column = frame[name]
-                        layout = layouts.layout_for_column(name)
+                        depth_layout = layouts.layout_for_column(name)
                         values = _valid_depth_values(
-                            column, frame[mask_key].to_list(), layout
+                            column, frame[mask_key].to_list(), depth_layout
                         )
                         feature = pl.Series(
                             name, values, dtype=column.dtype.inner
@@ -664,7 +586,8 @@ def _prepare_policy(config, writer, resolved, original, identity):
             dtype = dtype.inner
         transforms[name] = fitted.column_transform(name, dtype, normalize, cardinality)
     static_rows = []
-    mask_column = policy.raw_mask_column
+    mask_column = layout.mask_column
+    has_mask = bool(policy.raw_mask_column or resolved.declaration.mask_column)
     static_payload = [*static, *([PREFIX_IMAGE] if prefix else [])]
     for index in range(len(episodes)):
         record = episodes.metadata(index)
@@ -672,87 +595,58 @@ def _prepare_policy(config, writer, resolved, original, identity):
         sequence_id = decisions.sequence_ids[index]
         checkpoint = writer.item_checkpoint(sequence_id)
         static_path = writer.workspace / f"static-{sequence_id}.parquet"
+        episode = episodes[index]
+        seed = seed_metadata(episode.context)
         if checkpoint.is_file():
             if static_payload:
                 static_rows.append(pl.read_parquet(static_path))
             rows = pl.read_parquet(
-                checkpoint, columns=["sequenceId", "itemPosition", OBSERVATION_MASK]
+                checkpoint, columns=["sequenceId", "itemPosition", mask_column]
             )
         else:
             rows = episode_rows(index)
             extra_columns = list(dict.fromkeys([*auxiliary, *curriculum]))
             if extra_columns:
-                reference = episodes.source(index)
-                if not isinstance(reference, TableEpisodeReference):
-                    raise ValueError(
-                        "Auxiliary indexed_passthrough and curriculum columns require a table source"
-                    )
-                extra = reference.decision_columns(
-                    episodes[index].item_positions, extra_columns
+                extra = episodes.source(index).source_columns(
+                    episode.positions, extra_columns
                 )
-                rows = rows.hstack(extra.select(auxiliary)) if auxiliary else rows
-                if curriculum:
-                    for name in curriculum:
-                        if (
-                            not extra[name].dtype.is_integer()
-                            or extra[name].null_count()
-                        ):
-                            raise ValueError(
-                                f"curriculum_column {name!r} requires non-null integers"
-                            )
-                    rows = rows.hstack(
-                        extra.select(
-                            pl.col(name).cast(pl.Int64).alias(stored_name)
-                            for name, stored_name in zip(
-                                curriculum, stored_curriculum, strict=True
-                            )
+                for name in curriculum:
+                    if not extra[name].dtype.is_integer() or extra[name].null_count():
+                        raise ValueError(
+                            f"curriculum_column {name!r} requires non-null integers"
                         )
-                    )
-            rows = with_domain_record(rows, features, DOMAIN_OBSERVATIONS)
-            rows = with_domain_record(rows, static, DOMAIN_STATIC)
+                extra = extra.select(
+                    *auxiliary,
+                    *(
+                        pl.col(name).cast(pl.Int64).alias(stored_name)
+                        for name, stored_name in zip(
+                            curriculum, stored_curriculum, strict=True
+                        )
+                    ),
+                )
+                rows = rows.hstack(extra)
             rows = with_domain_record(
-                rows, [SUCCESSOR_PREFIX + name for name in features], DOMAIN_SUCCESSORS
+                rows, [*features, *action_columns.values()], DOMAIN_OBSERVATIONS
+            )
+            rows = with_domain_record(rows, static, DOMAIN_STATIC)
+            rows = rows.with_columns(
+                pl.col(name).fill_null(value)
+                for name, value in policy.initial_inputs.items()
+                if name in actions + feedback
             )
             rows = rows.with_columns(
-                _encoded_observation(rows, name, source_prefix, layouts, transform)
+                _encoded_observation(rows, name, layouts, transform)
                 for name, transform in transforms.items()
-                for source_prefix in (
-                    ("", SUCCESSOR_PREFIX) if name in features else ("",)
-                )
             )
-            rows = _mask_features(rows, features, fitted, layouts)
+            rows = rows.with_columns(
+                pl.col(name).fill_null(
+                    SPECIAL_TOKEN_IDS.mask if name in fitted.id_maps else 0.0
+                )
+                for name in actions + feedback
+            )
             rows = _mask_features(
-                rows, features, fitted, layouts, prefix=SUCCESSOR_PREFIX
+                rows, features, fitted, layouts, masked=pl.col(mask_column)
             )
-            rows = rows.with_columns(pl.col(CONTEXT_COLUMN).alias(DOMAIN_CONTEXT))
-            if payload := rows[CONTEXT_COLUMN][0]:
-                context = CONTEXT_RECORDS.validate_json(payload)
-                history = pl.DataFrame([step.observation for step in context])
-                history = history.with_columns(
-                    _encoded_observation(history, name, "", layouts, transforms[name])
-                    for name in features
-                )
-                history = _mask_features(
-                    history.with_columns(
-                        pl.Series(OBSERVATION_MASK, [step.masked for step in context])
-                    ),
-                    features,
-                    fitted,
-                    layouts,
-                ).drop(OBSERVATION_MASK)
-                encoded = tuple(
-                    step.model_copy(update={"observation": row})
-                    for step, row in zip(context, history.to_dicts(), strict=True)
-                )
-                rows = rows.with_columns(
-                    pl.Series(
-                        CONTEXT_COLUMN,
-                        [
-                            CONTEXT_RECORDS.dump_json(encoded).decode(),
-                            *([None] * (len(rows) - 1)),
-                        ],
-                    )
-                )
             if static_payload:
                 static_row = rows.select(
                     "sequenceId", *static_payload, *([DOMAIN_STATIC] if static else [])
@@ -761,11 +655,13 @@ def _prepare_policy(config, writer, resolved, original, identity):
                 with atomic_path(static_path) as temporary:
                     static_row.write_parquet(temporary)
                 rows = rows.drop(static_payload + ([DOMAIN_STATIC] if static else []))
-        if mask_column is None and frozen is None and rows[OBSERVATION_MASK].any():
-            mask_column = OBSERVATION_MASK
+        has_mask = has_mask or rows[mask_column].any()
         first = rows["itemPosition"][0]
         placements = plan.placements(
-            first, len(rows), assigned=assigned.get(index), bounds=episode_bounds(index)
+            first,
+            len(rows),
+            assigned=assigned.get(index),
+            bounds=episode_bounds(index),
         )
         if curriculum and checkpoint.is_file():
             rows = pl.read_parquet(
@@ -781,6 +677,7 @@ def _prepare_policy(config, writer, resolved, original, identity):
             episode_id=episode_id,
             group_id=record.group_id,
             content_key=record.content_key,
+            trajectory=seed,
         )
     if static_rows:
         writer.write_static(pl.concat(static_rows, how="vertical_relaxed"))
@@ -820,7 +717,7 @@ def _prepare_policy(config, writer, resolved, original, identity):
         if frozen
         else config.normalize_on_all_data,
         cardinality_config=cardinality,
-        raw_mask_column=mask_column,
+        raw_mask_column=mask_column if has_mask else None,
         static_columns=static,
         static_features_path="static.parquet" if static_rows else None,
         indexed_derived_features=derived,
@@ -835,6 +732,7 @@ def _prepare_policy(config, writer, resolved, original, identity):
             **resolved.provenance(),
             "preparation": identity,
             "policy_binding": policy.task_binding.model_dump(mode="json"),
+            "action_columns": action_columns,
         },
     )
 
@@ -856,7 +754,13 @@ def _prepare_depth_source(resolved, layouts, workspace, policy, config, time_col
         raise ValueError("Raw policy preparation accepts one repeated-row depth layout")
     name, layout = raw[0]
     coordinates = ["sequenceId", "itemPosition", layout.position_column]
+    manifest = resolved.manifest or {}
     required = {
+        *manifest.get("action_columns", {}).values(),
+        *resolved.declaration.action_columns.values(),
+        manifest.get("mask_column"),
+        resolved.declaration.mask_column,
+        ACTION_METADATA,
         *policy.observation_columns,
         *policy.static_columns,
         *policy.actions,
@@ -865,10 +769,6 @@ def _prepare_depth_source(resolved, layouts, workspace, policy, config, time_col
         config.split_column,
         config.mask_column,
         time_column,
-        ACTION_RECORD,
-        PREVIOUS_ACTION_RECORD,
-        CONTEXT_COLUMN,
-        OBSERVATION_MASK,
         GROUP_COLUMN,
         SEQUENCE_NAME_COLUMN,
         REWARD_COLUMN,
@@ -960,34 +860,22 @@ def _prepare_media(resolved, images, prefix, time_column, workspace):
 
 
 def _action_features(rows, policy, action_columns):
-    rows = project_actions(rows, action_columns)
-    previous = [
-        pl.col(PREVIOUS_ACTION_RECORD)
-        .struct.field(action)
-        .fill_null(pl.lit(policy.initial_inputs.get(name)))
-        .alias(name)
+    return rows.with_columns(
+        pl.col(next(iter(action_columns.values())))
+        .is_not_null()
+        .cast(pl.Float32)
+        .alias(INCOMING_ACTION_PRESENT)
+    ).with_columns(
+        pl.col(action_columns[action]).alias(name)
         for name, action in policy.previous_action_inputs.items()
-        if name != action
-    ]
-    result = rows.with_columns(previous)
-    if any(
-        name not in policy.initial_inputs
-        and rows[PREVIOUS_ACTION_RECORD].struct.field(action).null_count()
-        for name, action in policy.previous_action_inputs.items()
-    ):
-        raise ValueError(
-            "Policy preparation requires feedback initial values for missing lagged actions"
-        )
-    return result
+        if name != action_columns[action]
+    )
 
 
-def _mask_features(rows, features, fitted, layouts, *, prefix=""):
-    masked = pl.col(OBSERVATION_MASK)
-    if prefix:
-        masked = masked.shift(-1, fill_value=False)
+def _mask_features(rows, features, fitted, layouts, *, masked):
     expressions = []
     for name in features:
-        column = prefix + name
+        column = name
         fill = SPECIAL_TOKEN_IDS.mask if name in fitted.id_maps else 0
         dtype = rows.schema[column]
         value = (
@@ -1004,17 +892,14 @@ def _mask_features(rows, features, fitted, layouts, *, prefix=""):
     return rows.with_columns(expressions)
 
 
-def _encoded_observation(rows, name, prefix, layouts, transform):
-    column = rows[prefix + name]
+def _encoded_observation(rows, name, layouts, transform):
+    column = rows[name]
     layout = layouts.layout_for_column(name)
-    if prefix and column.null_count() == len(rows):
-        dtype = pl.List(transform.output_dtype) if layout else transform.output_dtype
-        return pl.lit(None, dtype=dtype).alias(column.name)
     if layout is None:
-        return transform.stored_expression(column, preserve_nulls=bool(prefix))
+        return transform.stored_expression(column, preserve_nulls=True)
 
     mask_key = depth_mask_metadata_key(layouts.column_to_layout[name])
-    masks = rows[prefix + mask_key].to_list()
+    masks = rows[mask_key].to_list()
     values = column.to_list()
     flattened = _valid_depth_values(column, masks, layout)
     frame = pl.Series(column.name, flattened, dtype=column.dtype.inner).to_frame()

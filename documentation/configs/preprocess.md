@@ -592,7 +592,7 @@ store writes each item once and records window coordinates separately. The
 first split is `0.split.json`, the next is `1.split.json`, and so on. Keep the
 generated `metadata.json` as the original preprocessing metadata for that model.
 For a store shared with policy phases, use `indexed_passthrough` to keep auxiliary
-columns such as `reward`, `terminated`, `truncated`, and `bootstrap_allowed` in
+columns such as `reward`, `terminated`, and `truncated` in
 their original representation. Training and evaluation phases can reference
 the recorded split views directly. Both pathways retain the integer `sequenceId` for joins.
 Use a distinct signed 64-bit integer for each sequence across sources you combine.
@@ -630,12 +630,11 @@ Image configuration uses `image_sources`, `preconditioning_image`, and
 `time_alignment_column`. Prepared policy stores write aligned media with the
 items and preconditioning images with the static values.
 Set `mask_column` to the raw observation mask, for example `hide`. Either that
-column or the canonical `__observation_mask` can hide a row. Masked observations
+column or the mask declared in a sequence manifest can hide a row. Masked observations
 are excluded from feature fitting. Set `indexed_passthrough` to retain auxiliary
-decision columns such as a timestamp or a rollout's `__collection` struct.
-These columns keep their recorded types and are available in the indexed view.
-Trajectory JSON carries the standard transition fields. Additional passthrough
-columns require a tabular source, including Parquet rollout manifests.
+columns such as a timestamp. These columns keep their recorded types. Sequence
+manifests carry rewards, boundary flags and any recorded `__collection`
+diagnostics through preparation automatically.
 For a single input, `preprocessing_data_path` can supply the location in YAML
 or Python while `source.columns` supplies feature roles when needed.
 The CLI's `--preprocessing-data-path` replaces the source location. In a training
@@ -654,7 +653,7 @@ and includes static data. Sequence IDs, episode names, collection groups and col
 diagnostics are excluded from the content comparison. Matching records and explicit
 collection groups stay together, including when a group links several duplicates.
 Given the same records, eligible IDs, fractions and seed, each mode fits its features
-on the same training sequences. Give differently annotated copies of the same policy demonstration a common `__group` to keep them together after policy feature selection. Use `within_sequence` for fractional temporal
+on the same training sequences. Give differently annotated copies of the same policy demonstration a common `groupId` to keep them together after policy feature selection. Use `within_sequence` for fractional temporal
 ranges or `value_cutoff` with a monotonic source column as `split_column`.
 For example, set `split_column: tick` and declare only `obs` as a policy
 observation to split by time while fitting only `obs`.
@@ -663,12 +662,11 @@ Set `ALLOW_LARGE_SPLITS=1` to allow a smaller share with a warning.
 Declared categorical and real roles must agree with the frozen metadata in both modes.
 Offline policy training requires independent training and evaluation episodes. Temporal
 ranges are also available for inference or for training with independently sourced evaluation data.
-When a split starts mid-episode, earlier observations and lagged actions can fill
-the model context. Only owned decisions contribute targets.
+When a split starts mid-episode, earlier observations and their incoming actions can fill
+the model context. Each target belongs to the split containing its arrival row.
 Rewards, action records, and transition flags retain their domain values.
 When a target and its own action feedback share a name, the feature column holds
-the executed action at each item. Policy windows use the previous-action record
-and the configured initial feedback at an episode boundary.
+the action that produced each observation. The reset row uses the configured initial feedback.
 Set `metadata_config_path` to reuse an established feature contract. Structured
 depth demonstrations use that frozen metadata and supply the corresponding
 per-item depth masks.
@@ -712,8 +710,7 @@ Use `passthrough_columns` for auxiliary policy inputs such as a desired-return
 column that is absent from the training feature metadata.
 You can point `preprocessing_data_path` at a rollout manifest and reuse the same
 frozen metadata. Use `read_format: sequence` for a manifest without a `.json`
-suffix. The default `sequence_view: decisions` keeps its decision rows.
-`sequence_view: observations` also includes each recorded final successor.
+suffix. Preparation includes all observation rows, including the final successor.
 
 For a policy artifact created before explicit preprocessing was available,
 `operation: export_metadata` takes `model_path`, optional `model_interface`,
@@ -722,7 +719,7 @@ metadata JSON that can be used with both fresh-data inference routes.
 
 ## Rollout inputs
 
-Set `preprocessing_data_path` to the rollout manifest. The default `sequence_view: decisions` retains action-aligned rows. Use `sequence_view: observations` for observation histories including a recorded final successor. For `operation: prepare_policy`, use `source.manifest_path`. [Rollout configuration and examples](../rollout.md#reusing-rollout-data)
+Set `preprocessing_data_path` to the rollout manifest. Each row contains the observation and its incoming action. For `operation: prepare_policy`, use `source.manifest_path`. [Rollout configuration and examples](../rollout.md#reusing-rollout-data)
 
 Keep prediction coordinates and generated columns such as `action_log_probability`
 out of feature and action declarations. Dedicated mask, policy feedback, and

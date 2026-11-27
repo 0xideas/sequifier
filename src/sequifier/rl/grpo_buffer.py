@@ -1,6 +1,5 @@
 """Bounded complete groups with reconstructable causal frames and fixed scores."""
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 
 import torch
@@ -27,7 +26,6 @@ class GRPOTrajectory:
     advantage: float
     generation: int
     raw_rewards: tuple = ()
-    final_observation: Mapping | None = None
     terminated: bool = False
     truncated: bool = False
 

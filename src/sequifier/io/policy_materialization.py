@@ -6,6 +6,7 @@ import numpy as np
 import polars as pl
 import torch
 
+from sequifier.config.column_names import INCOMING_ACTION_PRESENT
 from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES
 from sequifier.io.actions import decode_action
@@ -152,9 +153,13 @@ def materialize_history(
                     elif key in config.initial_inputs:
                         raw = config.initial_inputs[key]
                     else:
-                        raise ValueError(
-                            f"{key}: lagged action requires a feedback initial value at episode start"
+                        payload[0, padding + index] = (
+                            SPECIAL_TOKEN_IDS.mask if dtype == torch.int64 else 0.0
                         )
+                        continue
+                elif key == INCOMING_ACTION_PRESENT:
+                    raw = float(previous[index] is not None)
+                    feedback = True
                 elif key in row:
                     raw = row[key]
                 else:

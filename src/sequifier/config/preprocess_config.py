@@ -81,7 +81,6 @@ class PrepareInferenceConfig(ConfigModel):
     metadata_config_path: str
     output_path: str
     read_format: Literal["csv", "parquet", "sequence"] | None = None
-    sequence_view: Literal["decisions", "observations"] = "decisions"
     static_data_path: str | None = None
     passthrough_columns: list[str] = Field(default_factory=list)
     image_paths: dict[str, str] = Field(default_factory=dict)
@@ -93,12 +92,10 @@ class PrepareInferenceConfig(ConfigModel):
         validate_column_names(
             self.passthrough_columns,
             "passthrough_columns",
-            allowed=("__collection", "__executed_action", "__previous_action"),
+            allowed=("__collection",),
         )
         if self.mask_column:
-            validate_column_names(
-                [self.mask_column], "mask_column", allowed=("__observation_mask",)
-            )
+            validate_column_names([self.mask_column], "mask_column")
         return self
 
 
@@ -121,7 +118,6 @@ class PreprocessorModel(SequencePreprocessingSettings):
 
     read_format: str = "csv"
     write_format: str = "parquet"
-    sequence_view: Literal["decisions", "observations"] = "decisions"
     indexed_output_path: str | None = Field(default=None, min_length=1)
     indexed_passthrough: list[str] = Field(default_factory=list)
     merge_output: bool = True
@@ -168,20 +164,17 @@ class PreprocessorModel(SequencePreprocessingSettings):
             "static_categorical_columns",
             "static_real_columns",
         ):
-            validate_column_names(
-                getattr(self, field) or (), field, prefixes=("__executed_",)
-            )
+            validate_column_names(getattr(self, field) or (), field)
         validate_column_names(
             self.indexed_passthrough,
             "indexed_passthrough",
-            allowed=("__collection", "__executed_action", "__previous_action"),
+            allowed=("__collection",),
         )
         for field in ("split_column", "time_alignment_column", "mask_column"):
             if name := getattr(self, field):
                 validate_column_names(
                     [name],
                     field,
-                    allowed=("__observation_mask",) if field == "mask_column" else (),
                 )
         validate_column_names(
             curriculum_columns(self.curriculum_column), "curriculum_column"

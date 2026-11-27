@@ -17,15 +17,10 @@ from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.io.images import ImageStore
 from sequifier.io.preprocessing import denormalize_values
 from sequifier.io.sequence import (
-    CONTEXT_COLUMN,
     CONTEXT_RECORDS,
-    DOMAIN_CONTEXT,
     DOMAIN_OBSERVATIONS,
     DOMAIN_STATIC,
-    DOMAIN_SUCCESSORS,
-    OBSERVATION_MASK,
     ContextObservation,
-    PreparedEpisode,
     SequenceEpisode,
     TransitionColumns,
     episode_identity,
@@ -34,20 +29,16 @@ from sequifier.io.sequence import (
 )
 from sequifier.io.values import domain_scalar, numeric_scalar
 from sequifier.trajectory.prepared import prepared_table
+from sequifier.trajectory.row_layout import ACTION_METADATA
 
 if TYPE_CHECKING:
     from sequifier.io.indexed_sequences import IndexedImageStore
     from sequifier.trajectory.sources import ResolvedSequenceSource
 
-ACTION_RECORD = "__executed_action"
-PREVIOUS_ACTION_RECORD = "__previous_action"
-PREVIOUS_ACTION_PREFIX = "__previous_action_"
-SUCCESSOR_PREFIX = "__next_"
-BOOTSTRAP_COLUMN = "bootstrap_allowed"
-GROUP_COLUMN = "__group"
+GROUP_COLUMN = "groupId"
 SEQUENCE_NAME_COLUMN = "sequenceName"
 REWARD_COLUMN = "reward"
-TRANSITION_FLAGS = ("terminated", "truncated", BOOTSTRAP_COLUMN)
+TRANSITION_FLAGS = ("terminated", "truncated")
 
 
 def scan_tables(paths: tuple[Path, ...]):
@@ -65,15 +56,6 @@ def scan_tables(paths: tuple[Path, ...]):
                 raise ValueError("sequenceId must contain non-null integers")
             scan = scan.with_columns(pl.col("sequenceId").cast(pl.Int64))
         scans.append(scan)
-    if any(CONTEXT_COLUMN in scan.collect_schema() for scan in scans):
-        scans = [
-            scan
-            if CONTEXT_COLUMN in scan.collect_schema()
-            else scan.with_columns(pl.lit(None, dtype=pl.String).alias(CONTEXT_COLUMN))
-            for scan in scans
-        ]
-        columns = scans[0].collect_schema().names()
-        scans = [scan.select(columns) for scan in scans]
     return pl.concat(scans, how="vertical_relaxed")
 
 
@@ -84,19 +66,23 @@ class IndexedTable:
     and sorting happen once; cache misses never filter the original source.
     """
 
-    def __init__(self, data, sequence_column):
+    def __init__(self, data, sequence_column, *, bounds=None):
         import pyarrow.parquet as pq
 
         self.directory = tempfile.TemporaryDirectory(prefix="sequifier-episodes-")
         self.path = Path(self.directory.name) / "episodes.parquet"
-        data.sort(sequence_column, maintain_order=True).sink_parquet(
-            self.path, row_group_size=8192
+        order = (
+            [sequence_column, "itemPosition"]
+            if "itemPosition" in data.collect_schema()
+            else [sequence_column]
         )
+        data.sort(order).sink_parquet(self.path, row_group_size=8192)
         table = pq.ParquetFile(self.path)
         self.offsets = [0]
         for i in range(table.num_row_groups):
             self.offsets.append(self.offsets[-1] + table.metadata.row_group(i).num_rows)
         self.ranges = {}
+        self.bounds = bounds
         offset = 0
         for batch in table.iter_batches(columns=[sequence_column]):
             for identity in batch.column(0).to_pylist():
@@ -135,7 +121,12 @@ class IndexedEpisodeTable:
     def __init__(self, view, context_length):
         self.context_length = context_length
         self.view = view
-        self.ranges = view.split_bounds()
+        self.bounds = view.split_bounds()
+        self.ranges = {
+            identity: (low, high)
+            for identity, (low, high) in self.bounds.items()
+            if high > max(low, view.dataset["sequences"][str(identity)]["position"] + 1)
+        }
         if not self.ranges:
             raise ValueError(
                 f"{view.path}: policy episodes require recorded split membership"
@@ -146,52 +137,32 @@ class IndexedEpisodeTable:
         history = self.view.history_start(
             identity, start, end, start - self.context_length
         )
-        rows = self.view.read(identity, history, end)
         record = self.view.dataset["sequences"][str(identity)]
+        rows = self.view.read(
+            identity, max(record["position"], min(history, start - 1)), end
+        )
         for field, column in (
             ("episode_id", SEQUENCE_NAME_COLUMN),
             ("group_id", GROUP_COLUMN),
         ):
             if record.get(field) is not None and column not in rows.columns:
                 rows = rows.with_columns(pl.lit(record[field]).alias(column))
-        return rows.with_columns((pl.col("itemPosition") >= start).alias("__decision"))
+        return rows
 
 
-def executed_action_columns(actions, occupied):
-    """Map action names to flat training columns while preserving existing fields."""
-    occupied = {ACTION_RECORD, *occupied}
-    actions = tuple(actions)
-    reserved = occupied.union(actions)
-    columns = {}
-    for action in actions:
-        name = action
-        if name in occupied:
-            name = "__executed_" + action
-            while name in reserved:
-                name = "__executed_" + name
-        columns[action] = name
-        reserved.add(name)
-    return columns
-
-
-def project_actions(frame, columns):
-    return frame.with_columns(
-        pl.col(ACTION_RECORD).struct.field(action).alias(name)
-        for action, name in columns.items()
-    )
-
-
-def observation_mask(frame, raw_column):
+def observation_mask(frame, raw_column, *, recorded_column=None):
     """Combine the available recorded and configured row masks in boolean form."""
     from sequifier.io.feature_fitting import mask_expression
 
     schema = frame.collect_schema()
     columns = [
-        name for name in dict.fromkeys((OBSERVATION_MASK, raw_column)) if name in schema
+        name
+        for name in dict.fromkeys((recorded_column, raw_column))
+        if name is not None and name in schema
     ]
     if raw_column and not columns:
         raise ValueError(f"Missing observation mask column {raw_column!r}")
-    result = pl.lit(False)
+    result = pl.repeat(False, pl.len())
     for name in columns:
         if isinstance(frame, pl.LazyFrame):
             values = frame.select(pl.col(name).unique()).collect().to_series()
@@ -203,25 +174,32 @@ def observation_mask(frame, raw_column):
     return result
 
 
+def domain_action_columns(rows, action_columns, observations, static):
+    raw = rows.schema.get(DOMAIN_OBSERVATIONS)
+    if not isinstance(raw, pl.Struct):
+        return set()
+    return (set(action_columns) & set(rows.columns) & raw.to_schema().keys()) - {
+        *observations,
+        *static,
+    }
+
+
 def project_prepared_rows(
-    rows, metadata, observations, static, actions, *, physical_inputs
+    rows,
+    metadata,
+    observations,
+    static,
+    actions,
+    *,
+    physical_inputs,
+    action_mapping=None,
 ):
-    """Select observation units and read recorded actions in their own namespace."""
-    # Resolve feedback before selecting the observation projection. A model
-    # input and an executed action may have the same logical name.
-    if actions and ACTION_RECORD not in rows.columns:
-        recorded = []
-        physical = rows.schema.get(DOMAIN_OBSERVATIONS)
-        columns = executed_action_columns(actions, [*observations, *static])
-        for name, column in columns.items():
-            if isinstance(physical, pl.Struct) and column in physical.to_schema():
-                recorded.append(
-                    pl.col(DOMAIN_OBSERVATIONS).struct.field(column).alias(name)
-                )
-            elif column in metadata.indexed_passthrough and column in rows.columns:
-                recorded.append(pl.col(column).alias(name))
-        if len(recorded) == len(actions):
-            rows = rows.with_columns(pl.struct(recorded).alias(ACTION_RECORD))
+    """Recover raw action labels and optionally project raw observations."""
+    action_columns = action_mapping.values() if action_mapping else actions
+    rows = rows.with_columns(
+        pl.col(DOMAIN_OBSERVATIONS).struct.field(column).alias(column)
+        for column in domain_action_columns(rows, action_columns, observations, static)
+    )
     if physical_inputs:
         encoded = set(metadata.column_data_types)
         rows = rows.with_columns(
@@ -230,13 +208,6 @@ def project_prepared_rows(
             ),
             *source_fields(rows, DOMAIN_STATIC, [c for c in static if c in encoded]),
         )
-        if DOMAIN_SUCCESSORS in rows.columns:
-            rows = rows.with_columns(
-                pl.col(DOMAIN_SUCCESSORS).struct.field(name).alias(name)
-                for name in rows.schema[DOMAIN_SUCCESSORS].to_schema()
-            )
-        if DOMAIN_CONTEXT in rows.columns:
-            rows = rows.with_columns(pl.col(DOMAIN_CONTEXT).alias(CONTEXT_COLUMN))
     return rows
 
 
@@ -316,6 +287,10 @@ class TableEpisodeReference:
     prepared: bool = False
     static_table: IndexedTable | None = None
     image_store: ImageStore | IndexedImageStore | None = None
+    action_mapping: dict | None = None
+    mask_column: str | None = None
+    recorded_mask_column: str | None = None
+    seed: dict | None = None
 
     @property
     def content_key(self):
@@ -341,16 +316,15 @@ class TableEpisodeReference:
             and self.sequence_id in self.table.view.fitted_sequences
         )
 
-    def decision_columns(self, positions, columns):
-        """Read source columns in decision order, excluding any preceding context."""
+    def source_columns(self, positions, columns):
+        """Read auxiliary fields at the same contiguous observation coordinates."""
         rows = self.table.load(self.sequence_id)
         if missing := set(columns) - set(rows.columns):
             raise ValueError(f"Missing recorded columns: {sorted(missing)}")
-        return (
-            rows.filter(pl.col("itemPosition").is_between(positions[0], positions[-1]))
-            .sort("itemPosition")
-            .select(columns)
-        )
+        offset = positions[0] - rows["itemPosition"][0]
+        if offset < 0 or offset + len(positions) > len(rows):
+            raise ValueError("Source columns do not cover the requested observations")
+        return rows.slice(offset, len(positions)).select(columns)
 
     def load(self) -> SequenceEpisode:
         data = ordered_sequence_rows(self.table.load(self.sequence_id))
@@ -360,14 +334,37 @@ class TableEpisodeReference:
         )
 
         owned_start = None
+        seed = self.seed or {}
+        if isinstance(self.table, IndexedEpisodeTable):
+            view = self.table.view
+            record = view.dataset["sequences"][str(self.sequence_id)]
+            seed = record.get("trajectory") or view.dataset.get("provenance", {}).get(
+                "sequence_seeds", {}
+            ).get(str(self.sequence_id), seed)
+            if data["itemPosition"][0] != record["position"]:
+                seed = {}
+        context = ()
+        if payload := seed.get("context"):
+            if self.prepared and self.policy.input_encoding == "model":
+                from sequifier.io.prepare_inference import encode_seed_context
+
+                payload = encode_seed_context(
+                    payload, self.metadata, self.policy.observation_columns
+                )
+            context = CONTEXT_RECORDS.validate_json(payload)
         if self.prepared:
-            decisions = data.filter(pl.col("__decision"))
-            if decisions.is_empty():
+            assert self.table.bounds is not None
+            low, high = self.table.bounds[self.sequence_id]
+            owned = data.filter(pl.col("itemPosition").is_between(low, high - 1))
+            if owned.is_empty():
                 raise ValueError("prepared episode contains no split-owned decisions")
-            owned_start = decisions["itemPosition"][0]
-            data = data.filter(
-                pl.col("itemPosition") >= owned_start - self.policy.context_length
-            )
+            owned_start = max(low - 1, data["itemPosition"][0])
+            if low > 0 and data["itemPosition"][0] >= low:
+                raise ValueError(
+                    "Split lacks the observation preceding its first target"
+                )
+            if not isinstance(self.table, IndexedEpisodeTable):
+                data = data.filter(pl.col("itemPosition") < high)
         static_data = None
         if self.static_table is not None:
             static_data = self.static_table.load(self.sequence_id)
@@ -404,13 +401,25 @@ class TableEpisodeReference:
                 self.policy.static_columns,
                 self.policy.actions,
                 physical_inputs=physical,
+                action_mapping=self.action_mapping,
+            )
+            action_columns = (
+                self.action_mapping.values()
+                if self.action_mapping
+                else self.policy.actions
+            )
+            raw_columns.update(
+                domain_action_columns(
+                    data,
+                    action_columns,
+                    self.policy.observation_columns,
+                    self.policy.static_columns,
+                )
             )
             if physical:
                 raw_columns.update(
                     self.policy.observation_columns + self.policy.static_columns
                 )
-                if DOMAIN_SUCCESSORS in data.columns:
-                    raw_columns.update(data.schema[DOMAIN_SUCCESSORS].to_schema())
         return table_episode(
             data,
             self.policy,
@@ -421,6 +430,13 @@ class TableEpisodeReference:
             episode_namespace=self.source.episode_namespace,
             decode=decode,
             raw_columns=raw_columns,
+            action_mapping=self.action_mapping,
+            mask_column=self.mask_column
+            or (self.metadata.raw_mask_column if self.metadata else None),
+            recorded_mask_column=self.recorded_mask_column,
+            seed_context=context,
+            ordered=True,
+            allow_fragment=self.prepared,
         )
 
 
@@ -429,16 +445,22 @@ def table_episode(
     policy,
     *,
     sequence_id,
-    preceding_row=None,
     owned_start=None,
     static_data=None,
     episode_end="unknown",
     episode_namespace="",
     decode=domain_scalar,
     raw_columns=(),
+    action_mapping=None,
+    mask_column=None,
+    recorded_mask_column=None,
+    seed_context=(),
+    ordered=False,
+    allow_fragment=False,
 ) -> SequenceEpisode:
     """Read an episode using the policy's canonical feature names."""
-    data = ordered_sequence_rows(data)
+    if not ordered:
+        data = ordered_sequence_rows(data)
     if decode is domain_scalar:
 
         def identity_decode(value, column):
@@ -452,68 +474,61 @@ def table_episode(
     observations = policy.observation_columns
     static_inputs = policy.static_columns
     action_names = policy.action_columns
-    structured_actions = ACTION_RECORD in data.columns
-    structured_previous = PREVIOUS_ACTION_RECORD in data.columns
-    action_columns = {ACTION_RECORD} if structured_actions else set(action_names)
-    previous_columns = [PREVIOUS_ACTION_PREFIX + name for name in action_names]
-    scalar_previous = not structured_previous and any(
-        column in data.columns for column in previous_columns
-    )
-    if structured_previous:
-        previous_inputs = {PREVIOUS_ACTION_RECORD}
-    elif scalar_previous:
-        previous_inputs = set(previous_columns)
-    else:
-        previous_inputs = set()
-    successor_columns = [SUCCESSOR_PREFIX + name for name in observations]
-    has_successors = bool(set(successor_columns) & set(data.columns))
-    raw_successors = set(successor_columns) & set(raw_columns)
-    if raw_successors and policy.input_encoding == "model":
-        raise ValueError(
-            f"Model-encoded policy input requires encoded successors: {sorted(raw_successors)}"
-        )
-    inputs = set(observations)
-    if static_data is None:
-        inputs.update(static_inputs)
-    if action_columns & (inputs | previous_inputs):
-        raise ValueError(
-            "current action labels require distinct input/previous-action columns"
-        )
-    if previous_inputs & inputs:
-        raise ValueError("previous actions require distinct input columns")
-    if has_successors and set(successor_columns) & (
-        inputs | action_columns | previous_inputs
-    ):
-        raise ValueError("successors require distinct input and action columns")
-    required = inputs | {"itemPosition"} | action_columns | previous_inputs
-    if has_successors:
-        required.update(successor_columns)
-    if missing := required - set(data.columns):
+    if data["itemPosition"][0] != 0 and not allow_fragment:
+        raise ValueError("Trajectory tables must start at itemPosition zero")
+    action_fields = action_mapping or {name: name for name in action_names}
+    if set(action_fields) != set(action_names) or len(
+        set(action_fields.values())
+    ) != len(action_fields):
+        raise ValueError("Recorded action columns differ from policy actions")
+    action_columns = set(action_fields.values())
+    inputs = set(observations) | (set(static_inputs) if static_data is None else set())
+    if action_columns & inputs:
+        raise ValueError("Action and observation columns must be distinct")
+    if missing := (inputs | action_columns | {"itemPosition"}) - set(data.columns):
         raise ValueError(f"policy table is missing columns: {sorted(missing)}")
-    for record in (ACTION_RECORD, PREVIOUS_ACTION_RECORD):
-        if (
-            record in data.columns
-            and data.schema[record] != pl.Null
-            and not isinstance(data.schema[record], pl.Struct)
-        ):
-            raise ValueError(f"{record}: action records require a structured column")
-
-    def canonical_action(value):
-        if value is None:
-            return None
-        return {
-            name: entry
-            for name, entry in value.items()
-            if name in policy.actions or entry is not None
-        }
+    masks = (
+        data.select(
+            observation_mask(
+                data,
+                mask_column or policy.raw_mask_column,
+                recorded_column=recorded_mask_column,
+            )
+        )
+        .to_series()
+        .to_list()
+    )
+    present = data.select(pl.col(list(action_columns)).is_not_null())
+    complete = present.select(pl.all_horizontal(pl.all())).to_series()
+    if (
+        len(data) < 2
+        or not complete[1:].all()
+        or ((data["itemPosition"][0] > 0 or any(present.row(0))) and not complete[0])
+    ):
+        raise ValueError(
+            "Every arrival requires a complete action and a preceding observation"
+        )
+    if data["itemPosition"][0] == 0 and any(
+        data[name][0] is not None
+        for name in (*TRANSITION_FLAGS, REWARD_COLUMN)
+        if name in data.columns
+    ):
+        raise ValueError("Initial observation cannot carry a transition outcome")
 
     def action_at(row):
-        if structured_actions:
-            record = canonical_action(row[ACTION_RECORD])
-            if record is None:
-                raise ValueError("A decision requires a recorded action")
-            return record
-        return {name: decode(row[name], name) for name in action_names}
+        return {
+            **{
+                name: value
+                for name, value in (row.get(ACTION_METADATA) or {}).items()
+                if value is not None
+            },
+            **{
+                name: row[column]
+                if column in raw_columns
+                else decode(row[column], column)
+                for name, column in action_fields.items()
+            },
+        }
 
     def values(column, decoder=decode):
         return tuple(decoder(value, column) for value in data[column].to_list())
@@ -529,34 +544,11 @@ def table_episode(
             raise ValueError(f"{label} must remain constant within an episode")
         return entries[0]
 
-    if policy.raw_mask_column or OBSERVATION_MASK in data.columns:
-        data = data.with_columns(
-            observation_mask(data, policy.raw_mask_column).alias(OBSERVATION_MASK)
-        )
-    positions = tuple(data["itemPosition"])
-    actions = tuple(action_at(row) for row in data.iter_rows(named=True))
-    preceding = action_at(preceding_row) if preceding_row is not None else None
-    if scalar_previous:
-        previous = tuple(
-            dict(zip(action_names, entries, strict=True))
-            for entries in data.select(previous_columns).iter_rows()
-        )
-        if previous[1:] != actions[:-1]:
-            raise ValueError(
-                "previous actions must lag recorded actions by one decision"
-            )
-        preceding = (
-            None
-            if all(value is None for value in previous[0].values())
-            else previous[0]
-        )
-    if structured_previous:
-        previous = tuple(map(canonical_action, data[PREVIOUS_ACTION_RECORD]))
-        if previous[1:] != actions[:-1]:
-            raise ValueError(
-                "previous-action column must lag executed actions by exactly one decision"
-            )
-        preceding = previous[0]
+    first_position = data["itemPosition"][0]
+    incoming = tuple(
+        action_at(row) if i or complete[0] else None
+        for i, row in enumerate(data.iter_rows(named=True))
+    )
     if static_data is not None:
         if len(static_data) != 1:
             raise ValueError("static data requires exactly one row per sequenceId")
@@ -592,31 +584,15 @@ def table_episode(
             value if column in raw_columns else decode(value, column), "reward"
         )
 
-    context = ()
-    if CONTEXT_COLUMN in data.columns and (stored := data[CONTEXT_COLUMN][0]):
-        context = CONTEXT_RECORDS.validate_json(stored)
-        context = tuple(
-            step.model_copy(
-                update={
-                    "observation": {
-                        name: feature_value(value, name)
-                        for name, value in step.observation.items()
-                    }
-                }
-            )
-            for step in context
-        )
-    if owned_start is not None and owned_start > positions[0]:
-        offset = owned_start - positions[0]
+    if any(
+        name in data.columns and data[name].head(-1).any() for name in TRANSITION_FLAGS
+    ):
+        raise ValueError("A trajectory cannot continue after a boundary")
+    context = seed_context
+    if owned_start is not None and owned_start > first_position:
+        offset = owned_start - first_position
         prefix = data.head(offset)
-        if any(
-            name in prefix.columns and prefix[name].any()
-            for name in ("terminated", "truncated")
-        ):
-            raise ValueError("Prepared history crosses an episode boundary")
         first = max(0, offset - policy.context_length + 1)
-        if positions[0] and preceding is None and policy.previous_action_inputs:
-            first = max(1, first)
         frames = []
         for i, row in enumerate(prefix.slice(first).iter_rows(named=True), first):
             frames.append(
@@ -624,10 +600,11 @@ def table_episode(
                     observation={
                         name: feature_value(row[name], name) for name in observations
                     },
-                    masked=row.get(OBSERVATION_MASK, False),
-                    previous_action=actions[i - 1] if i else preceding,
-                    reward=reward_value(row[REWARD_COLUMN], REWARD_COLUMN)
-                    if row.get(REWARD_COLUMN) is not None
+                    masked=masks[i],
+                    previous_action=incoming[i],
+                    reward=reward_value(data[REWARD_COLUMN][i + 1], REWARD_COLUMN)
+                    if REWARD_COLUMN in data.columns
+                    and data[REWARD_COLUMN][i + 1] is not None
                     else None,
                 )
             )
@@ -636,66 +613,43 @@ def table_episode(
             if policy.context_length > 1
             else ()
         )
-        preceding = actions[offset - 1]
-        actions = actions[offset:]
-        positions = positions[offset:]
+        incoming = incoming[offset:]
+        first_position += offset
         data = data.slice(offset)
+        masks = masks[offset:]
 
     # Strict boolean and length checks belong to TransitionColumns/SequenceEpisode.
+    observation_values = {name: values(name, feature_value) for name in observations}
+    data = data.slice(1)
     transitions = {
         field: optional_values(field, lambda value, _: value)
         for field in TRANSITION_FLAGS
     }
-    transitions = TransitionColumns(**transitions).model_dump(exclude_none=True)
     declared = episode_end
     if declared != "unknown":
         current = transitions.get(declared)
         if current is not None and not current[-1]:
             raise ValueError("episode_end conflicts with the recorded final boundary")
         transitions[declared] = (False,) * (len(data) - 1) + (True,)
-    successors = None
-    if has_successors:
-        successors = []
-        for entries in data.select(successor_columns).iter_rows():
-            present = [value is not None for value in entries]
-            if any(present) and not all(present):
-                raise ValueError("a missing successor must mask all observation fields")
-            successors.append(
-                {
-                    name: (
-                        value
-                        if SUCCESSOR_PREFIX + name in raw_successors
-                        else feature_value(value, name)
-                    )
-                    for name, value in zip(observations, entries, strict=True)
-                }
-                if all(present)
-                else None
-            )
-    episode = SequenceEpisode(
+    return SequenceEpisode(
         sequence_id=int(sequence_id),
         episode_id=episode_namespace + episode_identity(sequence_id, identity),
-        item_positions=positions,
-        observation_masks=tuple(data[OBSERVATION_MASK])
-        if OBSERVATION_MASK in data.columns
-        else (False,) * len(data),
-        observations={name: values(name, feature_value) for name in observations},
-        actions=actions,
+        context=context,
+        first_position=first_position,
+        observation_masks=tuple(masks),
+        observations=observation_values,
+        incoming_actions=incoming,
+        collection=tuple(data["__collection"].to_list())
+        if "__collection" in data.columns
+        else None,
         static_inputs=static,
-        starts_episode=positions[0] == 0 and preceding is None,
-        previous_action=preceding,
         group_id=str(constant(groups, "collection group"))
         if groups is not None
         else None,
         transitions=TransitionColumns(
             **transitions,
             rewards=optional_values(REWARD_COLUMN, reward_value),
-            successors=tuple(successors) if successors is not None else None,
         ),
-    )
-
-    return (
-        PreparedEpisode(**episode.model_dump(), context=context) if context else episode
     )
 
 
@@ -715,10 +669,31 @@ def table_episodes(resolved: ResolvedSequenceSource, policy: PolicyEpisodeSpec):
     ) - set(policy.static_columns):
         raise ValueError("table columns must name declared policy features")
     static_path, image_store = resolved.static_path, resolved.image_store
+    manifest = resolved.manifest or {}
+    provenance = (
+        (view.dataset if view else manifest).get("provenance")
+        or getattr(resolved.metadata, "provenance", None)
+        or {}
+    )
+    action_mapping = manifest.get("action_columns") or provenance.get("action_columns")
+    sequence_seeds = provenance.get("sequence_seeds", {})
+    policy.validate_source_units(provenance.get("policy_binding", {}).get("units"))
+    policy.validate_source_units(provenance.get("source", {}).get("units"))
+    if (
+        provenance.get("task") == "forecast"
+        and source.action_semantics != "executed_predictions"
+    ):
+        raise ValueError(
+            "Forecast sources require action_semantics='executed_predictions'"
+        )
+
+    if source.action_columns:
+        action_mapping = {
+            name: name for name in policy.action_columns
+        } | source.action_columns
+    mask_column = source.mask_column
+    recorded_mask_column = manifest.get("mask_column")
     if view is not None:
-        provenance = view.dataset.get("provenance", {})
-        policy.validate_source_units(provenance.get("policy_binding", {}).get("units"))
-        policy.validate_source_units(provenance.get("source", {}).get("units"))
         table, metadata = (
             IndexedEpisodeTable(view, policy.context_length),
             view.metadata(),
@@ -735,31 +710,20 @@ def table_episodes(resolved: ResolvedSequenceSource, policy: PolicyEpisodeSpec):
         if not metadata.indexed_inline_media:
             image_store = view.image_store()
     else:
-        data = prepared_table(resolved).lazy() if prepared else scan_tables(paths)
-        manifest = resolved.manifest or {}
-        provenance = manifest.get("provenance", {})
-        if provenance.get("task") == "forecast":
-            if source.action_semantics != "executed_predictions":
-                raise ValueError(
-                    "forecast sources require explicit action_semantics='executed_predictions'"
+        bounds = None
+        if prepared:
+            rows, bounds = prepared_table(resolved)
+            data = rows.lazy()
+        else:
+            data = scan_tables(paths)
+            if manifest.get("sequence_metadata"):
+                identities = pl.scan_parquet(static_path).select(
+                    "sequenceId", SEQUENCE_NAME_COLUMN, GROUP_COLUMN
                 )
-            if provenance["prediction_columns"] != policy.action_columns:
-                raise ValueError("Recorded predictions differ from policy actions")
-            if (
-                policy.previous_action_inputs or policy.return_conditioned
-            ) and CONTEXT_COLUMN in data.collect_schema():
-                data = data.drop(CONTEXT_COLUMN)
-            data = data.with_columns(
-                pl.struct(
-                    [
-                        pl.col("__prediction_" + name).alias(name)
-                        for name in policy.action_columns
-                    ]
-                ).alias(ACTION_RECORD)
-            )
+                data = data.join(identities, on="sequenceId", validate="m:1")
         if {"sequenceId", "itemPosition"} - set(data.collect_schema().names()):
             raise ValueError("policy tables require sequenceId and itemPosition")
-        table = IndexedTable(data, "sequenceId")
+        table = IndexedTable(data, "sequenceId", bounds=bounds)
         metadata = resolved.metadata
         if (
             prepared
@@ -792,6 +756,10 @@ def table_episodes(resolved: ResolvedSequenceSource, policy: PolicyEpisodeSpec):
             prepared=prepared,
             static_table=static_table,
             image_store=image_store,
+            action_mapping=action_mapping,
+            mask_column=mask_column,
+            recorded_mask_column=recorded_mask_column,
+            seed=sequence_seeds.get(str(identity)),
         )
         for identity in table.ranges
     ]

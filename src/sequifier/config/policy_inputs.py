@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from sequifier.config.column_names import INCOMING_ACTION_PRESENT
 from sequifier.config.metadata import RawInputMetadata
 from sequifier.config.policy_config import PolicyBinding, ResolvedPolicyBinding
 
@@ -10,7 +11,8 @@ def observation_columns(temporal, binding):
     return [
         name
         for name in temporal
-        if name not in binding.previous_action_inputs
+        if name != INCOMING_ACTION_PRESENT
+        and name not in binding.previous_action_inputs
         and (name != "__policy_return" or not binding.return_conditioned)
     ]
 

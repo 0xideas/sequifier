@@ -115,7 +115,6 @@ class ModelInterfaceSpecModel(ConfigModel):
             allowed=("__policy_return", "__policy_previous_action")
             if info.field_name == "input_columns"
             else (),
-            prefixes=("__executed_",),
         )
         if any(
             column.startswith("__image:")

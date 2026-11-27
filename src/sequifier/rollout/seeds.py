@@ -4,12 +4,7 @@ from pathlib import Path
 
 import polars as pl
 
-from sequifier.io.sequence import (
-    DOMAIN_OBSERVATIONS,
-    DOMAIN_STATIC,
-    OBSERVATION_MASK,
-    source_fields,
-)
+from sequifier.io.sequence import DOMAIN_OBSERVATIONS, DOMAIN_STATIC, source_fields
 from sequifier.trajectory.schema import SeedHistory
 
 
@@ -63,6 +58,15 @@ def indexed_history(view, seed, width):
     return rows
 
 
+def forecast_action_columns(config):
+    provenance = (
+        config._indexed_view.dataset.get("provenance", {})
+        if config._indexed_view
+        else (getattr(config.dataset_metadata, "provenance", None) or {})
+    )
+    return provenance.get("action_columns", {})
+
+
 def forecast_source_seed(config, sequence, rows):
     width = config.window_view.context_length
     if config.static_columns:
@@ -86,13 +90,44 @@ def forecast_source_seed(config, sequence, rows):
     observations = rows.select(
         source_fields(rows, DOMAIN_OBSERVATIONS, config.input_columns)
     ).to_dicts()
-    masks = (
-        rows[OBSERVATION_MASK].to_list()
-        if OBSERVATION_MASK in rows.columns
-        else [False] * len(rows)
+    from sequifier.trajectory.tables import observation_mask
+
+    metadata = (
+        config._indexed_view.metadata()
+        if config._indexed_view
+        else config.dataset_metadata
     )
+    mask_column = metadata.raw_mask_column
+    masks = rows.select(observation_mask(rows, mask_column).alias("mask")).to_series()
+    masks = masks.to_list() if len(masks) == len(rows) else [False] * len(rows)
+    mapping = forecast_action_columns(config)
+    for name in set(config.input_columns).intersection(mapping.values()):
+        for row in observations:
+            if row[name] is None:
+                row[name] = (
+                    metadata.selected_columns_statistics[name]["mean"]
+                    if metadata.normalize_real_columns
+                    else 0.0
+                )
+    targets = config.target_columns
+    mapping = {**{field: field for field in mapping.values()}, **mapping}
+    actions = None
+    if targets and set(targets) <= mapping.keys():
+        domain = rows.schema[DOMAIN_OBSERVATIONS].to_schema()
+        fields = [
+            pl.col(DOMAIN_OBSERVATIONS).struct.field(mapping[name]).alias(name)
+            if mapping[name] in domain
+            else pl.col(mapping[name]).alias(name)
+            for name in targets
+            if mapping[name] in domain or mapping[name] in rows.columns
+        ]
+        if len(fields) == len(targets):
+            actions = [
+                row if all(v is not None for v in row.values()) else None
+                for row in rows.select(fields).to_dicts()
+            ]
     return SeedHistory.from_rows(
-        observations, config.input_columns, width, values, masks
+        observations, config.input_columns, width, values, masks, actions
     )
 
 

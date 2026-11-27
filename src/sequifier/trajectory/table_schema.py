@@ -5,14 +5,11 @@ import sys
 import pyarrow as pa
 
 from sequifier.io.action_record import action_record_layout
-from sequifier.io.sequence import CONTEXT_COLUMN, OBSERVATION_MASK
+from sequifier.trajectory.row_layout import ACTION_METADATA
 from sequifier.trajectory.tables import (
-    ACTION_RECORD,
     GROUP_COLUMN,
-    PREVIOUS_ACTION_RECORD,
     REWARD_COLUMN,
     SEQUENCE_NAME_COLUMN,
-    SUCCESSOR_PREFIX,
     TRANSITION_FLAGS,
 )
 
@@ -57,7 +54,10 @@ def cast_episode_table(table, schema):
         return table
     arrays = []
     for field in schema:
-        if field.name == CONTEXT_COLUMN and field.name not in table.column_names:
+        if (
+            field.name in {ACTION_METADATA, "__collection"}
+            and field.name not in table.column_names
+        ):
             arrays.append(pa.nulls(len(table), type=field.type))
             continue
         column = table[field.name]
@@ -87,21 +87,6 @@ def _action_type(field):
     return pa.float64()
 
 
-def _action_record_type(policy):
-    auxiliary_types = {"latent": pa.float64(), "component": pa.int64()}
-    return pa.struct(
-        [
-            pa.field(
-                field.key,
-                auxiliary_types[field.kind]
-                if field.kind in auxiliary_types
-                else _action_type(policy.actions[field.action]),
-            )
-            for field in action_record_layout(policy).fields
-        ]
-    )
-
-
 def _policy_feature_types(policy):
     types = {}
     if policy is None or policy.input_schema is None:
@@ -120,36 +105,31 @@ def _policy_feature_types(policy):
     return types
 
 
-def sequence_table(values, observations, *, policy=None, collection_type=None):
+def sequence_table(values, layout, *, policy=None, collection_type=None):
     """Encode nullable transition columns with the types of their domain fields."""
-    length = len(values["sequenceId"])
-    values = {**values, CONTEXT_COLUMN: values.get(CONTEXT_COLUMN, [None] * length)}
     types = {
         **_policy_feature_types(policy),
         "sequenceId": pa.int64(),
         "itemPosition": pa.int64(),
         SEQUENCE_NAME_COLUMN: pa.string(),
-        CONTEXT_COLUMN: pa.string(),
-        OBSERVATION_MASK: pa.bool_(),
         GROUP_COLUMN: pa.string(),
+        layout.mask_column: pa.bool_(),
         REWARD_COLUMN: pa.float64(),
         **{name: pa.bool_() for name in TRANSITION_FLAGS},
     }
-    if ACTION_RECORD in values:
-        action_type = (
-            _action_record_type(policy)
-            if policy is not None
-            else pa.infer_type(values[ACTION_RECORD])
+    if policy is not None:
+        types.update(
+            (physical, _action_type(policy.actions[name]))
+            for name, physical in layout.actions.items()
         )
-        types[ACTION_RECORD] = types[PREVIOUS_ACTION_RECORD] = action_type
-        for field in action_type:
-            types["__prediction_" + field.name] = field.type
-    for name in observations:
-        successor = SUCCESSOR_PREFIX + name
-        dtype = types.get(name)
-        if dtype is None:
-            dtype = pa.infer_type([*values[name], *values[successor]])
-        types[name] = types[successor] = dtype
+        auxiliary_types = {"latent": pa.float64(), "component": pa.int64()}
+        auxiliary = [
+            pa.field(field.key, auxiliary_types[field.kind])
+            for field in action_record_layout(policy).fields
+            if field.kind in auxiliary_types
+        ]
+        if auxiliary:
+            types[ACTION_METADATA] = pa.struct(auxiliary)
     if collection_type is not None:
         types["__collection"] = collection_type
     return pa.table(

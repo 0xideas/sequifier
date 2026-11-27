@@ -8,6 +8,7 @@ from typing import Any, Union
 
 import polars as pl
 
+from sequifier.config.column_names import INCOMING_ACTION_PRESENT
 from sequifier.helpers import (
     is_float_dtype_name,
     is_integer_dtype_name,
@@ -398,7 +399,14 @@ class FittedColumns:
         }
 
     def transform(
-        self, data, normalize, cardinality, mask_column=None, *, input_types=None
+        self,
+        data,
+        normalize,
+        cardinality,
+        mask_column=None,
+        *,
+        input_types=None,
+        incoming_actions=(),
     ):
         data = cast_input_columns(data, self.data_columns, input_types)
         validate_cardinality_values(data, cardinality)
@@ -414,7 +422,15 @@ class FittedColumns:
                 name, schema[name], normalize, cardinality
             )
             value = transform.expression(name)
-            if mask is not None:
+            if name in incoming_actions:
+                value = (
+                    pl.when(pl.col(name).is_not_null())
+                    .then(value)
+                    .otherwise(SPECIAL_TOKEN_IDS.mask if transform.codec else 0.0)
+                )
+            elif mask is not None and not (
+                incoming_actions and name == INCOMING_ACTION_PRESENT
+            ):
                 fill = (
                     SPECIAL_TOKEN_IDS.mask
                     if is_integer_dtype_name(transform.dtype)
@@ -423,8 +439,8 @@ class FittedColumns:
                 value = pl.when(mask).then(pl.lit(fill)).otherwise(value)
             expressions.append(value.cast(transform.output_dtype).alias(name))
         data = data.with_columns(expressions)
-        from sequifier.io.sequence import DOMAIN_OBSERVATIONS, OBSERVATION_MASK
+        from sequifier.io.sequence import DOMAIN_OBSERVATIONS
 
-        if mask_column == OBSERVATION_MASK and DOMAIN_OBSERVATIONS in data.columns:
-            return data
+        if mask is not None and mask_column and DOMAIN_OBSERVATIONS in data.columns:
+            return data.with_columns(mask.alias(mask_column))
         return data.drop(mask_column) if mask_column is not None else data

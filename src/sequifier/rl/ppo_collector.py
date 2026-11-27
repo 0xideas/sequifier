@@ -66,25 +66,19 @@ class PPOCollector:
                     current_reference = builder.append_frame(
                         self.cursor.history.current
                     )
-                if current_reference is None:
-                    raise ValueError(
-                        "live PPO decision lacks its observation reference"
-                    )
                 current = self.cursor.history.current
                 decision = self.cursor.decide(self.value)
                 result = self.cursor.step(decision)
-                successor_reference = None
-                successor_value = 0.0
-                if result.observation is not None:
-                    if not result.terminated:
-                        successor_value = float(self.value(self.cursor.inputs)[0])
-                    if not torch.isfinite(
-                        torch.tensor(successor_value, dtype=torch.float32)
-                    ):
-                        raise ValueError("non-finite PPO successor value")
-                    successor_reference = builder.append_frame(
-                        self.cursor.history.current
-                    )
+                successor_value = (
+                    0.0
+                    if result.terminated
+                    else float(self.value(self.cursor.inputs)[0])
+                )
+                if not torch.isfinite(
+                    torch.tensor(successor_value, dtype=torch.float32)
+                ):
+                    raise ValueError("non-finite PPO successor value")
+                successor_reference = builder.append_frame(self.cursor.history.current)
                 reward = float(result.reward) * self.phase.reward_scale
                 if not torch.isfinite(
                     torch.tensor([reward, successor_value], dtype=torch.float32)
@@ -104,7 +98,6 @@ class PPOCollector:
                         successor_value,
                         result.terminated,
                         result.truncated,
-                        not result.terminated,
                         current.episode_id,
                         current.step_id,
                         policy_version,

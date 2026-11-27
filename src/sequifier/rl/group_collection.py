@@ -9,7 +9,7 @@ from sequifier.io.image_feature_cache import IMAGE_CACHE_PREFIX
 from sequifier.rl.collection import PolicyCursor, stream_seed
 from sequifier.rl.environment import OnlineStepResult, validate_start_token
 from sequifier.rl.grpo_buffer import GRPOTrajectory, SealedGroupBuffer
-from sequifier.rl.history import _json_payload_bytes
+from sequifier.rl.history import _json_payload_bytes, frame_storage_bytes
 
 
 class GroupCollectionError(RuntimeError):
@@ -60,7 +60,7 @@ class GroupTrajectory:
             self.sample,
             self.token,
             self.cursor.history.current.episode_id,
-            tuple(self.frames),
+            (*self.frames, self.cursor.history.current),
             self.cursor.actor.config.context_length,
             tuple(self.actions),
             tuple(self.rewards),
@@ -75,9 +75,6 @@ class GroupTrajectory:
             0.0,
             generation,
             raw_rewards=tuple(self.raw_rewards or ()),
-            final_observation=result.observation
-            if self.raw_rewards is not None
-            else None,
             terminated=result.terminated,
             truncated=result.truncated,
         )
@@ -168,11 +165,10 @@ class GroupCollection:
         )
 
     def seal_trajectory(self, trajectory, result):
-        if trajectory.raw_rewards is not None:
-            self.account(
-                8 * len(trajectory.raw_rewards)
-                + 4 * _json_payload_bytes(result.observation)
-            )
+        self.account(
+            8 * len(trajectory.raw_rewards or ())
+            + frame_storage_bytes(trajectory.cursor.history.current)
+        )
         sealed = trajectory.seal(self.generation, result)
         trajectory.cursor.close()
         self.cursors.remove(trajectory.cursor)

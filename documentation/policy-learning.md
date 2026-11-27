@@ -44,32 +44,25 @@ See [continuation rules](configs/train.md#optimization-across-phases) for
 
 ## Offline data
 
-Sequence parts accept CSV/Parquet tables, JSON trajectories, checksummed sequence
-manifests and prepared histories. An authored manifest that lists trajectory
-files declares `format: sequifier.trajectory-source` and an `episodes`
-list with a `path` per entry. At row `t`, observations and lagged actions form
-inputs; the recorded current action is the label, and reward/successor describe
-its resulting transition. Tables use integer `sequenceId` and `itemPosition` coordinates. Use `sequenceName` for a string episode label.
-Observations and static inputs use the same names in the table, metadata and model.
-When importing without a model, declare those names in the
-`source.columns.observations` and `source.columns.static_inputs` lists.
+Sequence sources accept CSV or Parquet observation rows, a checksummed sequence
+manifest, or prepared histories. Declare the observation and static column names
+under `source.columns` when importing a table without a model. Each sequence
+starts at zero and ends with the genuine final observation. Every position
+after zero carries the complete action that produced its observation. Optional
+`reward`, `terminated`, and `truncated` columns describe that same transition.
+The history through row `t` predicts the action on row `t+1`. Termination disables
+bootstrap. A truncation retains its observed successor.
 
-Current actions use their policy field names or a structured `__executed_action`
-column. Previous actions use `__previous_action_<action>` scalar columns or a
-structured `__previous_action` column. Optional transition columns are `reward`,
-`terminated`, `truncated`, and `bootstrap_allowed`. When successors are present,
-provide `__next_<observation>` for every observation. Use `sequenceName` for a
-stable episode ID and `__group` for a collection group.
-Rename external table columns to these names before importing or training.
-Fragments require an explicit preceding action; file boundaries alone imply no
-termination. Forecast trajectories require `action_semantics: executed_predictions`.
+Use `source.action_columns` to map logical actions to physical columns,
+`sequenceName` for a stable episode label, and `groupId` for related episodes.
+Forecast predictions used as actions require `action_semantics: executed_predictions`.
 
 Setting `partition.validation_fraction` generates explicit train and validation views. The partition keeps transitive episode/group/duplicate-content components
 together and requires at least two components. Explicit `evaluation.sources`
 undergo the same overlap checks. Codecs and moments are fitted only on training
 coverage. Indexed storage and bounded episode caches are shared across phases;
 windows are constructed on demand. `import_sequences` exports a canonical raw
-Parquet decision table and its checksummed manifest. See the
+Parquet observation table and its checksummed manifest. See the
 [import example](example_inputs/configs/import-policy-sequences.yaml).
 
 Imitation minimizes joint action NLL. Return conditioning requires rewards and
@@ -134,8 +127,7 @@ Adapters implement `reset(seed)`, `step(named_domain_actions)` and `close()`;
 policy rollout also requires `reset_from_observation(initial, seed)`.
 Reset results provide observations/static inputs/units. Step results provide reward,
 separate termination/truncation booleans, successor observation and optional success.
-Never autoreset or substitute a reset observation for a final successor. A true
-terminal policy step may omit its successor; other steps must retain it.
+Every step, including termination, must return its actual successor before resetting the environment.
 
 Capabilities declare seeded reset, exact snapshot support and group-start support.
 Exact PPO recovery requires `snapshot_state()`/`restore_state()` including simulator

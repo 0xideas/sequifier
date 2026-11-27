@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from sequifier.config.column_names import validate_column_names
 from sequifier.config.policy_config import NonemptyStr, PolicyConfigBase
@@ -36,13 +36,31 @@ class SequenceSourceConfig(PolicyConfigBase):
     units: dict[str, str] | None = None
     paths: list[NonemptyStr] = Field(default_factory=list)
     manifest_path: NonemptyStr | None = None
-    format: Literal["auto", "trajectory", "table", "prepared"] = "auto"
+    format: Literal["auto", "table", "prepared"] = "auto"
     columns: PolicyTableColumns = Field(default_factory=PolicyTableColumns)
     # A file boundary alone says nothing about task completion.
     episode_end: Literal["unknown", "terminated", "truncated"] = "unknown"
     episode_namespace: str = ""
     metadata_config_path: str | None = None
     encoding: Literal["raw", "model"] = "raw"
+    mask_column: NonemptyStr | None = None
+    action_columns: dict[NonemptyStr, NonemptyStr] = Field(default_factory=dict)
+
+    @field_validator("action_columns")
+    @classmethod
+    def validate_action_columns(cls, mapping):
+        validate_column_names(mapping.values(), "source.action_columns")
+        if len(set(mapping.values())) != len(mapping):
+            raise ValueError("Source action columns must be distinct")
+        return mapping
+
+    @field_validator("mask_column")
+    @classmethod
+    def validate_mask_column(cls, name):
+        if name:
+            validate_column_names([name], "mask_column")
+        return name
+
     static_data_path: str | None = None
     split: NonemptyStr | None = None
     action_semantics: Literal["policy", "executed_predictions"] = "policy"

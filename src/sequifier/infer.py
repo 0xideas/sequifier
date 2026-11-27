@@ -1220,6 +1220,13 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
             config.input_columns + config.static_columns + config.target_columns
         )
     )
+    from sequifier.rollout.seeds import (
+        forecast_action_columns,
+        forecast_coordinate_seed,
+        forecast_window_seed,
+        seed_origin,
+    )
+
     codec = FixedNumericPreprocessing(
         columns,
         metadata.selected_columns_statistics,
@@ -1228,11 +1235,7 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
             column: torch.empty((), dtype=column_data_types[column]).numpy().dtype
             for column in columns
         },
-    )
-    from sequifier.rollout.seeds import (
-        forecast_coordinate_seed,
-        forecast_window_seed,
-        seed_origin,
+        incoming_columns=forecast_action_columns(config).values(),
     )
 
     if rollout.seed is not None:

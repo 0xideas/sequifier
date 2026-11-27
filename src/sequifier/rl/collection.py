@@ -174,9 +174,6 @@ class PolicyCursor:
             self.desired_return = remaining_return(
                 self.desired_return, result.reward, self.actor.config.returns.gamma
             )
-        if result.observation is not None:
-            self.history.advance(
-                decision.action, result.observation, self.desired_return
-            )
-            self.refresh()
+        self.history.advance(decision.action, result.observation, self.desired_return)
+        self.refresh()
         return result

@@ -308,7 +308,7 @@ selection, read/write formats, device, seed, `enforce_determinism` and batch siz
 | `action_selection` | `deterministic`; sequential mode/location choices, or `stochastic` sampling |
 | `desired_return` | null; fixed budget for return-conditioned policies |
 | `input.desired_return_column` | `desired_return`; per-row budget when no fixed budget is supplied |
-| `input.previous_action_columns` | {}; recorded lagged-action column mappings for fragments |
+| `input.action_columns` | {}; recorded current-action column mappings |
 | `output.output_probabilities` | false; include joint log probability and write separate target-specific categorical probability files |
 | `rollout` | null; execute in an online policy environment instead of writing prediction rows |
 
@@ -334,8 +334,7 @@ Policy rollout requires an environment and `max_steps`. Forecast rollout also
 requires bindings for temporal inputs. Both accept `rollout.seed` with
 `sequenceId` and `itemPosition`. As an alternative, policies accept a zero-based
 `seed_row_index` and forecasts accept a zero-based `seed_window_index`.
-Set `rollout.output.manifest_path` to publish sequence data,
-`rollout.trajectory_path` to publish a trajectory JSON, or both. The seed origin
+Set `rollout.output.manifest_path` to publish the trajectory dataset. The seed origin
 records the selected coordinates. [Rollout guide](../rollout.md)
 
 Execution determinism, action selection and seed are independent. A seeded
@@ -358,11 +357,11 @@ input:
 
 With a named split, the metadata selects the physical input. An indexed view
 supplies its own fitted metadata for artifact validation. A policy prediction on
-a within-sequence split uses the stored preceding action when available and
-writes one row per split-owned decision. A fragment without a stored predecessor
-can supply `input.previous_action_columns`. When supplied, these columns provide the
-lagged actions after episode position zero. A row with empty lag columns can use
-the preceding recorded action. At position zero the policy uses its initial feedback.
+a named trajectory split uses each owned arrival as a target. The prediction
+carries the coordinate of its input observation, one position before that arrival.
+A fresh prediction view can request the next action at every observation. With ordinary input tables, use `input.action_columns` if the
+physical column names differ from the policy action names. Feedback at a decision
+uses the incoming action recorded alongside the observation at that position.
 
 To infer directly from fresh data in the original preprocessing input layout,
 use the training metadata config and select the raw input layout.
@@ -385,17 +384,14 @@ Both paths apply the same frozen maps, casting rules, and statistics. The
 prepared manifest carries a snapshot of the original metadata.
 Rollout manifests also work with `input.layout: raw` and the original metadata.
 Use `input.format: sequence` for a manifest without a `.json` suffix.
-Set `input.sequence_view: observations` to include recorded final successors.
+Every sequence includes its final observation.
 
 For policy prediction, the direct and prepared paths use the same categorical
 lookup and numeric normalization. An unseen category in an ordinary vocabulary
 maps to `[other]` (ID 1). When preparing a policy view explicitly, list recorded
 action columns used for lagged feedback in `passthrough_columns` to preserve
-their original values. Raw policy inference preserves named actions and the canonical
-`__executed_action` and `__previous_action` structs when feedback is used.
-Both routes preserve those structs automatically when reading a rollout manifest.
-For a standalone table, list the needed structs in `passthrough_columns` during
-explicit preparation. Both forecast and policy inference treat automatic-layout
+their original values. With a rollout manifest, policy inference uses the
+manifest's action column mapping to read the incoming action at the current position. Both forecast and policy inference treat automatic-layout
 tables as prepared windows. For fresh rows, use `input.layout: raw`, integer
 `sequenceId` and `itemPosition`, and the original metadata. For an actor trained
 directly on demonstrations, `sequifier preprocess` with `operation: export_metadata`

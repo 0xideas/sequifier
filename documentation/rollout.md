@@ -2,7 +2,7 @@
 
 Forecast and policy rollout share trajectory recording but retain distinct adapter
 protocols. Both execute one local episode/fragment, own adapter cleanup, and atomically
-write `trajectory_path` after successful validation. They do not add an export format.
+publish the observation table and sequence metadata under `output.manifest_path`.
 
 ## Forecast configuration and protocol
 
@@ -14,7 +14,7 @@ task: forecast
 rollout:
   max_steps: 100
   seed_window_index: 0
-  trajectory_path: outputs/trajectory.json
+  output: {manifest_path: outputs/trajectory/manifest.json}
   environment:
     factory: application.adapters:make_environment
     config: {}
@@ -58,12 +58,12 @@ receives the fitted feature's mask value. Padding, tracked by
 Policy rollout uses the [online policy adapter](policy-learning.md#online-adapters),
 matching `units` and seeded `reset_from_observation`. It selects
 a row with `seed_row_index` from the same input as policy prediction, including
-a named preprocessing split. Row zero of a split is its first owned decision. It executes
+a named preprocessing split. The seed coordinate identifies the last observation available to the policy. It executes
 named policy actions. By default `seed_history: available` uses preceding observations from the selected sequence
 up to the artifact’s context length, with recorded action feedback and return budgets.
 For fresh raw input and prepared prediction views, the adapter receives the original observation and static values. The policy applies its frozen codecs and input mask to the seed history. A feedback policy
-starts a fresh history when preceding actions are unavailable. Set `seed_history: current`
-to start with one observation and the binding’s initial feedback. See
+reads the incoming action on each observation. Set `seed_history: current`
+to start with the selected observation and its incoming action. See
 [inference options](configs/infer.md#policy-model-interfaces) and the
 [Python example](example_inputs/ppo_toy_control.py) using the shipped PPO scaffold.
 
@@ -85,61 +85,32 @@ rollout:
 
 ## Reusing rollout data
 
-Forecast and policy inference publish one checksummed Parquet decision table beside the configured
-manifest. Set `trajectory_path` to also keep the single-trajectory JSON. For PPO
-and GRPO, use the same `output` mapping under the phase's `collection`. The phase
-report records the manifest path and checksum. A completed PPO or GRPO phase publishes one Parquet file of decisions, referenced
-by the manifest. Each decision carries its collection diagnostics in a
-`__collection` struct at the same `sequenceId` and `itemPosition`. Preprocessing
-selects observations by default. PPO stores the policy version, scaled reward and
-collection boundary. Set `collection.output.include_scores: true` for PPO log
-probabilities, entropy, value estimates, advantages and value targets. GRPO stores
-the policy version, reference identity, group and sample indices, JSON start token,
-scaled reward, log probabilities, trajectory score, advantage and cutoff reason.
-The top-level reward is the raw environment reward. Immutable intermediate shards
-remain available to resume older checkpoints.
+A sequence with `N` actions has `N + 1` observation rows. Each sequence starts at
+`itemPosition = 0`. After each action the collector appends its resulting
+observation, executed action, raw reward and termination flags at the next
+position. Reset has no incoming action. A seeded rollout can have an incoming
+action at position zero, which supplies context only.
 
-Trajectory JSON stores the row-level mask in `seed.observation_mask`, aligned
-with the padded seed history. The Parquet decision table carries
-`__observation_mask` and its pre-decision context carries each preceding
-observation's mask. Both supervised preprocessing and offline policy training
-apply the recorded masks when consuming these outputs. A configured raw mask name
-can read the recorded mask when the original column is absent. If both columns
-are present, either can mark an observation as masked.
+| Position | Observation | Incoming action | Incoming reward |
+|---|---|---|---|
+| 0 | O0 | empty at reset | empty |
+| 1 | O1 | A0 | R0 |
+| 2 | O2 | A1 | R1 |
 
-Each decision has an integer `sequenceId` and an `itemPosition`. `sequenceName`
-carries the external episode identity. On import, `episode_namespace` prefixes this
-label. The trajectory JSON and sequence manifest retain the same integer coordinates.
-The `__group` column associates related samples,
-such as GRPO siblings. For inference rollouts, both trajectory JSON and sequence
-manifests group runs seeded from the same dataset, sequence ID, and item position. A PPO update boundary can split a sequence across shards.
-Rows carry the current observation, static fields, raw reward, recorded successor
-and separate boundary flags. A missing successor keeps the Arrow type of its observation,
-and a missing previous action keeps the executed-action struct type. Predictions use `__prediction_<name>`. Policy
-decisions also retain the structured executed action and previous action.
+Set `output.manifest_path` for inference, or `collection.output.manifest_path`
+for PPO and GRPO. The manifest references checksummed Parquet files for temporal
+rows and per-sequence metadata. The latter holds `sequenceName`, `groupId`, and
+static inputs once per sequence. Action aliases and the observation mask column
+are declared in the manifest. Collection diagnostics on row 1 describe the
+choice of A0 at O0. At a PPO chunk boundary the next chunk appends only the
+arrivals produced by its own actions.
 
-For supervised training, point `preprocessing_data_path` at the manifest and use
-the usual split, feature and window settings. Use `read_format: sequence` for
-a manifest without a JSON suffix. The default `sequence_view: decisions` exposes
-one row per action, including named action fields when selected. When an observation
-and an action share a name such as `x`, select `x` for the observation and
-`__executed_x` for the action. With
-`sequence_view: observations`, each sequence also includes its final successor
-when recorded. For value-cutoff splits, a successor uses its own observed split
-value when the split column is an observation. An auxiliary split column carries
-the final decision's value forward to its successor. Auxiliary columns named by
-`curriculum_column` also carry the final decision's values onto that row. The
-usual requirement that each curriculum value be constant within a generated
-subsequence applies. A declared static field can supply the cutoff or curriculum
-value for every item in its sequence, including the final successor. Its feature
-values are stored in the static table.
-Existing inference trajectory JSON can be read through the same
-interface. Supervised preprocessing extracts the declared static fields into a
-separate table with one row per sequence.
-
-Policy preparation exposes the same flat action names, including `__executed_x`,
-alongside the structured action record. Both preparation routes record the split
-names, method, column, fractions and cutoffs in dataset metadata.
+Use the manifest as `preprocessing_data_path` for supervised learning. History
+through position `i` predicts the action on row `i+1`. The final row supplies
+the last target. A split owns a label by its target coordinate. The derived
+numeric feature `incomingActionPresent` distinguishes reset from a recorded zero
+action. Forecast rollouts populate this feature automatically when it is a model input.
+An observation mask hides sensor features while retaining recorded action feedback.
 
 For policy learning, set the sequence source's `manifest_path` or pass it to
 `prepare_policy`. Forecast predictions used as actions require

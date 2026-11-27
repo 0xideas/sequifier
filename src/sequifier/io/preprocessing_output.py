@@ -9,9 +9,10 @@ from typing import Literal
 
 import polars as pl
 
+from sequifier.config.column_names import ARRIVAL_AUXILIARY_COLUMNS
 from sequifier.io.atomic import atomic_path
 from sequifier.io.pt_payload import load_pt_payload
-from sequifier.io.sequence import DOMAIN_OBSERVATIONS, OBSERVATION_MASK
+from sequifier.io.sequence import DOMAIN_OBSERVATIONS
 from sequifier.preprocess import (
     SPLIT_VALUE_COLUMN,
     WindowWritePlan,
@@ -28,14 +29,15 @@ def _add_static_metadata(metadata, path, columns, fields):
         metadata[name].update(additions)
 
 
-def store_source_rows(scratch, part, rows):
+def store_source_rows(scratch, part, rows, mask_column=None, auxiliary=()):
     path = Path(scratch) / "source-items" / (part + ".parquet")
     with atomic_path(path) as temporary:
         rows.select(
             "sequenceId",
             "itemPosition",
             DOMAIN_OBSERVATIONS,
-            *([OBSERVATION_MASK] if OBSERVATION_MASK in rows.columns else []),
+            *auxiliary,
+            *([mask_column] if mask_column else []),
         ).write_parquet(temporary)
 
 
@@ -64,7 +66,34 @@ class WindowOutput:
         return scratch / "windows-complete"
 
     def capture_source(self, data, captured, part):
-        store_source_rows(self.cleanup_checkpoint.parent, part, captured)
+        auxiliary = []
+        actions = self.run.sequence_table_provenance.get("action_columns")
+        if actions:
+            source = pl.scan_parquet(self.run.config.preprocessing_data_path)
+            fields = (
+                *actions.values(),
+                *ARRIVAL_AUXILIARY_COLUMNS,
+            )
+            auxiliary = [
+                name
+                for name in fields
+                if name in source.collect_schema() and name not in captured.columns
+            ]
+            if auxiliary:
+                coords = ["sequenceId", "itemPosition"]
+                captured = captured.join(
+                    source.select(*coords, *auxiliary).collect(),
+                    on=coords,
+                    how="left",
+                    validate="1:1",
+                )
+        store_source_rows(
+            self.cleanup_checkpoint.parent,
+            part,
+            captured,
+            self.run.config.mask_column,
+            auxiliary,
+        )
         return data
 
     def bind_media(self, manifest):

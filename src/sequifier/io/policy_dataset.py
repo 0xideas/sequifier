@@ -181,7 +181,7 @@ def episode_split_assignments(dataset, fractions, seed, *, group_identical):
             if owners.setdefault(key, assignments[seq]) != assignments[seq]:
                 raise ValueError(
                     "Identical policy demonstrations cross recorded splits. "
-                    "Give these sequences the same __group in the source."
+                    "Give these sequences the same groupId in the source."
                 )
     return [assignments[seq] for seq in sequences]
 
@@ -280,9 +280,7 @@ def imitation_example(dataset, index) -> SequifierBatch:
     episode_index, step = dataset.locate(index)
     episode = dataset.episodes[episode_index]
     action_ids, returns = dataset._episode_labels(episode_index)
-    inputs = PolicyWindowView(dataset.config).episode_inputs(
-        episode, step, returns, action_ids
-    )
+    inputs = PolicyWindowView(dataset.config).episode_inputs(episode, step, returns)
     from sequifier.io.actions import action_batch
 
     actions = action_batch([action_ids[step]], dataset.config)

@@ -38,7 +38,7 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     action_selection: Literal["deterministic", "stochastic"] = "deterministic"
     desired_return: float | None = Field(default=None, allow_inf_nan=False)
     desired_return_column: str = "desired_return"
-    previous_action_columns: dict[str, str] = Field(default_factory=dict)
+    action_columns: dict[str, str] = Field(default_factory=dict)
     rollout: PolicyRolloutConfig | None = None
     # Optional assertions against the portable artifact contract.
     input_columns: list[str] | None = None
@@ -59,12 +59,8 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
             validate_policy_column_types,
         )
 
-        validate_column_names(
-            self.previous_action_columns, "previous_action_columns actions"
-        )
-        validate_column_names(
-            self.previous_action_columns.values(), "previous_action_columns inputs"
-        )
+        validate_column_names(self.action_columns, "action_columns actions")
+        validate_column_names(self.action_columns.values(), "action_columns inputs")
         validate_column_names([self.desired_return_column], "desired_return_column")
         if type(self) is PolicyInferenceConfig:
             self.column_data_types = validate_policy_column_types(

@@ -33,7 +33,6 @@ class InferenceExecutionConfig(ConfigModel):
     metadata_config_path: str | None = None
     split: str | None = None
     input_layout: Literal["auto", "raw", "indexed"] = "auto"
-    sequence_view: Literal["decisions", "observations"] = "decisions"
     static_data_path: str | None = None
     mask_column: str | None = None
     _sequence_dependencies: tuple[str, ...] | None = PrivateAttr(default=None)
@@ -57,9 +56,7 @@ class InferenceExecutionConfig(ConfigModel):
     @classmethod
     def validate_mask_column(cls, value):
         if value is not None:
-            validate_column_names(
-                [value], "mask_column", allowed=("__observation_mask",)
-            )
+            validate_column_names([value], "mask_column")
         return value
 
     @field_validator("write_format")
@@ -111,10 +108,8 @@ class InferenceExecutionConfig(ConfigModel):
             raise ValueError("output_path requires exactly one model path")
         rollout = self.rollout
         if rollout is not None:
-            paths = [rollout.trajectory_path]
-            if rollout.output:
-                manifest = rollout.output.manifest_path
-                paths.extend([manifest, manifest + ".parts"])
+            manifest = rollout.output.manifest_path
+            paths = [manifest, manifest + ".parts"]
             from sequifier.io.output_paths import validate_path_conflicts
 
             destinations = [normalize_path(p, self.project_root) for p in paths if p]
@@ -164,14 +159,11 @@ class InferenceExecutionConfig(ConfigModel):
                 from sequifier.config.policy_train_config import SequenceSourceConfig
                 from sequifier.trajectory.sources import resolve_source
 
-                with data_path.open(encoding="utf-8") as stream:
-                    kind = json.load(stream).get("format")
-                if kind == "sequifier.sequence-data":
-                    source = resolve_source(
-                        SequenceSourceConfig(manifest_path=str(data_path.resolve())),
-                        data_path.parent,
-                    )
-                    dependencies = tuple(source.dependencies.identity)
+                source = resolve_source(
+                    SequenceSourceConfig(manifest_path=str(data_path.resolve())),
+                    data_path.parent,
+                )
+                dependencies = tuple(source.dependencies.identity)
             self._sequence_dependencies = dependencies
         normalized.extend(self._sequence_dependencies or ())
         return normalized

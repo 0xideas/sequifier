@@ -161,7 +161,16 @@ class IndexedSequenceWriter:
             raise ValueError("Item checkpoints require a preprocessing workspace")
         return self.workspace / f"items-{sequence_id}.parquet"
 
-    def add(self, items, windows, *, episode_id=None, group_id=None, content_key=None):
+    def add(
+        self,
+        items,
+        windows,
+        *,
+        episode_id=None,
+        group_id=None,
+        content_key=None,
+        trajectory=None,
+    ):
         items = ordered_sequence_rows(items)
         sequence_ids = items["sequenceId"].unique()
         if (
@@ -197,6 +206,8 @@ class IndexedSequenceWriter:
             "group_id": group_id,
             "content_key": content_key,
         }
+        if trajectory is not None:
+            self.sequences[sequence_id]["trajectory"] = trajectory
         for split, (placement, samples) in windows.items():
             name = str(split)
             if name not in self.views:
@@ -458,7 +469,7 @@ class IndexedView:
                 f"{self.path}: static table lacks sequence IDs: {sorted(missing)[:10]}"
             )
 
-    def validate_item_columns(self, required, *, struct_fields=None):
+    def validate_item_columns(self, required):
         required = set(required)
         metadata = self._metadata
         masks = {depth_mask_metadata_key(name) for name in metadata.depth_layouts.root}
@@ -468,12 +479,6 @@ class IndexedView:
             schema = pl.scan_parquet(self.root / record["path"]).collect_schema()
             if missing := required - set(schema.names()):
                 raise ValueError(f"{location} lacks stored features: {sorted(missing)}")
-            for name, fields in (struct_fields or {}).items():
-                dtype = schema[name]
-                if not isinstance(dtype, pl.Struct) or set(fields) - set(
-                    dtype.to_schema()
-                ):
-                    raise ValueError(f"{location}: {name} lacks required record fields")
             for column in required:
                 dtype = schema[column]
                 if column in masks or metadata.depth_layouts.is_deep_column(column):
@@ -496,11 +501,15 @@ class IndexedView:
     def split_bounds(self):
         return {sequence: (low, high) for sequence, low, high in self.view["ranges"]}
 
+    @property
+    def has_arrival_rows(self):
+        return bool(self.dataset.get("provenance", {}).get("action_columns"))
+
     def history_start(self, sequence, low, high, requested):
         split = int(self.view["view"])
         metadata = self._metadata
         alignment = PredictionAlignment.for_split(metadata, split)
-        if alignment is None:
+        if alignment is None and not self.has_arrival_rows:
             return max(low, requested)
         width = metadata.width_for_split(split)
         placement = WindowPlacement.for_split(
@@ -511,6 +520,7 @@ class IndexedView:
             getattr(metadata, "window_stride", None) or width,
             alignment,
             end=1,
+            arrivals=self.has_arrival_rows,
         )
         return max(requested, int(placement.starts[0] + placement.padding[0]))
 
@@ -518,7 +528,7 @@ class IndexedView:
         """Contiguous physical rows represented by the preprocessing windows."""
         split = int(self.view["view"])
         width = self._metadata.width_for_split(split)
-        stride = self._metadata.window_stride or width
+        stride = getattr(self._metadata, "window_stride", None) or width
         alignment = PredictionAlignment.for_split(self._metadata, split)
         if alignment is not None or stride <= width:
             yield self.history_start(sequence, low, high, low - width), high
@@ -529,8 +539,9 @@ class IndexedView:
             high,
             width,
             stride,
+            arrivals=self.has_arrival_rows,
         )
-        start, stop = low, low
+        start = stop = int(placement.starts[0] + placement.padding[0])
         for offset, padding in placement:
             first = offset + padding
             if first > stop:
@@ -743,7 +754,12 @@ class WindowIndex:
             self.count = view.view["window_count"]
         else:
             self.count = 0
-            for _, low, high in self.ranges:
+            for sequence, low, high in self.ranges:
+                if view.has_arrival_rows and self.alignment is None:
+                    low = max(
+                        view.dataset["sequences"][str(sequence)]["position"],
+                        low - width + 1,
+                    )
                 self.count += window_count(
                     high - low, width, self.stride, self.alignment
                 )
@@ -785,6 +801,7 @@ class WindowIndex:
                 self.width,
                 self.stride,
                 self.alignment,
+                arrivals=self.view.has_arrival_rows,
                 begin=start - base,
                 end=stop - base,
             )
