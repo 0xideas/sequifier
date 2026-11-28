@@ -28,7 +28,7 @@ from sequifier.io.window_dataset import (
     WindowChunk,
     WindowDataset,
 )
-from sequifier.io.window_sampling import target_valid_from_offsets
+from sequifier.io.window_sampling import target_valid_from_offsets, temporal_columns
 
 
 class FolderShards:
@@ -95,7 +95,7 @@ class EagerFolderDataset(WindowDataset):
     def __init__(self, config, shuffle, shards):
         super().__init__(config, shuffle)
         self.file_order = shards.file_order
-        columns = set(config.input_columns + config.target_columns)
+        columns = temporal_columns(config)
         sequences = {name: [] for name in columns}
         depth_masks = {}
         sequence_ids, starts, lows, highs, pads = [], [], [], [], []

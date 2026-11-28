@@ -9,7 +9,7 @@ from sequifier.helpers import configured_window_stride, resolve_window_sampling_
 from sequifier.io.indexed_sequences import IndexedView, WindowIndex
 from sequifier.io.sample_order import validate_curriculum_columns
 from sequifier.io.window_dataset import ChunkReference, LazyWindowDataset, WindowChunk
-from sequifier.io.window_sampling import target_valid_from_offsets
+from sequifier.io.window_sampling import target_valid_from_offsets, temporal_columns
 
 
 def load_indexed_dataset(path, config, shuffle):
@@ -33,7 +33,7 @@ class IndexedWindowReader:
         self.sampling_plan = resolve_window_sampling_plan(
             layout, config.window_view, configured_window_stride(config)
         )
-        self.columns = sorted(set(config.input_columns + config.target_columns))
+        self.columns = sorted(temporal_columns(config))
         self.view.validate_item_columns(
             [
                 *self.columns,

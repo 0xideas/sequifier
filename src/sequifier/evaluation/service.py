@@ -112,10 +112,14 @@ class EvaluationService:
         self, prepared: PreparedBatch, dataset: Any, output: ModelOutput, network: Any
     ) -> ModelOutput:
         interface = dataset.interface
-        decoded_length = next(iter(output.logits.values())).shape[1]
-        logits = {}
+        logits = {
+            key: torch.zeros_like(value)
+            for key, value in output.logits.items()
+            if key.startswith("depth_occupancy:")
+        }
         auxiliary_logits = {}
         for target in interface.target_columns:
+            decoded_length = output.logits[target].shape[1]
             values = dataset.objective.baseline_prediction_values(
                 target,
                 prepared.features,
@@ -144,6 +148,8 @@ class EvaluationService:
                     mapped.clamp_min(0),
                     dataset.interface.target_n_classes[target],
                 ).to(torch.float32) * (mapped >= 0).unsqueeze(-1)
+            if values.ndim + 1 == output.logits[target].ndim:
+                values = values.unsqueeze(-1)
             logits[target] = values
         return ModelOutput(
             logits=logits,
@@ -203,9 +209,10 @@ class EvaluationService:
                         for target in dataset.interface.categorical_hashing
                         if target in dataset.interface.target_decoder_ids
                     }
-                    accuracy_count = torch.zeros(
-                        (), device=context.device, dtype=torch.int64
-                    )
+                    accuracy_counts = {
+                        target: torch.zeros_like(count)
+                        for target, count in correct_counts.items()
+                    }
                     baseline_key = (
                         source_config.source,
                         self._baseline_definition(dataset),
@@ -316,32 +323,44 @@ class EvaluationService:
                             raise RuntimeError(
                                 "Prepared validation batch is missing its loss mask."
                             )
-                        decoded_length = next(iter(output.logits.values())).shape[1]
-                        mask = valid_mask[:, -decoded_length:].reshape(-1).bool()
-                        accuracy_count += mask.sum()
                         if prepared.loss_targets is None:
                             raise RuntimeError(
                                 "Prepared validation batch is missing loss targets."
                             )
-                        for target, correct in correct_counts.items():
-                            logical_targets = prepared.loss_targets[target][
-                                :, -decoded_length:
-                            ].reshape(-1)
-                            lookup = torch.tensor(
-                                dataset.interface.target_global_to_decoder[target],
-                                device=logical_targets.device,
-                            )
-                            expected = lookup[logical_targets.to(torch.int64)]
-                            predicted = output.logits[target].argmax(dim=-1).reshape(-1)
-                            correct_counts[target] += (
-                                (predicted == expected) & mask
-                            ).sum()
-                        for target, counts in class_counts.items():
-                            predicted = output.logits[target].argmax(dim=-1).reshape(-1)
-                            counts += torch.bincount(
-                                predicted[mask].to(torch.int64),
-                                minlength=counts.numel(),
-                            )
+                        for target in correct_counts.keys() | class_counts.keys():
+                            logits = output.logits[target]
+                            length = logits.shape[1]
+                            mask = valid_mask[:, -length:].bool()
+                            if logits.ndim == 4:
+                                layout = (
+                                    dataset.interface.depth_layouts.column_to_layout[
+                                        target
+                                    ]
+                                )
+                                mask = (
+                                    mask.unsqueeze(-1)
+                                    & prepared.metadata[
+                                        f"target_depth_valid_mask:{layout}"
+                                    ][:, -length:]
+                                )
+                            predicted = logits.argmax(dim=-1)[mask]
+                            if target in correct_counts:
+                                labels = prepared.loss_targets[target][:, -length:][
+                                    mask
+                                ].long()
+                                lookup = torch.tensor(
+                                    dataset.interface.target_global_to_decoder[target],
+                                    device=labels.device,
+                                )
+                                correct_counts[target] += (
+                                    predicted == lookup[labels]
+                                ).sum()
+                                accuracy_counts[target] += mask.sum()
+                            if target in class_counts:
+                                counts = class_counts[target]
+                                counts += torch.bincount(
+                                    predicted, minlength=counts.numel()
+                                )
                     reduced_sums, global_count = self.loss_service.reduce_accounting(
                         sums, count, targets
                     )
@@ -355,16 +374,17 @@ class EvaluationService:
                         and torch.distributed.is_available()
                         and torch.distributed.is_initialized()
                     ):
-                        torch.distributed.all_reduce(
-                            accuracy_count, op=torch.distributed.ReduceOp.SUM
-                        )
+                        for count_tensor in accuracy_counts.values():
+                            torch.distributed.all_reduce(
+                                count_tensor, op=torch.distributed.ReduceOp.SUM
+                            )
                         for correct in correct_counts.values():
                             torch.distributed.all_reduce(
                                 correct, op=torch.distributed.ReduceOp.SUM
                             )
                     accuracies = {
                         target: float(correct.item())
-                        / max(1, int(accuracy_count.item()))
+                        / max(1, int(accuracy_counts[target].item()))
                         for target, correct in correct_counts.items()
                     }
                     if baseline_accounting is None:

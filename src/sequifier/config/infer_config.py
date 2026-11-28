@@ -1374,17 +1374,9 @@ class ResolvedInferenceConfig(
             *self.target_columns,
             *self.static_columns,
         ]
+        if missing := set(self.target_columns) - self.column_data_types.keys():
+            raise ValueError(
+                f"column_data_types must include every target: {sorted(missing)}"
+            )
         _reject_temporal_model_columns(selected_columns, self.column_data_types)
         return self
-
-    @beartype
-    def __init__(self, **data):
-        super().__init__(**data)
-        if self.column_data_types is None:
-            return
-        column_ordered = list(self.column_data_types.keys())
-        columns_ordered_filtered = [
-            c for c in column_ordered if c in self.target_columns
-        ]
-        if not (columns_ordered_filtered == self.target_columns):
-            raise ValueError(f"{columns_ordered_filtered} != {self.target_columns}")

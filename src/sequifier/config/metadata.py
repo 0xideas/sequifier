@@ -191,15 +191,16 @@ class FeatureSelection:
             raise ValueError(f"Metadata lacks selected columns: {sorted(missing)}")
         if missing := set(self.static) - set(metadata.static_columns):
             raise ValueError(f"Metadata lacks static features: {sorted(missing)}")
-        if any(metadata.depth_layouts.is_deep_column(name) for name in self.targets):
-            raise ValueError("Depth targets are not supported")
         if image_targets := set(self.targets).intersection(self.images):
             raise ValueError(
                 f"Image views cannot be target columns: {sorted(image_targets)}"
             )
 
         return metadata.select_features(
-            columns, self.images, self.use_prefix, model_inputs=self.inputs
+            columns,
+            self.images,
+            self.use_prefix,
+            model_inputs=self.inputs + self.targets,
         )
 
 

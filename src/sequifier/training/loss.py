@@ -88,9 +88,20 @@ class LossService:
         )
         features.update(static_features)
         loss_valid_mask = dataset.objective.build_loss_mask(metadata)
+        slot_masks = {
+            k: v
+            for k, v in metadata.items()
+            if k.startswith("target_depth_valid_mask:")
+        }
         transformed_targets, loss_valid_mask = (
-            dataset.objective.transform_targets_for_loss(targets, loss_valid_mask)
+            dataset.objective.transform_targets_for_loss(
+                {**targets, **slot_masks}, loss_valid_mask
+            )
         )
+        for key in slot_masks:
+            metadata[key] = dataset.objective.target_values_for_loss(
+                key, transformed_targets
+            )
         loss_targets = {
             target: dataset.objective.target_values_for_loss(
                 target, transformed_targets
@@ -129,8 +140,12 @@ class LossService:
                 target: dataset.objective.target_values_for_loss(target, transformed)
                 for target in target_names
             }
-        decoded_length = next(iter(output.logits.values())).shape[1]
-        valid_mask = valid_mask[:, -decoded_length:]
+        decoded_length = max(value.shape[1] for value in output.logits.values())
+        static_targets = set(getattr(interface, "static_target_columns", ()))
+        if static_targets == set(target_names):
+            valid_mask = valid_mask.any(dim=1, keepdim=True)
+        else:
+            valid_mask = valid_mask[:, -decoded_length:]
         flat_mask = valid_mask.reshape(-1).bool()
         local_count = flat_mask.sum(dtype=torch.int64)
         sums: dict[str, Tensor] = {}
@@ -157,6 +172,33 @@ class LossService:
                     "resolved candidate scores cannot be used for loss."
                 )
             logits = output.logits[target]
+            flat_mask = valid_mask.reshape(-1).bool()
+            slot_weights = None
+            occupancy_sum = None
+            if logits.ndim == 4:
+                layout_name = interface.depth_layouts.column_to_layout[target]
+                mask_key = f"target_depth_valid_mask:{layout_name}"
+                slot_mask = batch.metadata[mask_key]
+                slot_mask = slot_mask[:, -decoded_length:]
+                occupied = slot_mask & valid_mask.unsqueeze(-1)
+                slot_weights = (
+                    slot_mask.sum(-1, keepdim=True)
+                    .clamp_min(1)
+                    .reciprocal()
+                    .expand_as(slot_mask)[occupied]
+                )
+                flat_mask = occupied.flatten()
+                presence = output.logits[f"depth_occupancy:{layout_name}"].squeeze(-1)
+                occupancy_sum = (
+                    torch.nn.functional.binary_cross_entropy_with_logits(
+                        presence[valid_mask],
+                        slot_mask[valid_mask].float(),
+                        reduction="sum",
+                    )
+                    / slot_mask.shape[-1]
+                )
+            elif logits.shape[1] == 1 and decoded_length > 1:
+                logits = logits.expand(-1, decoded_length, -1)
             target_values = targets[target]
             target_values = target_values[:, -decoded_length:].reshape(-1)
             excluded: Tensor | None = None
@@ -188,6 +230,10 @@ class LossService:
                     for index, component_logits in enumerate(
                         output.auxiliary_logits[target]
                     ):
+                        if component_logits.shape[1] == 1 and decoded_length > 1:
+                            component_logits = component_logits.expand(
+                                -1, decoded_length, -1
+                            )
                         flat_logits = component_logits.float().reshape(
                             -1, codec.widths[index]
                         )
@@ -197,8 +243,12 @@ class LossService:
                                 f"Loss/mask size mismatch for {target!r}"
                             )
                         criterion = dataset.criteria[target]
+                        losses = criterion(flat_logits[flat_mask], label[flat_mask])
+                        if slot_weights is not None:
+                            losses = losses * slot_weights
                         component_sums.append(
-                            criterion(flat_logits[flat_mask], label[flat_mask]).sum()
+                            losses.sum()
+                            + (occupancy_sum if occupancy_sum is not None else 0)
                         )
                     sums[target] = sum(component_sums) / len(component_sums)
                     for index, value in enumerate(component_sums):
@@ -279,7 +329,10 @@ class LossService:
                 distribution = RealPredictionDistribution(
                     torch.zeros_like(residual), scale
                 )
-                sums[target] = -distribution.log_prob(residual).sum()
+                raw = -distribution.log_prob(residual)
+                sums[target] = (
+                    raw * slot_weights if slot_weights is not None else raw
+                ).sum()
             else:
                 predictions = predictions.float()
                 if kind == "real":
@@ -292,7 +345,11 @@ class LossService:
                         f"Loss/mask size mismatch for {target!r}: "
                         f"{raw.numel()} != {labels.numel()}."
                     )
-                sums[target] = raw.sum()
+                sums[target] = (
+                    raw * slot_weights if slot_weights is not None else raw
+                ).sum()
+            if occupancy_sum is not None:
+                sums[target] = sums[target] + occupancy_sum
             weight = float((dataset.learning.loss_weights or {}).get(target, 1.0))
             if weight == 0.0:
                 components[target] = sums[target].detach().new_zeros(())

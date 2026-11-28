@@ -96,11 +96,26 @@ class ModelInterfaceSpecModel(ConfigModel):
     decoder: DecoderComponentConfig
 
     @property
+    def static_target_columns(self) -> list[str]:
+        branches = (
+            self.decoder.branches.values()
+            if self.decoder.type == "composite"
+            else (self.decoder,)
+        )
+        return [
+            name
+            for branch in branches
+            if branch.type == "static_readout"
+            for name in (branch.target_columns or self.target_columns)
+        ]
+
+    @property
     def feature_selection(self) -> FeatureSelection:
         return FeatureSelection(
             self.input_columns,
             self.target_columns,
-            self.static_conditioning.columns if self.static_conditioning else [],
+            (self.static_conditioning.columns if self.static_conditioning else [])
+            + self.static_target_columns,
             image_views(self.ingestion),
             self.preconditioning_image_encoder is not None,
         )
@@ -162,6 +177,8 @@ class ModelInterfaceSpecModel(ConfigModel):
                     "Static conditioning columns must be separate from temporal "
                     "inputs and targets"
                 )
+        if set(self.static_target_columns).intersection(input_columns):
+            raise ValueError("Static targets cannot also be temporal inputs")
         auxiliary_columns = set(self.ingestion.auxiliary_input_columns)
         if missing := auxiliary_columns - input_columns:
             raise ValueError(
@@ -362,9 +379,7 @@ class ResolvedModelInterface(ModelInterfaceSpecModel, FeatureMetadata):
             {
                 **self.feature_values(),
                 **storage.model_dump(exclude={"storage_layout"}),
-                "static_columns": self.static_conditioning.columns
-                if self.static_conditioning
-                else [],
+                "static_columns": self.feature_selection.static,
                 "window_length": storage.window_lengths[0]
                 if storage.window_lengths
                 else layout.window_length,

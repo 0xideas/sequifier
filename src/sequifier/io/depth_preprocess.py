@@ -927,10 +927,12 @@ def preprocess_depth(owner, selected_columns):
     existing = owner._frozen_metadata
     fitted = None
     if existing is not None:
-        if (
-            DepthLayoutRegistryModel.model_validate(existing.get("depth_layouts", {}))
-            != layouts
-        ):
+        frozen_layouts = DepthLayoutRegistryModel.model_validate(
+            existing.get("depth_layouts", {})
+        )
+        if owner.indexed_prediction:
+            frozen_layouts = frozen_layouts.relevant_layouts(columns)
+        if frozen_layouts != layouts:
             raise ValueError(
                 "metadata_config_path requires identical complete depth layouts"
             )

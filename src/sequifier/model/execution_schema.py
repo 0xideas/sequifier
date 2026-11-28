@@ -134,7 +134,9 @@ class ExecutionSchema:
                 ("batch", context_length),
             )
         )
-        for index, (name, layout) in enumerate(sorted(layouts.items())):
+        for index, (name, layout) in enumerate(
+            sorted(layouts.relevant_layouts(interface.input_columns).items())
+        ):
             inputs.append(
                 InputDescriptor(
                     f"depth_mask_{index}",
@@ -144,40 +146,52 @@ class ExecutionSchema:
                     ("batch", context_length, layout.max_depth_length),
                 )
             )
-        outputs = (
-            (
+        prediction_length = interface.decoder.prediction_length
+        outputs = []
+        if embedding:
+            outputs.append(
                 {
                     "name": "embedding_out",
                     "key": "embedding",
                     "dtype": "float32",
-                    "shape": (
-                        interface.decoder.prediction_length,
-                        "batch",
-                        embedding_width,
-                    ),
-                },
-            )
-            if embedding
-            else tuple(
-                {
-                    "name": f"output_{index}",
-                    "key": column,
-                    "dtype": "float32",
-                    "shape": (
-                        interface.decoder.prediction_length,
-                        "batch",
-                        interface.target_n_classes[column]
-                        if interface.target_column_types[column] == "categorical"
-                        else 1,
-                    ),
+                    "shape": (prediction_length, "batch", embedding_width),
                 }
-                for index, column in enumerate(sorted(interface.target_columns))
             )
-        )
+        else:
+            static_targets = set(interface.static_target_columns)
+            for column in sorted(interface.target_columns):
+                length = 1 if column in static_targets else prediction_length
+                layout = layouts.layout_for_column(column)
+                depth_axis = (layout.max_depth_length,) if layout else ()
+                width = interface.target_n_classes.get(column, 1)
+                outputs.append(
+                    {
+                        "name": f"output_{len(outputs)}",
+                        "key": column,
+                        "dtype": "float32",
+                        "shape": (length, "batch", *depth_axis, width),
+                    }
+                )
+            for name, layout in layouts.relevant_layouts(
+                interface.target_columns
+            ).items():
+                outputs.append(
+                    {
+                        "name": f"output_{len(outputs)}",
+                        "key": f"depth_occupancy:{name}",
+                        "dtype": "float32",
+                        "shape": (
+                            prediction_length,
+                            "batch",
+                            layout.max_depth_length,
+                            1,
+                        ),
+                    }
+                )
         return cls(
             tuple(inputs),
-            outputs,
-            layouts.model_dump(mode="json"),
+            tuple(outputs),
+            layouts.relevant_layouts(interface.input_columns).model_dump(mode="json"),
             dict(interface.n_classes),
         )
 

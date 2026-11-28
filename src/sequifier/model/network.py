@@ -8,8 +8,10 @@ from torch import Tensor, nn
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.model.backbone import TransformerBackbone
+from sequifier.model.decoder_features import DepthReadout
 from sequifier.model.decoders import (
     AutoregressiveTransformerDecoderBranch,
+    FeatureDecoderBranch,
     TargetDecoderBranch,
     TargetDecoding,
 )
@@ -252,6 +254,14 @@ class ModelInterfaceModule(nn.Module):
         if unknown:
             raise ValueError(f"Unknown decoder target columns: {sorted(unknown)!r}.")
         outputs = {target: decoded[0][target] for target in targets}
+        if request.target_columns is None:
+            outputs.update(
+                {
+                    k: v
+                    for k, v in decoded[0].items()
+                    if k.startswith("depth_occupancy:")
+                }
+            )
         auxiliary = {
             target: decoded[1][target] for target in targets if target in decoded[1]
         }
@@ -259,7 +269,7 @@ class ModelInterfaceModule(nn.Module):
             outputs = {
                 target: (
                     torch.log_softmax(output.float(), dim=-1)
-                    if self.target_column_types[target] == "categorical"
+                    if self.target_column_types.get(target) == "categorical"
                     else output
                 )
                 for target, output in outputs.items()
@@ -359,6 +369,13 @@ class ComposableTransformerNetwork(nn.Module):
                 decoder_input_width=route.decoder_input_width,
                 decoder_branches=branch_counts,
                 target_branches=dict(decoder.target_to_branch),
+                depth_targets=tuple(
+                    target
+                    for branch in decoder.branches.values()
+                    if isinstance(branch, FeatureDecoderBranch)
+                    and isinstance(branch.readout, DepthReadout)
+                    for target in branch.target_columns
+                ),
             )
         )
         for branch_name, branch in decoder.branches.items():

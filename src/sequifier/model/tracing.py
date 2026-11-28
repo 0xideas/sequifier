@@ -235,6 +235,7 @@ def trace_sites(
     decoder_input_width: int,
     decoder_branches: dict[str, tuple[int, ...]],
     target_branches: dict[str, str],
+    depth_targets: tuple[str, ...] = (),
 ) -> tuple[TraceSite, ...]:
     batch_time_channel = ("batch", "time", "channel")
     sites = [
@@ -303,7 +304,12 @@ def trace_sites(
             for index, width in enumerate(block_widths)
         )
     sites.extend(
-        TraceSite(f"decoder.branch.{branch}.logits.{target}", batch_time_channel)
+        TraceSite(
+            f"decoder.branch.{branch}.logits.{target}",
+            ("batch", "time", "depth", "channel")
+            if target in depth_targets
+            else batch_time_channel,
+        )
         for target, branch in target_branches.items()
     )
     return tuple(sites)

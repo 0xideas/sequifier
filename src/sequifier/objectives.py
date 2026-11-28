@@ -229,7 +229,12 @@ class NextOccurrenceObjective(CausalObjective):
 
         projected_targets = {}
         for target_column, target_tensor in targets.items():
-            projected_targets[target_column] = target_tensor.gather(1, gather_indices)
+            indices = gather_indices.reshape(
+                *gather_indices.shape, *([1] * (target_tensor.ndim - 2))
+            )
+            projected_targets[target_column] = target_tensor.gather(
+                1, indices.expand_as(target_tensor)
+            )
 
         return projected_targets, next_occurrence_mask
 

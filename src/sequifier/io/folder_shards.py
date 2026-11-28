@@ -7,7 +7,7 @@ from sequifier.helpers import PANDAS_TO_TORCH_TYPES
 from sequifier.io.pt_payload import load_pt_payload, tabular_tensor_batch
 from sequifier.io.sample_order import curriculum_columns
 from sequifier.io.window_dataset import WindowChunk
-from sequifier.io.window_sampling import target_valid_from_offsets
+from sequifier.io.window_sampling import target_valid_from_offsets, temporal_columns
 
 
 class PtShardReader:
@@ -20,8 +20,8 @@ class PtShardReader:
         )
         self.selected_layouts = config.depth_layouts or DepthLayoutRegistryModel()
         if self.depth_layouts.compatibility_signature(
-            config.input_columns
-        ) != self.selected_layouts.compatibility_signature(config.input_columns):
+            temporal_columns(config)
+        ) != self.selected_layouts.compatibility_signature(temporal_columns(config)):
             raise ValueError(
                 "PT folder depth layouts are incompatible with the selected interface"
             )
@@ -82,7 +82,7 @@ class ParquetShardReader:
         payload = tabular_tensor_batch(
             pl.read_parquet(file_path),
             self.column_torch_types,
-            list(dict.fromkeys(self.config.input_columns + self.config.target_columns)),
+            temporal_columns(self.config),
             self.sampling_plan.resolved_view.storage.window_length,
             curriculum=curriculum_columns(self.config.curriculum_column),
         )

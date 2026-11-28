@@ -748,6 +748,11 @@ def _part_features(
 ) -> FeatureMetadata:
     selection = interface.feature_selection
     features = selection.resolve(metadata)
+    stored_static_targets = set(interface.target_columns).intersection(
+        metadata.static_columns
+    )
+    if stored_static_targets != set(interface.static_target_columns):
+        raise ValueError("Static target columns must use a static_readout decoder")
     if (
         selection.static
         and require_static_table
@@ -1291,6 +1296,10 @@ class SelectedObjectiveConfig(SelectedInterfaceConfig):
 @dataclass(frozen=True)
 class SelectedDatasetPartConfig(SelectedInterfaceConfig):
     """Explicit dataset-part configuration used by data loaders."""
+
+    @property
+    def static_columns(self):
+        return self.interface.feature_selection.static
 
     project_root: str
     device: str

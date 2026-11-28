@@ -10,6 +10,7 @@ from sequifier.helpers import (
 )
 from sequifier.io.sample_order import curriculum_columns
 from sequifier.io.window_dataset import WindowChunk, WindowDataset
+from sequifier.io.window_sampling import temporal_columns
 from sequifier.typechecking import beartype
 
 
@@ -19,7 +20,7 @@ class SequifierDatasetFromFile(WindowDataset):
     @beartype
     def __init__(self, data_path: str, config: Any, shuffle: bool = True):
         super().__init__(config, shuffle)
-        all_columns = sorted(set(config.input_columns + config.target_columns))
+        all_columns = sorted(temporal_columns(config))
         logger.info(f"Loading dataset into memory from '{data_path}'...")
         sampling_plan = resolve_window_sampling_plan(
             config.storage_layout,
