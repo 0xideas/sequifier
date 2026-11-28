@@ -95,8 +95,12 @@ argmax/locations, without claiming a global joint mode.
 Inputs retain the complete scalar/static/depth/image/mask execution schema.
 Prepared sources reuse depth masks and image stores; tables may contain nested
 Parquet payloads. Each `feedback.<input>` entry names its `action` and optional `initial` value for the first decision.
-`decision_position` defaults to `-1` and selects one existing decoder position,
-not an action block. Historical likelihoods use only observations available then.
+The policy next-action offset is 1. History ends at row `i`, and the action and
+its outcome are recorded on row `i+1`. Imitation, preference scoring, and IQL
+read the executed action from that arrival. The episode reader aligns the action
+with the history before scoring. `decision_position` selects a slot within the
+decoder output (the last slot by default, `-1`). The physical target row is
+always one step after the decision.
 Return conditioning requires an existing `__policy_return` input and known offline
 tails or online `initial_desired_return`.
 
@@ -106,7 +110,7 @@ Prepared and sequence/preference parts belong to `datasets`. Each phase owns
 its batching and role optimization (`model` for supervised; policy roles in the guide).
 All interfaces survive handoff, though shared backbone updates can affect inactive
 interfaces. The coordinator preflights the plan, commits incoming artifacts, and uses
-native checkpoints plus atomic completion receipts. Mixed plans execute locally. Adjacent
+native checkpoints plus atomic completion receipts. Mixed plans share one worker environment across supervised and policy phases under local execution, DDP, or FSDP2. See the [distributed training guide](training/multi-gpu-training.md). Adjacent
 phases can continue their optimizer under the [continuation rules](configs/train.md#optimization-across-phases).
 Adjacent supervised phases also share compatible best-model history across optimizer resets.
 
@@ -116,4 +120,4 @@ belong to the model artifact. `task: forecast` selects point prediction from a
 policy-bound artifact; `task: policy` selects policy execution. See
 [inference routing](configs/infer.md#policy-model-interfaces).
 Sequifier handles format validation when it loads model artifacts, trajectories,
-and PPO collection records. ONNX remains a prediction export.
+and PPO collection records. Policy and mixed plans can also [export an executable ONNX actor](policy-learning.md#onnx-export).

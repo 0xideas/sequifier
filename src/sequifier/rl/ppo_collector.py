@@ -7,11 +7,12 @@ from sequifier.rl.ppo_buffer import PPOBufferBuilder, PPODecision
 
 
 class PPOCollector:
-    def __init__(self, actor, value, adapter, phase, seed):
+    def __init__(self, actor, value, adapter, phase, seed, *, stream=None):
         self.actor = actor
         self.value = value
         self.adapter = adapter
         self.phase = phase
+        self.prefix = "train" if stream is None else f"rank-{stream}-train"
         self.seed = seed
         self.cursor = PolicyCursor(
             actor,
@@ -29,10 +30,10 @@ class PPOCollector:
             self.adapter.reset(
                 stream_seed(self.seed, "training-reset", self.reset_count)
             ),
-            f"train-{self.reset_count}",
+            f"{self.prefix}-{self.reset_count}",
         )
 
-    def collect(self, horizon, policy_version, *, storage=None):
+    def collect(self, horizon, policy_version, *, storage=None, normalize=None):
         if self.actor.ppo_policy_version != policy_version:
             raise ValueError("collection policy generation disagrees with the actor")
         self.actor.eval()
@@ -65,28 +66,19 @@ class PPOCollector:
                     current_reference = builder.append_frame(
                         self.cursor.history.current
                     )
-                if current_reference is None:
-                    raise ValueError(
-                        "live PPO decision lacks its observation reference"
-                    )
                 current = self.cursor.history.current
                 decision = self.cursor.decide(self.value)
                 result = self.cursor.step(decision)
-                successor_reference = None
-                successor_value = 0.0
-                if result.observation is not None:
-                    features, metadata = self.actor.model_inputs(self.cursor.inputs)
-                    if not result.terminated:
-                        successor_value = float(
-                            self.value.prepared_value(features, metadata)[0]
-                        )
-                    if not torch.isfinite(
-                        torch.tensor(successor_value, dtype=torch.float32)
-                    ):
-                        raise ValueError("non-finite PPO successor value")
-                    successor_reference = builder.append_frame(
-                        self.cursor.history.current
-                    )
+                successor_value = (
+                    0.0
+                    if result.terminated
+                    else float(self.value(self.cursor.inputs)[0])
+                )
+                if not torch.isfinite(
+                    torch.tensor(successor_value, dtype=torch.float32)
+                ):
+                    raise ValueError("non-finite PPO successor value")
+                successor_reference = builder.append_frame(self.cursor.history.current)
                 reward = float(result.reward) * self.phase.reward_scale
                 if not torch.isfinite(
                     torch.tensor([reward, successor_value], dtype=torch.float32)
@@ -106,7 +98,6 @@ class PPOCollector:
                         successor_value,
                         result.terminated,
                         result.truncated,
-                        not result.terminated,
                         current.episode_id,
                         current.step_id,
                         policy_version,
@@ -125,7 +116,9 @@ class PPOCollector:
                         }
                     )
         return builder.seal(
-            self.phase.gamma, self.phase.gae_lambda, self.phase.normalize_advantages
+            self.phase.gamma,
+            self.phase.gae_lambda,
+            self.phase.normalize_advantages if normalize is None else normalize,
         ), completed
 
     def state_dict(self):
@@ -149,7 +142,8 @@ class PPOCollector:
             self.cursor.refresh()
             if (
                 self.reset_count != reset_count
-                or self.cursor.history.current.episode_id != f"train-{reset_count - 1}"
+                or self.cursor.history.current.episode_id
+                != f"{self.prefix}-{reset_count - 1}"
             ):
                 raise ValueError(
                     "PPO checkpoint episode identity disagrees with reset count"

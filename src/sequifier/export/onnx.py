@@ -8,6 +8,7 @@ import tempfile
 import uuid
 import warnings
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,7 @@ def validate_graph_contract(graph, schema):
         tensor = value.type.tensor_type
         expected_dtype = {
             "float32": onnx.TensorProto.FLOAT,
+            "float64": onnx.TensorProto.DOUBLE,
             "int64": onnx.TensorProto.INT64,
             "bool": onnx.TensorProto.BOOL,
             "uint8": onnx.TensorProto.UINT8,
@@ -107,13 +109,29 @@ def validate_graph_contract(graph, schema):
         item["name"] for item in schema.outputs
     ]:
         raise ValueError("ONNX output order contradicts execution schema")
+    policy_graph = any(item.role == "policy_control" for item in schema.inputs)
     for value, descriptor in zip(graph.graph.output, schema.outputs):
-        if value.type.tensor_type.elem_type != onnx.TensorProto.FLOAT:
-            raise ValueError("Portable ONNX outputs must be FP32")
+        if not policy_graph and (
+            descriptor["dtype"] != "float32" or len(descriptor["shape"]) != 3
+        ):
+            raise ValueError(
+                "Forecast and embedding outputs must be sequence-major FP32 tensors"
+            )
+        expected_type = {
+            "float32": onnx.TensorProto.FLOAT,
+            "float64": onnx.TensorProto.DOUBLE,
+            "int64": onnx.TensorProto.INT64,
+        }[descriptor["dtype"]]
+        if value.type.tensor_type.elem_type != expected_type:
+            raise ValueError("ONNX output dtype contradicts execution schema")
         dims = value.type.tensor_type.shape.dim
-        if len(dims) != 3:
-            raise ValueError("ONNX outputs must be sequence-major rank three")
+        if len(dims) != len(descriptor["shape"]):
+            raise ValueError("ONNX output rank contradicts execution schema")
         for axis, size in enumerate(descriptor["shape"]):
+            if policy_graph and size == "batch" and not dims[axis].dim_param:
+                raise ValueError(
+                    f"ONNX policy output {value.name!r} lost symbolic batch"
+                )
             if (
                 isinstance(size, int)
                 and dims[axis].HasField("dim_value")
@@ -283,6 +301,32 @@ class OnnxModelExporter:
         training: bool,
         metadata: dict[str, str] | None = None,
     ) -> Path:
+        schema = ExecutionSchema.from_interface(
+            interface, context_length, embedding=interface_name is None
+        )
+        return self.export_graph(
+            _OnnxWrapper(model, schema, interface_name),
+            schema,
+            destination,
+            interface_name=interface_name or interface.name,
+            batch_size=batch_size,
+            training=training,
+            metadata=metadata,
+        )
+
+    def export_graph(
+        self,
+        wrapper: nn.Module,
+        schema: ExecutionSchema,
+        destination: Path,
+        *,
+        interface_name: str,
+        batch_size: int,
+        training: bool,
+        metadata: dict[str, str] | None = None,
+        validate_outputs: Callable[[tuple[Tensor, ...], dict[str, Tensor]], None]
+        | None = None,
+    ) -> Path:
         import re
         from importlib.metadata import version
 
@@ -309,16 +353,12 @@ class OnnxModelExporter:
         state = manager.capture_local()
         try:
             # All graph lowering and dtype conversion happen on a disposable copy.
-            model = copy.deepcopy(model).cpu()
-            for module in model.modules():
+            wrapper = copy.deepcopy(wrapper).cpu().train(training)
+            for module in wrapper.modules():
                 if isinstance(module, SelfAttention):
                     module.export_attention = True
-            schema = ExecutionSchema.from_interface(
-                interface, context_length, embedding=interface_name is None
-            )
             inputs = schema.example_inputs(min(4, max(2, batch_size)))
             schema.validate(*schema.bind(inputs))
-            wrapper = _OnnxWrapper(model, schema, interface_name).train(training)
             expected_dropout, aliases, probabilities = (
                 _expected_dropout_sites(wrapper, inputs) if training else ({}, {}, {})
             )
@@ -434,7 +474,15 @@ class OnnxModelExporter:
                     for item, value in zip(schema.inputs, inputs)
                     if item.name in actual_names
                 }
-                outputs = session.run([item["name"] for item in schema.outputs], feeds)
+                outputs = []
+                for value in session.run(
+                    [item["name"] for item in schema.outputs], feeds
+                ):
+                    if not isinstance(value, np.ndarray):
+                        raise ValueError(
+                            "ONNX artifact must return dense tensor outputs"
+                        )
+                    outputs.append(value)
                 if any(not np.isfinite(value).all() for value in outputs):
                     raise ValueError(
                         "ONNX artifact produced non-finite outputs during publication validation"
@@ -445,13 +493,25 @@ class OnnxModelExporter:
                     reference = (
                         (reference,) if isinstance(reference, Tensor) else reference
                     )
-                    for expected, actual in zip(reference, outputs):
-                        if not np.allclose(
-                            expected.detach().numpy(), actual, rtol=2e-4, atol=2e-5
-                        ):
+                    for expected, actual in zip(reference, outputs, strict=True):
+                        reference_value = expected.detach().numpy()
+                        matches = reference_value.shape == actual.shape and (
+                            np.allclose(reference_value, actual, rtol=2e-4, atol=2e-5)
+                            if expected.is_floating_point()
+                            else np.array_equal(reference_value, actual)
+                        )
+                        if not matches:
                             raise ValueError(
                                 "ONNX artifact differs from its export reference"
                             )
+                if validate_outputs is not None:
+                    validate_outputs(
+                        inputs,
+                        {
+                            item["name"]: torch.from_numpy(value)
+                            for item, value in zip(schema.outputs, outputs, strict=True)
+                        },
+                    )
                 published = []
                 try:
                     for external_file in external_files.values():
@@ -481,7 +541,7 @@ class OnnxModelExporter:
             return destination
         except Exception as error:
             raise RuntimeError(
-                f"ONNX export failed for interface {interface_name or interface.name!r} at {destination}: {error}"
+                f"ONNX export failed for interface {interface_name!r} at {destination}: {error}"
             ) from error
         finally:
             manager.restore(state)

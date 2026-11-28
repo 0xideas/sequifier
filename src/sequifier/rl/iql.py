@@ -5,13 +5,20 @@ from typing import cast
 
 import torch
 from torch import nn
+from torch.distributed.tensor import DTensor
 
+from sequifier.artifacts.state_dict import canonicalize_state_dict
 from sequifier.config.policy_plan import IQLPhaseConfig
 from sequifier.io.iql_dataset import IQLTransitionDataset
 from sequifier.io.tensors import gather_tensor
 from sequifier.rl.offline_data import OfflineData
 from sequifier.rl.run_state import PhaseContext, PhaseSession
 from sequifier.rl.window_storage import collated_windows
+
+
+class TwinQ(nn.ModuleList):
+    def forward(self, inputs, actions):
+        return self[0](inputs, actions), self[1](inputs, actions)
 
 
 def build_iql_roles(actor, phase, *, metadata_only, restoring):
@@ -28,7 +35,7 @@ def build_iql_roles(actor, phase, *, metadata_only, restoring):
         {
             "actor": actor.network,
             "value": value.eval(),
-            "critic": nn.ModuleList([q1, q2]).eval(),
+            "critic": TwinQ([q1, q2]).eval(),
         },
         {f"target_q{i}": target.eval() for i, target in enumerate(targets, 1)},
         {
@@ -48,25 +55,56 @@ def _select(inputs, mask):
 
 def _polyak(target, source, rate):
     with torch.no_grad():
-        for target_parameter, parameter in zip(
-            target.parameters(), source.parameters()
-        ):
-            target_parameter.lerp_(parameter, rate)
-        for target_buffer, buffer in zip(target.buffers(), source.buffers()):
-            target_buffer.copy_(buffer)
+        parameters = canonicalize_state_dict(dict(source.named_parameters()))
+        targets = canonicalize_state_dict(dict(target.named_parameters()))
+        if targets.keys() != parameters.keys():
+            raise ValueError("IQL online and target parameter names differ")
+        for name, target_parameter in targets.items():
+            parameter = parameters[name]
+            if target_parameter.shape != parameter.shape:
+                raise ValueError(f"Incompatible target parameter {name}")
+            if isinstance(parameter, DTensor) != isinstance(target_parameter, DTensor):
+                raise ValueError(f"Incompatible target shard {name}")
+            if isinstance(parameter, DTensor) and (
+                not isinstance(target_parameter, DTensor)
+                or parameter.placements != target_parameter.placements
+                or parameter.device_mesh != target_parameter.device_mesh
+            ):
+                raise ValueError(f"Incompatible target shard {name}")
+            if isinstance(target_parameter, DTensor) and isinstance(parameter, DTensor):
+                target_parameter.to_local().lerp_(parameter.to_local(), rate)
+            else:
+                target_parameter.lerp_(parameter, rate)
+        buffers = canonicalize_state_dict(dict(source.named_buffers()))
+        for name, target_buffer in canonicalize_state_dict(
+            dict(target.named_buffers())
+        ).items():
+            target_buffer.copy_(buffers[name])
 
 
 def _evaluate(
-    actor, value, q1, q2, dataset: IQLTransitionDataset, batch_size, gamma, device
+    actor,
+    value,
+    critic,
+    dataset: IQLTransitionDataset,
+    batch_size,
+    gamma,
+    device,
+    strategy=None,
 ):
     totals = {"action_nll": 0.0, "bellman_residual": 0.0, "value": 0.0, "q_min": 0.0}
     with torch.no_grad():
-        for start in range(0, len(dataset), batch_size):
-            indices = range(start, min(start + batch_size, len(dataset)))
+        positions = (
+            range(strategy.rank, len(dataset), strategy.world_size)
+            if strategy
+            else range(len(dataset))
+        )
+        for start in range(0, len(positions), batch_size):
+            indices = positions[start : start + batch_size]
             with collated_windows((dataset[i] for i in indices), device) as batch:
                 action = batch.action
                 v = value(batch.current)
-                q = torch.minimum(q1(batch.current, action), q2(batch.current, action))
+                q = torch.minimum(*critic(batch.current, action))
                 nll = -actor.evaluate_actions(batch.current, action)
                 successor_value = torch.zeros_like(v)
                 if batch.bootstrap.any():
@@ -90,9 +128,10 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
     actor, phase = context.actor.eval(), context.phase
     data = context.data.prepare_transitions()
     session = PhaseSession(context)
-    value = session.modules["value"]
-    q1, q2 = cast(nn.ModuleList, session.modules["critic"])
-    targets = session.networks["target_q1"], session.networks["target_q2"]
+    value = session.calls["value"]
+    critic = session.calls["critic"]
+    q1, q2 = cast(TwinQ, session.modules["critic"])
+    targets = session.calls["target_q1"], session.calls["target_q2"]
     if not 0 <= session.transaction <= phase.budget.iterations:
         raise ValueError("IQL checkpoint exceeds phase update budget")
     if any(steps != session.transaction for steps in session.steps.values()):
@@ -103,12 +142,12 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
             lambda: _evaluate(
                 actor,
                 value,
-                q1,
-                q2,
+                critic,
                 data[1],
                 phase.evaluation.batch_size,
                 phase.gamma,
                 actor.device,
+                session.strategy,
             ),
             **record,
         )
@@ -120,6 +159,8 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         indices = torch.randint(
             len(data[0]), (phase.batch_size,), generator=session.sampler
         )
+        indices, scale = session.partition(indices)
+        scale *= len(indices) / phase.batch_size
         with collated_windows(
             (data[0][int(i)] for i in indices), actor.device
         ) as batch:
@@ -136,20 +177,21 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
                     )
                 )
                 successor_value = torch.zeros_like(old_v)
-                if batch.bootstrap.any():
-                    successor_value[batch.bootstrap] = value(
-                        _select(batch.successor, batch.bootstrap)
-                    )
+                if session.strategy.sum(int(batch.bootstrap.any())):
+                    if batch.bootstrap.any():
+                        successor_value[batch.bootstrap] = value(
+                            _select(batch.successor, batch.bootstrap)
+                        )
+                    else:
+                        value(batch.current)
                 target = batch.reward + phase.gamma * successor_value
             delta = qbar - value(batch.current)
             v_loss = (
                 torch.where(delta < 0, 1 - phase.expectile, phase.expectile)
                 * delta.square()
             ).mean()
-            q_loss = (
-                (q1(batch.current, batch.action) - target).square()
-                + (q2(batch.current, batch.action) - target).square()
-            ).mean()
+            first, second = critic(batch.current, batch.action)
+            q_loss = ((first - target).square() + (second - target).square()).mean()
             actor_loss = -(
                 weight * actor.evaluate_actions(batch.current, batch.action)
             ).mean()
@@ -158,22 +200,29 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
             for role, loss in losses.items():
                 if not torch.isfinite(loss):
                     raise ValueError(f"non-finite IQL {role} objective")
-                loss.backward()
+                session.optimization[role].backward(loss * scale)
             del batch
         session.step()
-        _polyak(targets[0], q1, phase.target_update_rate)
-        _polyak(targets[1], q2, phase.target_update_rate)
+        _polyak(session.networks["target_q1"], q1, phase.target_update_rate)
+        _polyak(session.networks["target_q2"], q2, phase.target_update_rate)
+
+        def global_mean(tensor):
+            return (
+                session.strategy.sum(float(tensor.mean()) * scale)
+                / session.strategy.world_size
+            )
+
         training_losses = {
-            f"{role}_loss": float(loss.detach()) for role, loss in losses.items()
+            f"{role}_loss": global_mean(loss.detach()) for role, loss in losses.items()
         }
         session.complete_update(
             final=update == phase.budget.iterations,
             training={
                 **training_losses,
-                "advantage_mean": float(advantage.mean()),
-                "weight_mean": float(weight.mean()),
-                "weight_cap_fraction": float(
-                    (weight >= phase.max_advantage_weight).float().mean()
+                "advantage_mean": global_mean(advantage),
+                "weight_mean": global_mean(weight),
+                "weight_cap_fraction": global_mean(
+                    (weight >= phase.max_advantage_weight).float()
                 ),
             },
             evaluate=evaluate,

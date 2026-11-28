@@ -336,7 +336,15 @@ def merge_component_patch(
 def component_discriminator(path: ComponentPath) -> str | None:
     """Identify authored variants for fragment merging and search materialization."""
     match path:
-        case ("run", "execution", "supervised", "distribution"):
+        case (
+            ("run", "execution", "distribution")
+            | (
+                "run",
+                "execution",
+                "supervised",
+                "distribution",
+            )
+        ):
             return "strategy"
         case ("phases", str(), "learning", "objective"):
             return "type"

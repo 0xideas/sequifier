@@ -6,6 +6,7 @@ from dataclasses import asdict
 from typing import cast
 from uuid import uuid4
 
+from sequifier.config.column_names import INCOMING_ACTION_PRESENT
 from sequifier.config.rollout_config import RolloutConfig
 from sequifier.io.values import DomainValue
 from sequifier.rollout.contracts import (
@@ -155,15 +156,15 @@ def collect_rollout(
                 for binding in config.bindings
             }
 
-            next_history = advance_history(history, successor)
+            if INCOMING_ACTION_PRESENT in history.observations:
+                successor[INCOMING_ACTION_PRESENT] = 1.0
+            next_history = advance_history(history, successor, predictions)
             if history_validator is not None:
                 history_validator(next_history.model_copy(deep=True))
             transition = recorder.append(
-                observation=observation,
-                predictions=predictions,
-                external_inputs=external,
+                action=predictions,
                 reward=reward,
-                successor_observation=successor,
+                observation=successor,
                 terminated=result.terminated,
                 truncated=result.truncated,
             )
@@ -171,7 +172,6 @@ def collect_rollout(
             if transition.terminated or transition.truncated:
                 break
         return recorder.finish(
-            format="sequifier.numeric-forecast-trajectory",
             seed=initial_history,
             bindings=config.bindings,
             prediction_columns=prediction_columns,

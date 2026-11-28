@@ -9,7 +9,9 @@ import torch
 
 from sequifier.config.policy_infer_config import PolicyRolloutConfig
 from sequifier.config.rollout_config import TrajectoryInputBinding
-from sequifier.io.values import numeric_scalar, portable_fields
+from sequifier.io.action_record import action_record_layout
+from sequifier.io.actions import encode_action
+from sequifier.io.values import portable_fields
 from sequifier.rl.collection import PolicyCursor, PolicyDecision
 from sequifier.rl.environment import (
     OnlineEnvironmentAdapter,
@@ -19,28 +21,30 @@ from sequifier.rl.environment import (
     validate_online_adapter,
     validate_reset,
 )
-from sequifier.rl.policy import Policy
+from sequifier.rl.policy import ExecutablePolicy
 from sequifier.trajectory.recording import TrajectoryRecorder, close_adapter
-from sequifier.trajectory.schema import SeedHistory, Trajectory, validate_policy_seed
+from sequifier.trajectory.schema import SeedHistory, Trajectory, validate_seed_budgets
 
 
 def collect_policy_rollout(
-    policy: Policy,
+    policy: ExecutablePolicy,
     adapter: OnlineEnvironmentAdapter,
     seed: SeedHistory,
     config: PolicyRolloutConfig,
     max_steps: int,
     *,
     desired_return: float | None = None,
-    seed_previous_actions: list | None = None,
     seed_returns: list | None = None,
     action_selection: Literal["deterministic", "stochastic"] = "deterministic",
     random_seed: int = 1010,
     journal=None,
+    compute_entropy: bool | None = None,
 ) -> Trajectory:
     """Execute a supplied initial observation, preserving actual episode boundaries."""
     was_training, failed = policy.training, False
     try:
+        if compute_entropy is None:
+            compute_entropy = bool(getattr(policy, "supports_entropy", True))
         validate_online_adapter(adapter)
         require_seeded_reset(adapter)
         if (not isinstance(max_steps, int)) or max_steps < 1:
@@ -54,21 +58,20 @@ def collect_policy_rollout(
         count = sum(seed.attention_valid_mask)
         if len(seed.attention_valid_mask) != spec.context_length:
             raise ValueError("policy seed width must match context_length")
-        if seed_previous_actions is None:
-            if count > 1 and spec.previous_action_inputs:
-                raise ValueError(
-                    "Multi-observation policy seeds require lagged action history"
-                )
-            seed_previous_actions = [None] * count
+        actions = [
+            encode_action(action, spec) if action is not None else None
+            for action in seed.valid_actions
+        ]
+        if spec.previous_action_inputs and any(
+            action is None for action in actions[1:]
+        ):
+            raise ValueError(
+                "Each observation after reset requires recorded action feedback"
+            )
         if not spec.return_conditioned and desired_return is not None:
             raise ValueError("behavior cloning has no desired-return input")
         if spec.return_conditioned and desired_return is None:
             desired_return = spec.initial_desired_return
-        returns = (
-            [numeric_scalar(desired_return, "desired_return")]
-            if spec.return_conditioned
-            else []
-        )
         horizon = spec.episode_horizon
         if horizon is not None and config.max_episode_steps not in (None, horizon):
             raise ValueError(
@@ -86,9 +89,8 @@ def collect_policy_rollout(
         )
         if seed_returns is None:
             seed_returns = [desired_return] if spec.return_conditioned else []
-        validate_policy_seed(
+        validate_seed_budgets(
             spec,
-            seed_previous_actions,
             seed_returns,
             count,
             desired_return,
@@ -96,7 +98,7 @@ def collect_policy_rollout(
         earlier = [
             (
                 {name: values[i - count] for name, values in seed.observations.items()},
-                seed_previous_actions[i],
+                actions[i],
                 seed_returns[i] if spec.return_conditioned else None,
             )
             for i in range(count - 1)
@@ -107,7 +109,7 @@ def collect_policy_rollout(
             desired_return,
             earlier=earlier,
             observation_masks=seed.observation_mask[-count:],
-            previous_action=seed_previous_actions[-1],
+            previous_action=actions[-1],
         )
 
         def reset_adapter():
@@ -134,18 +136,18 @@ def collect_policy_rollout(
         recorder = TrajectoryRecorder(
             episode_id, config.max_episode_steps if horizon is None else None
         )
-        previous_actions, log_probabilities = [], []
-        observation = dict(initial.observation)
 
         def select():
-            decision = cursor.decide(deterministic=action_selection == "deterministic")
+            decision = cursor.decide(
+                deterministic=action_selection == "deterministic",
+                compute_entropy=compute_entropy,
+            )
             return {
                 "decision": asdict(decision),
                 "rng": cursor.generator.get_state().tolist(),
             }
 
         for step_id in range(max_steps):
-            current = cursor.history.current
             if journal:
                 selected = journal.decision(step_id, select)
                 decision = PolicyDecision(**selected["decision"])
@@ -162,39 +164,28 @@ def collect_policy_rollout(
                 result = cursor.accept_step(decision, response)
             else:
                 decision = cursor.decide(
-                    deterministic=action_selection == "deterministic"
+                    deterministic=action_selection == "deterministic",
+                    compute_entropy=compute_entropy,
                 )
                 result = cursor.step(decision)
 
-            previous_actions.append(current.previous_action)
-            log_probabilities.append(decision.log_probability)
-            if spec.return_conditioned:
-                assert cursor.desired_return is not None
-                returns.append(cursor.desired_return)
-            successor = (
-                portable_fields(result.observation)
-                if result.observation is not None
-                else None
-            )
-            latents, components = policy.action_plan.record_layout.unpack_auxiliary(
+            successor = portable_fields(result.observation)
+            latents, components = action_record_layout(spec).unpack_auxiliary(
                 decision.action
             )
             transition = recorder.append(
-                observation=observation,
-                predictions=decision.domain_action,
+                action=decision.domain_action,
                 action_latents=latents,
                 action_components=components,
-                external_inputs=successor or {},
+                diagnostics={"old_log_probability": decision.log_probability},
                 reward=result.reward,
-                successor_observation=successor,
+                observation=successor,
                 terminated=result.terminated,
                 truncated=result.truncated,
             )
             if transition.terminated or transition.truncated:
                 break
-            observation = successor
         return recorder.finish(
-            format="sequifier.policy-trajectory",
             seed=seed,
             bindings=[
                 TrajectoryInputBinding(input=name, source="environment", key=name)
@@ -205,11 +196,7 @@ def collect_policy_rollout(
                 "policy_execution": {
                     "config": spec.model_dump(mode="json"),
                     "initial_desired_return": desired_return,
-                    "seed_previous_action_ids": seed_previous_actions,
                     "seed_returns": seed_returns if spec.return_conditioned else [],
-                    "remaining_returns": returns,
-                    "previous_action_ids": previous_actions,
-                    "action_log_probabilities": log_probabilities,
                     "action_selection": action_selection,
                 },
             },

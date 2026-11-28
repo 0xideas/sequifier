@@ -23,11 +23,15 @@ def _action_nll(actor, batch):
 
 
 @torch.no_grad()
-def evaluate_imitation(actor, dataset, batch_size):
+def evaluate_imitation(actor, dataset, batch_size, strategy=None):
     actor.eval()
     total = 0.0
-    for start in range(0, len(dataset), batch_size):
-        indices = range(start, min(start + batch_size, len(dataset)))
+    indices = (
+        range(strategy.rank, len(dataset), strategy.world_size)
+        if strategy
+        else range(len(dataset))
+    )
+    for indices in minibatches(indices, batch_size):
         with collated_windows(
             (imitation_example(dataset, i) for i in indices), actor.device
         ) as batch:
@@ -59,7 +63,11 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
 
     def evaluate(**record):
         started = time.monotonic()
-        score = evaluate_imitation(actor, data.validation, phase.evaluation.batch_size)
+        with session.rounds.scope():
+            score = evaluate_imitation(
+                actor, data.validation, phase.evaluation.batch_size, session.strategy
+            )
+        score = session.strategy.sum(score)
         session.record_evaluation(
             score,
             elapsed_seconds=time.monotonic() - started,
@@ -72,23 +80,29 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
     session.evaluate_initial(evaluate)
     while batches.epoch < phase.budget.epochs and not session.stopping.triggered:
         session.epoch = batches.epoch + 1
+        position = batches.position
         group = batches.next()
         session.zero_grad()
         total = 0.0
-        for indices in minibatches(group, phase.batch_size):
+        for microbatch in minibatches(group, phase.batch_size):
+            indices, scale = session.partition(microbatch, position)
+            position += len(microbatch)
             with collated_windows(
                 (imitation_example(training, i) for i in indices), actor.device
             ) as batch:
-                loss = _action_nll(actor, batch).sum() / len(group)
+                loss = _action_nll(actor, batch).sum() * scale / len(group)
                 if not torch.isfinite(loss):
                     raise ValueError("non-finite imitation action likelihood")
-                loss.backward()
+                session.optimization["actor"].backward(loss)
                 total += float(loss.detach())
                 del batch
         session.step()
         session.complete_update(
             final=batches.epoch == phase.budget.epochs,
-            training={"training_action_nll": total},
+            training={
+                "training_action_nll": session.strategy.sum(total)
+                / session.strategy.world_size
+            },
             evaluate=evaluate,
             checkpoint=lambda: {"batch_order": batches.state_dict()},
         )

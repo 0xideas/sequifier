@@ -118,3 +118,12 @@ def load_policy(
     validate_policy_weights(policy)
     policy.eval()
     return policy
+
+
+def publish_policy_model(config, artifact, graph_paths):
+    """Publish requested inference graphs and the canonical selected model."""
+    if graph_paths:
+        from sequifier.export.policy import export_policy_graphs
+
+        export_policy_graphs(config, artifact, graph_paths)
+    save_model_artifact(artifact, config.outputs.model_path)

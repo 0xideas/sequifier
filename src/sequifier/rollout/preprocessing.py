@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from sequifier.config.column_names import INCOMING_ACTION_PRESENT
 from sequifier.io.preprocessing import (
     NORMALIZATION_EPSILON,
     denormalize_values,
@@ -12,7 +13,8 @@ from sequifier.trajectory.schema import SeedHistory
 
 
 class FixedNumericPreprocessing:
-    def __init__(self, columns, statistics, normalize, dtypes):
+    def __init__(self, columns, statistics, normalize, dtypes, incoming_columns=()):
+        self.feedback_columns = {*incoming_columns, INCOMING_ACTION_PRESENT}
         self.normalize = normalize
         self.statistics = (
             normalization_statistics(
@@ -57,7 +59,8 @@ class FixedNumericPreprocessing:
         for column, values in history.observations.items():
             encoded = np.zeros(mask.shape, dtype=self.dtypes[column])
             # False-mask padding is not a physical value to normalize.
-            encoded[visible] = self.encode(column, np.asarray([values])[visible])
+            selected = mask if column in self.feedback_columns else visible
+            encoded[selected] = self.encode(column, np.asarray([values])[selected])
             features[column] = encoded
         features.update(
             {

@@ -27,7 +27,11 @@ class ScoredSelection:
 class JointActionDistribution:
     """The model owns all weights; this object owns one encoded input window."""
 
-    def __init__(self, actor, inputs, *, _encoded=None, input_encoding=None):
+    def __init__(
+        self, actor, inputs, *, _encoded=None, input_encoding=None, exporting=False
+    ):
+        # Tensor validity is checked by the graph publisher and inference boundary.
+        self.validate = not exporting
         self.actor = actor
         if _encoded is None:
             if input_encoding is None:
@@ -51,7 +55,11 @@ class JointActionDistribution:
             raise ValueError("decision_position lies outside the source decoder output")
         self.context = self.route.decoder_input(self.representation[:, start:end])[:, 0]
         self.valid = self.metadata["attention_valid_mask"][:, self.plan.position]
-        self.support, self.activity = self.plan.indices(self.context.device)
+        self.support, self.activity = (
+            self.plan.build_indices(self.context.device)
+            if exporting
+            else self.plan.indices(self.context.device)
+        )
         interface = actor.interface
         self.statistics = (
             interface.selected_columns_statistics
@@ -73,9 +81,14 @@ class JointActionDistribution:
             ),
         )
 
-    def _distributions(self, decision: ActionDecision, *, categorical_only=False):
+    def field_distributions(self, decision: ActionDecision, *, categorical_only=False):
         for name, output in self.plan.outputs(
-            self.decoder, self.context, self.valid, self.statistics, decision
+            self.decoder,
+            self.context,
+            self.valid,
+            self.statistics,
+            decision,
+            self.support,
         ):
             if not categorical_only or name in self.support:
                 yield name, self._field(name, output)
@@ -85,7 +98,7 @@ class JointActionDistribution:
         output = self.decoder.resolve_target(name, output)
         if field.type == "categorical":
             return CategoricalActionDistribution(
-                output.index_select(-1, self.support[name])
+                output.index_select(-1, self.support[name]), validate=self.validate
             )
         location = output.squeeze(-1)
         stats = self.statistics.get(name)
@@ -96,27 +109,29 @@ class JointActionDistribution:
             if field.scale == "model"
             else field.scale.fixed
         )
-        return RealPredictionDistribution(location, scale, field)
+        return RealPredictionDistribution(
+            location, scale, field, validate=self.validate
+        )
 
-    def _active(self, name, decision: ActionDecision):
+    def active_mask(self, name, decision: ActionDecision):
         active = None
         for predecessor, allowed in self.activity.get(name, {}).items():
             if predecessor not in decision.values:
                 raise ValueError(
                     "conditional activity requires a preceding action field"
                 )
-            matches = torch.isin(decision.values[predecessor], allowed)
+            matches = (decision.values[predecessor][:, None] == allowed).any(dim=-1)
             active = matches if active is None else active & matches
         return active
 
     def _select(self, deterministic, generator):
         decision, fields = ActionDecision(), {}
-        for name, distribution in self._distributions(decision):
+        for name, distribution in self.field_distributions(decision):
             value = (
                 distribution.mode() if deterministic else distribution.sample(generator)
             )
             field = self.plan.fields[name]
-            active = self._active(name, decision)
+            active = self.active_mask(name, decision)
             decision.values[name] = (
                 value
                 if active is None
@@ -151,7 +166,7 @@ class JointActionDistribution:
         return ScoredSelection(
             decision,
             self._score(decision, fields),
-            self._probabilities(fields) if include_probabilities else {},
+            self.field_probabilities(fields) if include_probabilities else {},
             self.plan,
         )
 
@@ -216,12 +231,12 @@ class JointActionDistribution:
         return self._score(
             decision,
             {
-                name: (distribution, self._active(name, decision))
-                for name, distribution in self._distributions(decision)
+                name: (distribution, self.active_mask(name, decision))
+                for name, distribution in self.field_distributions(decision)
             },
         )
 
-    def _probabilities(self, fields):
+    def field_probabilities(self, fields):
         result = {}
         for name in self.plan.action_names:
             if name not in fields:
@@ -239,10 +254,10 @@ class JointActionDistribution:
     def categorical_probabilities(self, actions):
         """Per-field conditional probabilities at the supplied action prefix."""
         decision = self._decision(actions)
-        return self._probabilities(
+        return self.field_probabilities(
             {
-                name: (distribution, self._active(name, decision))
-                for name, distribution in self._distributions(
+                name: (distribution, self.active_mask(name, decision))
+                for name, distribution in self.field_distributions(
                     decision, categorical_only=True
                 )
             }
@@ -250,13 +265,7 @@ class JointActionDistribution:
 
     @property
     def entropy_is_exact(self):
-        return not self.plan.has_autoregression and all(
-            not field.active_when
-            and field.lower is None
-            and field.upper is None
-            and not field.atoms
-            for field in (action.spec for action in self.plan.fields.values())
-        )
+        return self.plan.entropy_is_exact
 
     def entropy(self, generator=None):
         if self.entropy_is_exact:
@@ -264,7 +273,9 @@ class JointActionDistribution:
                 torch.stack(
                     [
                         distribution.entropy()
-                        for _, distribution in self._distributions(ActionDecision())
+                        for _, distribution in self.field_distributions(
+                            ActionDecision()
+                        )
                     ]
                 )
                 .sum(dim=0)
@@ -282,8 +293,8 @@ class JointActionDistribution:
                 "KL requires matching action measures and physical transforms"
             )
         if not self.plan.has_autoregression and not self.activity:
-            current = dict(self._distributions(ActionDecision()))
-            frozen = dict(reference._distributions(ActionDecision()))
+            current = dict(self.field_distributions(ActionDecision()))
+            frozen = dict(reference.field_distributions(ActionDecision()))
             values = []
             for name, field in self.actor.config.actions.items():
                 p, q = current[name], frozen[name]

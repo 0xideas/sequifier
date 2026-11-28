@@ -80,20 +80,12 @@ def select_policy_input(values, path, *, source_format=None):
         source_format = document.get("format")
     for key in ("paths", "split", "manifest_path"):
         source.pop(key, None)
-    if source_format in {"sequifier.sequence-data", "sequifier.trajectory-source"}:
+    if source_format == "sequifier.sequence-data":
         source["manifest_path"] = str(path)
-        if source_format == "sequifier.sequence-data":
-            # Committed decisions carry domain values and explicit boundaries.
-            for key in ("encoding", "episode_end", "format"):
-                source.pop(key, None)
+        for key in ("encoding", "episode_end", "format"):
+            source.pop(key, None)
     else:
         source["paths"] = [str(path)]
-        if source_format in {
-            "sequifier.numeric-forecast-trajectory",
-            "sequifier.policy-trajectory",
-            "sequifier.scalar-policy-trajectory",
-        }:
-            source["format"] = "trajectory"
         if source_format == "sequifier.sequence-view":
             from sequifier.io.indexed_sequences import IndexedView
 
@@ -153,12 +145,6 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
             manifest = resolved.manifest or {}
             observations = list(manifest.get("observation_columns", ()))
             static = static or list(manifest.get("static_columns", ()))
-            if not observations and resolved.kind == "trajectory":
-                from sequifier.trajectory.store import load_trajectory
-
-                seed = load_trajectory(resolved.paths[0]).seed
-                observations = list(seed.observations)
-                static = static or list(seed.static_inputs)
         if not observations:
             raise ValueError(
                 "sequence import requires source.columns.observations or initialize_from"
@@ -180,6 +166,14 @@ class SequenceImportConfig(EpisodeSourceConfig[CommandRunSettings]):
     operation: Literal["import_sequences"]
     passthrough_columns: list[str] = Field(default_factory=list)
     episodes_per_shard: int = Field(default=64, gt=0)
+    mask_column: str | None = Field(default=None, min_length=1)
+
+    @field_validator("mask_column")
+    @classmethod
+    def validate_mask_column(cls, name):
+        if name:
+            validate_column_names([name], "mask_column")
+        return name
 
     @field_validator("passthrough_columns")
     @classmethod
@@ -303,7 +297,6 @@ class PreparePolicyConfig(
                     name
                     for name in self.selected_columns
                     if name not in self.policy_binding.actions
-                    and not name.startswith("__executed_")
                 ]
             )
         source_config = self.source.model_copy(
@@ -344,16 +337,12 @@ class PreparePolicyConfig(
             "cardinality_config",
             "use_precomputed_maps",
         ):
-            validate_column_names(
-                getattr(self, field) or (), field, prefixes=("__executed_",)
-            )
+            validate_column_names(getattr(self, field) or (), field)
         validate_column_names(
             self.indexed_passthrough, "indexed_passthrough", allowed=("__collection",)
         )
         if self.mask_column:
-            validate_column_names(
-                [self.mask_column], "mask_column", allowed=("__observation_mask",)
-            )
+            validate_column_names([self.mask_column], "mask_column")
         if self.split_column:
             validate_column_names([self.split_column], "split_column")
         if self.time_alignment_column:

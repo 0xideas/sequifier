@@ -51,9 +51,7 @@ def _primary(request):
     root = request.run.project_root
     rollout = getattr(request, "rollout", None)
     if rollout:
-        return normalize_path(
-            rollout.trajectory_path or rollout.output.manifest_path, root
-        )
+        return normalize_path(rollout.output.manifest_path, root)
     from sequifier.infer import _inference_destination
 
     output = request.output
@@ -162,27 +160,13 @@ def inference_workspace(request, *, random_seed, skip_metadata):
     if rollout := getattr(request, "rollout", None):
         if rollout.seed is not None:
             identity["seed_layout_version"] = ContractVersions.ROLLOUT_SEED_LAYOUT
-        identity["trajectory_version"] = (
-            ContractVersions.JOINT_POLICY_TRAJECTORY
-            if request.task == "policy"
-            else ContractVersions.FORECAST_TRAJECTORY
-        )
-        if rollout.output:
-            identity["sequence_data_version"] = ContractVersions.SEQUENCE_DATA_MANIFEST
+        identity["sequence_data_version"] = ContractVersions.SEQUENCE_DATA_MANIFEST
     if random_seed:
         identity["run"]["reproducibility"]["seed"] = "random"
-    if (
-        request.task == "policy"
-        and request.rollout
-        and request.rollout.seed_history == "current"
-    ):
-        # A legacy single-observation rollout can resume its original adapter journal.
-        identity["rollout"].pop("seed_history", None)
     if request.task == "policy":
         identity["policy_input_layout_version"] = ContractVersions.POLICY_INPUT_LAYOUT
-    if request.task == "policy" and not request.rollout:
-        # Invalidate cached tables when policy prediction semantics change.
-        identity["prediction_table_version"] = ContractVersions.POLICY_PREDICTION_TABLE
+    if request.task in {"policy", "forecast"} and not request.rollout:
+        identity["prediction_table_version"] = ContractVersions.PREDICTION_TABLE
     if getattr(request.output, "output_probabilities", False):
         identity["probability_table_version"] = ContractVersions.PROBABILITY_TABLE
     identity["skip_metadata"] = skip_metadata
@@ -280,10 +264,3 @@ def write_inference_data(data, path, write_format):
 
     with inference_output(path) as destination:
         write_data(data, destination, write_format)
-
-
-def write_inference_trajectory(trajectory, path):
-    from sequifier.trajectory.store import save_trajectory
-
-    with inference_output(path) as destination:
-        save_trajectory(trajectory, destination)

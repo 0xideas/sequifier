@@ -8,11 +8,12 @@ import polars as pl
 import pyarrow as pa
 
 from sequifier.fingerprints import file_checksum
-from sequifier.io.sequence import register_sequence_name
+from sequifier.training.distributed_strategy import on_writer
+from sequifier.trajectory.row_layout import TrajectoryRowLayout
 from sequifier.trajectory.sequence_output import (
     action_record,
-    decision_row,
     publish_sequences,
+    trajectory_coordinates,
     write_parts,
 )
 
@@ -53,30 +54,58 @@ def _collection_type(algorithm, output):
 
 class CollectedSequences:
     def __init__(self, context, state):
+        self.strategy = context.strategy
         self.policy = context.actor.config
         self.output = context.phase.collection.output
         self.phase = context.phase.name
         self.algorithm = context.phase.algorithm
         self.parts = list(state.get("sequence_parts", ()))
-        self.names_by_id = {}
+        self.committed = {}
         self.namespace = state.get("sequence_namespace") or (
             f"{context.metrics.run_id}/{context.index}"
             if context.metrics
             else uuid4().hex
         )
         if self.output:
+            self.layout = TrajectoryRowLayout(
+                self.policy.observation_columns,
+                self.policy.static_columns,
+                self.policy.actions,
+                mask_column=self.output.mask_column or self.policy.raw_mask_column,
+                aliases=self.output.action_columns,
+            )
+            self.namespace = self.strategy.broadcast(self.namespace)
             if "__collection" in (
                 *self.policy.observation_columns,
                 *self.policy.static_columns,
             ):
                 raise ValueError("__collection is reserved for rollout diagnostics")
-            for part in self.parts:
-                path = Path(self.output.manifest_path).parent / part["path"]
-                if file_checksum(path) != part["sha256"]:
-                    raise ValueError(f"Committed sequence shard changed: {path}")
-                names = pl.read_parquet(path, columns=["sequenceId", "sequenceName"])
-                for seq, name in names.unique().iter_rows():
-                    register_sequence_name(self.names_by_id, seq, name)
+            on_writer(self.strategy, self._restore_parts)
+
+    def _restore_parts(self):
+        for part in self.parts:
+            path = Path(self.output.manifest_path).parent / part["path"]
+            if file_checksum(path) != part["sha256"]:
+                raise ValueError(f"Committed sequence shard changed: {path}")
+            columns = pl.scan_parquet(path).collect_schema()
+            if {self.layout.mask_column, *self.layout.actions.values()} - set(columns):
+                raise ValueError(
+                    "Committed rollout parts use an incompatible trajectory layout"
+                )
+            coordinates = pl.read_parquet(
+                path, columns=["sequenceId", "sequenceName", "itemPosition"]
+            )
+            self._extend(self.committed, coordinates.iter_rows())
+
+    @staticmethod
+    def _extend(committed, coordinates):
+        for sequence, name, position in coordinates:
+            expected_name, next_position = committed.get(sequence, (name, 0))
+            if name != expected_name or position != next_position:
+                raise ValueError(
+                    f"Sequence {sequence} expected {expected_name!r} at position {next_position}, got {name!r} at {position}"
+                )
+            committed[sequence] = (name, position + 1)
 
     def checkpoint(self):
         return (
@@ -85,51 +114,103 @@ class CollectedSequences:
             else {}
         )
 
-    def row(self, frame, action, reward, successor, terminated, truncated, group):
+    def row(self, frame, action, reward, terminated, truncated, group):
         record = action_record(action, self.policy)
-        assert record is not None
-        row = decision_row(
-            f"{self.namespace}/{frame.episode_id}",
-            frame.step_id,
+        return self.layout.row(
+            trajectory_coordinates(
+                f"{self.namespace}/{frame.episode_id}", frame.step_id, group
+            ),
             dict(frame.observation),
             dict(frame.static_inputs),
             action=record,
-            previous=action_record(frame.previous_action, self.policy),
-            predictions={key: record[key] for key in self.policy.actions},
             masked=frame.masked,
             reward=reward,
-            successor=successor,
             terminated=terminated,
             truncated=truncated,
-            group=group,
         )
-        register_sequence_name(self.names_by_id, row["sequenceId"], row["sequenceName"])
+
+    def initial(self, frame, group):
+        row = self.row(frame, frame.previous_action, None, None, None, group)
+        row["__collection"] = None
         return row
 
     def _write(self, rows):
-        self.parts.extend(
+        spans = {}
+
+        def checked_rows():
+            for row in rows:
+                sequence, name, position = (
+                    row["sequenceId"],
+                    row["sequenceName"],
+                    row["itemPosition"],
+                )
+                previous_name, first, stop = spans.get(
+                    sequence, (name, position, position)
+                )
+                if previous_name != name or stop != position:
+                    raise ValueError(
+                        f"Discontinuous collection for {name} at {position}"
+                    )
+                spans[sequence] = (name, first, position + 1)
+                yield row
+
+        parts = list(
             write_parts(
                 self.output.manifest_path,
-                rows,
+                checked_rows(),
                 policy=self.policy,
-                observations=self.policy.observation_columns,
+                layout=self.layout,
                 collection_type=_collection_type(self.algorithm, self.output),
             )
         )
+        return parts, spans
 
-    def ppo(self, buffer):
+    def record(self, buffer):
         if not self.output:
             return
+        try:
+            parts, names = [], {}
+            if buffer is not None:
+                write = self.ppo if self.algorithm == "ppo" else self.grpo
+                parts, names = write(buffer)
+            packet = parts, names, None
+        except Exception as error:
+            if self.strategy.world_size == 1:
+                raise
+            packet = [], {}, str(error)
+        gathered = self.strategy.gather_for_writer(packet)
 
+        def commit():
+            new_parts = []
+            updates = {}
+            for rank, (parts, spans, error) in enumerate(gathered):
+                if error is not None:
+                    raise RuntimeError(f"Rollout writer rank {rank} failed: {error}")
+                new_parts.extend(parts)
+                for sequence, (name, first, stop) in spans.items():
+                    expected = updates.get(
+                        sequence, self.committed.get(sequence, (name, 0))
+                    )
+                    if expected != (name, first):
+                        raise ValueError(
+                            f"Collection for {name} at {first} disagrees with checkpoint {expected}"
+                        )
+                    updates[sequence] = (name, stop)
+            self.parts.extend(new_parts)
+            self.committed.update(updates)
+
+        on_writer(self.strategy, commit)
+
+    def ppo(self, buffer):
         def rows():
             for i, step in enumerate(buffer.decisions):
+                frame = buffer.frames[step.frame]
+                if frame.step_id == 0:
+                    yield self.initial(frame, None)
                 row = self.row(
-                    buffer.frames[step.frame],
+                    buffer.frames[step.successor],
                     step.action,
                     step.raw_reward,
-                    dict(buffer.frames[step.successor].observation)
-                    if step.successor is not None
-                    else None,
                     step.terminated,
                     step.truncated,
                     None,
@@ -151,52 +232,46 @@ class CollectedSequences:
                 row["__collection"] = details
                 yield row
 
-        self._write(rows())
+        return self._write(rows())
 
     def grpo(self, buffer):
-        if self.output:
+        def rows():
+            for trajectory in buffer.trajectories:
+                group = f"{self.namespace}/group-{trajectory.group_index}"
+                yield self.initial(trajectory.frames[0], group)
+                for i, frame in enumerate(trajectory.frames[1:]):
+                    last = i + 1 == len(trajectory.actions)
+                    row = self.row(
+                        frame,
+                        trajectory.actions[i],
+                        trajectory.raw_rewards[i],
+                        last and trajectory.terminated,
+                        last and trajectory.truncated,
+                        group,
+                    )
+                    row["__collection"] = {
+                        "policy_version": trajectory.generation,
+                        "reference_identity": buffer.reference_identity,
+                        "group_index": trajectory.group_index,
+                        "sample_index": trajectory.sample_index,
+                        "start_token_json": json.dumps(
+                            trajectory.start_token, allow_nan=False, sort_keys=True
+                        ),
+                        "scaled_reward": trajectory.rewards[i],
+                        "old_log_probability": trajectory.old_log_probabilities[i],
+                        "reference_log_probability": trajectory.reference_log_probabilities[
+                            i
+                        ],
+                        "score": trajectory.score,
+                        "advantage": trajectory.advantage,
+                        "cutoff_reason": trajectory.cutoff_reason if last else None,
+                    }
+                    yield row
 
-            def rows():
-                for trajectory in buffer.trajectories:
-                    for i, frame in enumerate(trajectory.frames):
-                        last = i + 1 == len(trajectory.actions)
-                        successor = (
-                            trajectory.final_observation
-                            if last
-                            else dict(trajectory.frames[i + 1].observation)
-                        )
-                        row = self.row(
-                            frame,
-                            trajectory.actions[i],
-                            trajectory.raw_rewards[i],
-                            successor,
-                            last and trajectory.terminated,
-                            last and trajectory.truncated,
-                            f"{self.namespace}/group-{trajectory.group_index}",
-                        )
-                        row["__collection"] = {
-                            "policy_version": trajectory.generation,
-                            "reference_identity": buffer.reference_identity,
-                            "group_index": trajectory.group_index,
-                            "sample_index": trajectory.sample_index,
-                            "start_token_json": json.dumps(
-                                trajectory.start_token, allow_nan=False, sort_keys=True
-                            ),
-                            "scaled_reward": trajectory.rewards[i],
-                            "old_log_probability": trajectory.old_log_probabilities[i],
-                            "reference_log_probability": trajectory.reference_log_probabilities[
-                                i
-                            ],
-                            "score": trajectory.score,
-                            "advantage": trajectory.advantage,
-                            "cutoff_reason": trajectory.cutoff_reason if last else None,
-                        }
-                        yield row
-
-            self._write(rows())
+        return self._write(rows())
 
     def publish(self):
-        if not self.output:
+        if not self.output or self.strategy.rank != 0:
             return {}
         return publish_sequences(
             self.output.manifest_path,
@@ -209,5 +284,6 @@ class CollectedSequences:
                 "policy_binding": self.policy.task_binding.model_dump(mode="json"),
             },
             static=self.policy.static_columns,
+            layout=self.layout,
             pin=True,
         )

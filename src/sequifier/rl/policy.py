@@ -21,7 +21,64 @@ if TYPE_CHECKING:
     from sequifier.model.network import ComposableTransformerNetwork
 
 
-class Policy(nn.Module):
+class ExecutablePolicy(nn.Module):
+    """Shared input contract for native and exported policy execution."""
+
+    supports_entropy = True
+    execution_config: ModelExecution
+    interface_name: str
+    config: ResolvedPolicyBinding
+
+    @property
+    def interface(self):
+        return self.execution_config.interface(self.interface_name)
+
+    @property
+    def units(self) -> dict[str, str]:
+        return self.config.units
+
+    def model_inputs(
+        self, inputs: SequifierInputs, *, input_encoding=None
+    ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+        """Encode raw named histories without mutating stored data or masks."""
+        self.validate_inputs(inputs)
+        features = checked_policy_features(
+            inputs, self.interface, input_encoding=input_encoding
+        )
+        return features, inputs.metadata
+
+    def validate_inputs(self, inputs: SequifierInputs) -> None:
+        schema = self.config.input_schema
+        assert schema is not None
+        expected = {item.key for item in schema.inputs if item.role != "metadata"}
+        if set(inputs.inputs) != expected:
+            raise ValueError(
+                "policy inputs must match the persisted named feature schema"
+            )
+        mask = inputs.attention_valid_mask
+        if (
+            mask.ndim != 2
+            or mask.dtype != torch.bool
+            or mask.shape[1] != self.config.context_length
+            or mask.shape[0] < 1
+        ):
+            raise ValueError(
+                "policy attention masks must be bool [batch, context_length]"
+            )
+        if not mask[:, -1].all() or (mask[:, :-1] & ~mask[:, 1:]).any():
+            raise ValueError(
+                "policy histories require left padding followed by valid positions"
+            )
+        schema.validate(inputs.inputs, inputs.metadata)
+        if any(
+            value.device != self.device
+            for value in [*inputs.inputs.values(), *inputs.metadata.values()]
+        ):
+            raise ValueError("policy features and masks must be on the model device")
+        return
+
+
+class Policy(ExecutablePolicy):
     """A convenience view; the network owns all trainable weights and execution."""
 
     config: ResolvedPolicyBinding
@@ -29,12 +86,13 @@ class Policy(nn.Module):
     interface_name: str
     network: ComposableTransformerNetwork
     transfer_report: dict | None
-    ppo_policy_version: int
-    grpo_policy_version: int
+    ppo_policy_version: int = 0
+    grpo_policy_version: int = 0
 
     def __init__(self):
         super().__init__()
         self.transfer_report = None
+        self.role_call = None
 
     @classmethod
     def from_network(cls, network, execution_config, binding: ResolvedPolicyBinding):
@@ -47,15 +105,9 @@ class Policy(nn.Module):
         return policy
 
     @property
-    def interface(self):
-        return self.execution_config.interface(self.interface_name)
-
-    @property
-    def units(self) -> dict[str, str]:
-        return self.config.units
-
-    @property
     def device(self) -> torch.device:
+        if self.role_call is not None:
+            return self.role_call.device
         return next(self.network.parameters()).device
 
     @property
@@ -116,16 +168,6 @@ class Policy(nn.Module):
             else {name: dict(values) for name, values in statistics.items()}
         )
 
-    def model_inputs(
-        self, inputs: SequifierInputs, *, input_encoding=None
-    ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
-        """Encode raw named histories without mutating stored data or masks."""
-        self.validate_inputs(inputs)
-        features = checked_policy_features(
-            inputs, self.interface, input_encoding=input_encoding
-        )
-        return features, inputs.metadata
-
     def forward(self, inputs: SequifierInputs) -> Tensor | dict[str, Tensor]:
         return self.prepared_logits(*self.model_inputs(inputs))
 
@@ -146,43 +188,71 @@ class Policy(nn.Module):
     ) -> JointActionDistribution:
         return JointActionDistribution(self, inputs, input_encoding=input_encoding)
 
+    def predict_actions(self, inputs, deterministic, generator, *, probabilities):
+        distribution = self.distribution(inputs, input_encoding="model")
+        if probabilities:
+            selected = distribution.select_and_score(
+                deterministic, generator, include_probabilities=True
+            )
+            return (
+                distribution.domain_actions(selected.decision),
+                selected.log_prob,
+                selected.probabilities,
+            )
+        decision = distribution.select_decision(deterministic, generator)
+        return distribution.domain_actions(decision), None, {}
+
+    def action_scores(
+        self,
+        inputs,
+        actions=None,
+        *,
+        deterministic=False,
+        generator=None,
+        entropy=False,
+    ):
+        if self.role_call is not None:
+            return self.role_call(
+                inputs,
+                actions,
+                deterministic=deterministic,
+                generator=generator,
+                entropy=entropy,
+            )
+        return self.score_distribution(
+            inputs,
+            actions,
+            deterministic=deterministic,
+            generator=generator,
+            entropy=entropy,
+        )
+
+    def score_distribution(
+        self,
+        inputs,
+        actions=None,
+        *,
+        deterministic=False,
+        generator=None,
+        entropy=False,
+    ):
+        distribution = self.distribution(inputs)
+        if actions is None:
+            selection = distribution.select_and_score(deterministic, generator)
+            record, score = selection.actions, selection.log_prob
+        else:
+            record, score = {}, distribution.log_prob(actions)
+        return record, score, distribution.entropy(generator) if entropy else None
+
     def act(self, inputs: SequifierInputs, *, deterministic: bool, generator):
-        selected = self.distribution(inputs).select_and_score(deterministic, generator)
-        return selected.actions, selected.log_prob
+        record, score, _ = self.action_scores(
+            inputs, deterministic=deterministic, generator=generator
+        )
+        return record, score
 
     def evaluate_actions(
         self,
         inputs: SequifierInputs,
         actions: ActionDecision | Mapping[str, Tensor],
     ) -> Tensor:
-        return self.distribution(inputs).log_prob(actions)
-
-    def validate_inputs(self, inputs: SequifierInputs) -> None:
-        schema = self.config.input_schema
-        assert schema is not None
-        expected = {item.key for item in schema.inputs if item.role != "metadata"}
-        if set(inputs.inputs) != expected:
-            raise ValueError(
-                "policy inputs must match the persisted named feature schema"
-            )
-        mask = inputs.attention_valid_mask
-        if (
-            mask.ndim != 2
-            or mask.dtype != torch.bool
-            or mask.shape[1] != self.config.context_length
-            or mask.shape[0] < 1
-        ):
-            raise ValueError(
-                "policy attention masks must be bool [batch, context_length]"
-            )
-        if not mask[:, -1].all() or (mask[:, :-1] & ~mask[:, 1:]).any():
-            raise ValueError(
-                "policy histories require left padding followed by valid positions"
-            )
-        schema.validate(inputs.inputs, inputs.metadata)
-        if any(
-            value.device != self.device
-            for value in [*inputs.inputs.values(), *inputs.metadata.values()]
-        ):
-            raise ValueError("policy features and masks must be on the model device")
-        return
+        return self.action_scores(inputs, actions)[1]

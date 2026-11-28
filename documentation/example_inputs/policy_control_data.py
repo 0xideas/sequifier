@@ -21,15 +21,13 @@ def generate(directory):
         fields = [
             "sequenceId",
             "sequenceName",
-            "__group",
+            "groupId",
             "itemPosition",
             "cue",
             "action",
             "reward",
             "terminated",
             "truncated",
-            "bootstrap_allowed",
-            "__next_cue",
         ]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -39,6 +37,15 @@ def generate(directory):
             for kind, length in (("chosen", 8), ("rejected", 6)):
                 identity = f"context-{context}-{kind}"
                 cue = initial
+                writer.writerow(
+                    {
+                        "sequenceId": 2 * context + int(kind == "rejected"),
+                        "sequenceName": identity,
+                        "groupId": f"context-{context}",
+                        "itemPosition": 0,
+                        "cue": cue,
+                    }
+                )
                 for step in range(length):
                     matched = "right" if cue > 0 else "left"
                     action = (
@@ -50,15 +57,13 @@ def generate(directory):
                         {
                             "sequenceId": 2 * context + int(kind == "rejected"),
                             "sequenceName": identity,
-                            "__group": f"context-{context}",
-                            "itemPosition": step,
-                            "cue": cue,
+                            "groupId": f"context-{context}",
+                            "itemPosition": step + 1,
+                            "cue": -cue,
                             "action": action,
                             "reward": 1 if action == matched else -1,
                             "terminated": step + 1 == 8,
                             "truncated": step + 1 == length and length != 8,
-                            "bootstrap_allowed": step + 1 != 8,
-                            "__next_cue": -cue,
                         }
                     )
                     cue = -cue

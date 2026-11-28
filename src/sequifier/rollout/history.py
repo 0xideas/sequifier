@@ -13,7 +13,9 @@ def validate_seed(seed: SeedHistory) -> SeedHistory:
 
 
 def advance_history(
-    history: SeedHistory, successor: dict[str, DomainValue]
+    history: SeedHistory,
+    successor: dict[str, DomainValue],
+    action: dict[str, DomainValue],
 ) -> SeedHistory:
     return SeedHistory(
         observations={
@@ -23,4 +25,8 @@ def advance_history(
         attention_valid_mask=history.attention_valid_mask[1:] + [True],
         observation_mask=history.observation_mask[1:] + [False],
         static_inputs=dict(history.static_inputs),
+        incoming_actions=(
+            history.incoming_actions or [None] * len(history.attention_valid_mask)
+        )[1:]
+        + [action],
     )

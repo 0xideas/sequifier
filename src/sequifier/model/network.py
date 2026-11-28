@@ -34,6 +34,7 @@ class ModelOutput:
     prediction_positions: slice | Tensor
     auxiliary_logits: dict[str, tuple[Tensor, ...]] = field(default_factory=dict)
     prediction_scales: dict[str, Tensor] = field(default_factory=dict)
+    regularization: Tensor | None = None
 
 
 # Let DDP handle returned tensors that the current objective does not use.
@@ -510,6 +511,7 @@ class ComposableTransformerNetwork(nn.Module):
         teacher_valid_mask: Tensor | None = None,
         interface_name: str | None = None,
         trace: TraceContext | None = None,
+        include_regularization: bool = False,
     ) -> ModelOutput:
         if trace is None:
             trace = active_trace_context()
@@ -529,6 +531,9 @@ class ComposableTransformerNetwork(nn.Module):
             logits=logits,
             prediction_positions=slice(-route.prediction_length, None),
             auxiliary_logits=auxiliary_logits,
+            regularization=self.regularization_loss(interface_name)
+            if include_regularization
+            else None,
             prediction_scales={
                 target: route.prediction_scale(target)
                 for target in route.prediction_scales.log_scales

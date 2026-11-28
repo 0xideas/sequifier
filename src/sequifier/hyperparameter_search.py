@@ -8,6 +8,8 @@ import subprocess
 import sys
 import time
 import warnings
+from dataclasses import dataclass
+from itertools import groupby
 from pathlib import Path
 from typing import Any, Union
 
@@ -25,10 +27,7 @@ from sequifier.config.hyperparameter_search_config import (  # noqa: E402
 )
 from sequifier.helpers import get_last_training_batch_timedelta  # noqa: E402
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
-from sequifier.logging_paths import (  # noqa: E402
-    dataset_artifact_prefix,
-    model_log_directory,
-)
+from sequifier.logging_paths import model_log_directory  # noqa: E402
 from sequifier.training.metrics import (  # noqa: E402
     VALIDATION_FIELDS,
     validate_metrics_csv_header,
@@ -39,30 +38,125 @@ _DUPLICATE_OF_USER_ATTR = "sequifier_duplicate_of"
 _MAX_CONSECUTIVE_DUPLICATE_PROPOSALS = 1000
 
 
-@beartype
-def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
-    if any(phase.algorithm != "supervised" for phase in run_config.ordered_phases):
-        raise ValueError(
-            "hyperparameter search for trajectory training is not yet supported"
-        )
-    dataset_names = {
-        ref.dataset for phase in run_config.ordered_phases for ref in phase.data_sources
-    }
-    dataset_count = len(dataset_names)
-    if dataset_count == 1:
-        return None, dataset_count
-    evaluation = run_config.ordered_phases[-1].evaluation
-    monitor = evaluation.monitor if evaluation is not None else None
-    if monitor is None:
-        raise ValueError(
-            "Multi-dataset hyperparameter search requires evaluation.monitor"
-        )
-    dataset_name = monitor.dataset
-    if dataset_name not in run_config.datasets:
-        raise ValueError(
-            f"evaluation.monitor references unknown dataset {dataset_name!r}"
-        )
-    return dataset_name, dataset_count
+@dataclass(frozen=True)
+class TrialObservation:
+    value: float
+    step: int
+    completed_epochs: int
+
+
+class TrialEvaluations:
+    """Follow the objective phase in its native model or dataset validation table."""
+
+    def __init__(self, run_config, root):
+        self.single_phase = len(run_config.ordered_phases) == 1
+        self.phase = run_config.ordered_phases[-1]
+        self.monitor = self.phase.evaluation.monitor if self.phase.evaluation else None
+        self.supervised = self.phase.algorithm == "supervised"
+        self.direction = self.monitor.direction if self.monitor else "min"
+        name = run_config.run.model_name
+        directory = model_log_directory(root, name)
+        self.paths = [directory / f"{name}-validation-full.csv"]
+        if self.supervised and self.monitor:
+            # Coordinated groups write dataset-specific files when multiple
+            # datasets share the group. Both layouts record the dataset and part.
+            self.paths.append(
+                directory / f"{name}-{self.monitor.dataset}-validation-full.csv"
+            )
+        self.seen: set[str] = set()
+        self.completed_epochs = 0
+        self.positions: dict[Path, tuple[int, bytes]] = {}
+
+    def _lines(self, stream, path):
+        # Only advance past complete lines. Save the last line so recovery can
+        # truncate and rewrite a table between polls without losing new rows.
+        for line in iter(stream.readline, b""):
+            if not line.endswith(b"\n"):
+                break
+            self.positions[path] = stream.tell(), line
+            yield line.decode("utf-8")
+
+    def rows(self):
+        for path in self.paths:
+            if not path.is_file():
+                continue
+            with path.open("rb") as stream:
+                header = stream.readline()
+                if not header.endswith(b"\n"):
+                    continue
+                names = next(csv.reader([header.decode("utf-8")]))
+                validate_metrics_csv_header(names, path)
+                if names not in (
+                    VALIDATION_FIELDS,
+                    [key for key in VALIDATION_FIELDS if key != "iterations_total"],
+                ):
+                    raise ValueError(
+                        f"Unexpected validation metrics schema in {path}: {names!r}"
+                    )
+                if path in self.positions:
+                    offset, previous = self.positions[path]
+                    stream.seek(offset - len(previous))
+                    if stream.read(len(previous)) != previous:
+                        stream.seek(len(header))
+                for row in csv.DictReader(self._lines(stream, path), fieldnames=names):
+                    if None not in row.values():
+                        validate_metrics_csv_row(row, path)
+                        yield row
+
+    def observations(self):
+        if self.monitor is None:
+            return
+        for evaluation_id, rows in groupby(
+            self.rows(), key=lambda row: row["evaluation_id"]
+        ):
+            if not evaluation_id or evaluation_id in self.seen:
+                continue
+            selected = None
+            phase_clock = False
+            for row in rows:
+                if row["algorithm"] != self.phase.algorithm:
+                    continue
+                if row["phase"] != self.phase.name and not (
+                    self.supervised and row["phase"] == ""
+                ):
+                    continue
+                if self.supervised and (
+                    row["dataset"] != self.monitor.dataset
+                    or row["part"] != self.monitor.part
+                ):
+                    continue
+                if row["metric"] == "epochs_completed" and (
+                    self.supervised or self.phase.algorithm == "policy_imitation"
+                ):
+                    phase_clock = True
+                    self.completed_epochs = max(
+                        self.completed_epochs, int(float(row["value"]))
+                    )
+                if (
+                    row["metric"] == self.monitor.metric
+                    and row["target"] == "__total__"
+                    and row["is_primary"].lower() == "true"
+                ):
+                    selected = row
+            if selected is None or not selected["value"]:
+                continue
+            self.seen.add(evaluation_id)
+            value = float(selected["value"])
+            if not math.isfinite(value):
+                continue
+            if (
+                self.supervised
+                and self.single_phase
+                and not phase_clock
+                and selected["evaluation_kind"] == "epoch_end"
+            ):
+                self.completed_epochs = max(
+                    self.completed_epochs, int(selected["epoch"])
+                )
+            step = int(
+                selected["global_step"] if self.supervised else selected["iteration"]
+            )
+            yield TrialObservation(value, step, self.completed_epochs)
 
 
 @beartype
@@ -101,7 +195,7 @@ def objective(
     if run_config is None:
         run_config = config.sample_trial(trial, accepted_trials)
     run_name = run_config.run.model_name
-    monitored_dataset, dataset_count = _monitored_dataset(run_config)
+    evaluations = TrialEvaluations(run_config, config.run.project_root)
 
     config_path = os.path.join(
         config.run.project_root,
@@ -111,12 +205,17 @@ def objective(
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
 
     final_phase = run_config.ordered_phases[-1]
-    monitor = final_phase.evaluation.monitor if final_phase.evaluation else None
-    monitor_metric = monitor.metric if monitor is not None else "loss"
-    monitor_direction = monitor.direction if monitor is not None else "min"
-    monitor_part = (monitor.part or "") if monitor is not None else ""
-    expected_direction = (config.evaluation_metric_directions or ["min"])[0]
-    if not config.evaluation_script_path and expected_direction != monitor_direction:
+    if not config.evaluation_script_path and evaluations.monitor is None:
+        raise ValueError(
+            "Search requires a final phase evaluation monitor or a custom evaluation script"
+        )
+    expected_direction = (
+        config.evaluation_metric_directions or [evaluations.direction]
+    )[0]
+    if (
+        not config.evaluation_script_path
+        and expected_direction != evaluations.direction
+    ):
         raise ValueError(
             "search direction must match the final phase evaluation monitor"
         )
@@ -129,146 +228,101 @@ def objective(
             sort_keys=False,
         )
 
-    metrics_name = run_name
-    log_dir = model_log_directory(config.run.project_root, metrics_name)
+    log_dir = model_log_directory(config.run.project_root, run_name)
     log_dir.mkdir(parents=True, exist_ok=True)
-    validation_path = (
-        str(
-            dataset_artifact_prefix(
-                config.run.project_root,
-                metrics_name,
-                dataset_name=monitored_dataset,
-                dataset_count=dataset_count,
-            )
-        )
-        + "-validation-full.csv"
+    prune_path = (log_dir / f"{run_name}.prune").resolve()
+    prune_path.unlink(missing_ok=True)
+    single_objective = len(config.evaluation_metrics or ()) <= 1
+    # A custom score can use a different direction from the training monitor.
+    report_intermediate = (
+        single_objective
+        and expected_direction == evaluations.direction
+        and evaluations.monitor is not None
     )
-    prune_path = str(log_dir / f"{metrics_name}.prune")
-    consumed_evaluation_ids: set[str] = set()
-    if os.path.exists(validation_path):
-        with open(validation_path, "r", encoding="utf-8", newline="") as file:
-            reader = csv.DictReader(file)
-            validate_metrics_csv_header(reader.fieldnames, validation_path)
-            if reader.fieldnames != VALIDATION_FIELDS:
-                raise ValueError(
-                    f"Unexpected validation metrics schema in {validation_path}: "
-                    f"{reader.fieldnames!r}"
-                )
-            for row in reader:
-                validate_metrics_csv_row(row, validation_path)
-                if row.get("evaluation_id"):
-                    consumed_evaluation_ids.add(row["evaluation_id"])
+    if report_intermediate:
+        evaluations.seen.update(row["evaluation_id"] for row in evaluations.rows())
 
     env = os.environ.copy()
-    env["SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"] = "1"
+    if report_intermediate and config.prune_trials:
+        env["SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"] = "1"
+        env["SEQUIFIER_SEARCH_PRUNE_PATH"] = str(prune_path)
+    else:
+        env.pop("SEQUIFIER_HYPERPARAMETER_SEARCH_RUN", None)
     cmd = ["sequifier", "train", f"--config-path={config_path}"]
     process = subprocess.Popen(
         cmd,
         env=env,
+        start_new_session=os.name == "posix",
         preexec_fn=set_pdeathsig if sys.platform.startswith("linux") else None,
     )
 
-    best_val_loss = float("inf") if monitor_direction == "min" else float("-inf")
-    completed_epochs = 0
-
-    @beartype
-    def consume_metrics(
-        best_val_loss: float, completed_epochs: int
-    ) -> tuple[float, int]:
-        """Read complete validation rows; report/prune single-objective trials."""
-        if os.path.exists(validation_path):
-            with open(validation_path, "r", encoding="utf-8", newline="") as file:
-                reader = csv.DictReader(file)
-                validate_metrics_csv_header(reader.fieldnames, validation_path)
-                if reader.fieldnames != VALIDATION_FIELDS:
-                    raise ValueError(
-                        f"Unexpected validation metrics schema in "
-                        f"{validation_path}: {reader.fieldnames!r}"
-                    )
-                for data in reader:
-                    if None in data.values():
-                        continue  # The training process may still be writing this row.
-                    validate_metrics_csv_row(data, validation_path)
-                    evaluation_id = data.get("evaluation_id")
-                    if (
-                        not evaluation_id
-                        or evaluation_id in consumed_evaluation_ids
-                        or data.get("metric") != monitor_metric
-                        or (data.get("phase") and data["phase"] != final_phase.name)
-                        or (
-                            monitor is not None
-                            and (data.get("part") or "") != monitor_part
-                        )
-                        or data.get("target") != "__total__"
-                        or not data.get("value")
-                        or not data.get("global_step")
-                        or not data.get("epoch")
-                    ):
-                        continue
-
-                    val_loss = float(data["value"])
-                    global_step = int(data["global_step"])
-                    metric_epoch = int(data["epoch"])
-                    if data.get("evaluation_kind") in {"epoch_end", "iteration_end"}:
-                        completed_epochs = max(completed_epochs, metric_epoch)
-
-                    is_multi_objective = (
-                        config.evaluation_metrics is not None
-                        and len(config.evaluation_metrics) > 1
-                    )
-                    if not is_multi_objective:
-                        trial.report(val_loss, global_step)
-                        best_val_loss = (min if monitor_direction == "min" else max)(
-                            best_val_loss, val_loss
-                        )
-
-                        if config.pruning_warmup_batches is not None:
-                            warmup_complete = (
-                                global_step >= config.pruning_warmup_batches
-                            )
-                        else:
-                            pruning_warmup_epochs = config.pruning_warmup_epochs or 0
-                            warmup_complete = completed_epochs >= pruning_warmup_epochs
-                        if (
-                            config.prune_trials
-                            and warmup_complete
-                            and trial.should_prune()
-                        ):
-                            open(prune_path, "w").close()
-                            try:
-                                try:
-                                    timedelta = get_last_training_batch_timedelta(
-                                        metrics_name, 0, config.run.project_root
-                                    )
-                                    timeout_val = (timedelta * 2) + 30
-                                except (ValueError, FileNotFoundError):
-                                    timeout_val = 60.0
-
-                                process.wait(timeout=timeout_val)
-                            except subprocess.TimeoutExpired:
-                                process.kill()
-                            raise optuna.TrialPruned()
-                    consumed_evaluation_ids.add(evaluation_id)
-        return best_val_loss, completed_epochs
-
-    while process.poll() is None:
-        best_val_loss, completed_epochs = consume_metrics(
-            best_val_loss, completed_epochs
-        )
-        time.sleep(2)
-
-    best_val_loss, _ = consume_metrics(best_val_loss, completed_epochs)
-
-    exit_code = process.returncode
-    if exit_code == 143:
-        if os.path.exists(prune_path):
-            raise optuna.TrialPruned()
+    def kill_training():
+        # Include locally spawned training ranks and environment workers.
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         else:
+            process.kill()
+        process.wait()
+
+    def consume_metrics(*, running):
+        if not report_intermediate:
+            return
+        for observation in evaluations.observations():
+            trial.report(observation.value, observation.step)
+            if not running or not config.prune_trials:
+                continue
+            if config.pruning_warmup_epochs is not None:
+                ready = observation.completed_epochs >= config.pruning_warmup_epochs
+            else:
+                warmup = (
+                    config.pruning_warmup_batches
+                    if evaluations.supervised
+                    else config.pruning_warmup_iterations
+                )
+                ready = observation.step >= (warmup or 0)
+            if ready and trial.should_prune():
+                prune_path.touch()
+                # Policy updates can include a full rollout before the next checkpoint.
+                timeout = 600.0
+                if evaluations.supervised:
+                    try:
+                        seconds = get_last_training_batch_timedelta(
+                            run_name, 0, config.run.project_root
+                        )
+                        timeout = 2 * seconds + 30
+                    except (ValueError, FileNotFoundError):
+                        timeout = 60.0
+                try:
+                    exit_code = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    kill_training()
+                    raise optuna.TrialPruned() from None
+                if exit_code == 143:
+                    raise optuna.TrialPruned()
+                # Training may already have finished, or failed independently.
+                return
+
+    try:
+        while process.poll() is None:
+            consume_metrics(running=True)
+            time.sleep(2)
+        consume_metrics(running=False)
+        exit_code = process.returncode
+        if exit_code == 143:
+            if prune_path.exists():
+                raise optuna.TrialPruned()
             raise RuntimeError(
                 f"Trial pre-empted externally by cluster (SIGTERM). Exit code: {exit_code}"
             )
-    elif exit_code != 0:
-        raise RuntimeError(f"Training failed with exit code {exit_code}")
+        if exit_code != 0:
+            raise RuntimeError(f"Training failed with exit code {exit_code}")
+    finally:
+        if process.poll() is None:
+            kill_training()
+        prune_path.unlink(missing_ok=True)
 
     report_path = Path(config.run.project_root) / (
         run_config.run.outputs.report_path or f"outputs/training/{run_name}/report.json"
@@ -278,11 +332,11 @@ def objective(
     if not phases:
         raise ValueError("Training completed without a selected phase")
     final_report = phases[-1]
-    best_val_loss = final_report.get("selected_metric")
+    selected_metric = final_report.get("selected_metric")
     if not config.evaluation_script_path:
         if final_report["name"] != final_phase.name:
             raise ValueError("Search plan stopped before its objective phase")
-        if best_val_loss is None or not math.isfinite(best_val_loss):
+        if selected_metric is None or not math.isfinite(selected_metric):
             raise ValueError("Search requires a finite final phase selection metric")
     model_path = report["model_path"]
     evaluation_id = os.path.splitext(os.path.basename(model_path))[0]
@@ -360,7 +414,7 @@ def objective(
         else:
             return tuple(metrics)
 
-    return best_val_loss
+    return selected_metric
 
 
 @beartype
@@ -454,50 +508,67 @@ def _optimize_distinct_trials(study: optuna.Study, config: Any, trials: int) -> 
         accepted_trials += 1
 
 
+def _bind_study_objective(study, identity):
+    key = "sequifier_objective"
+    stored = study.user_attrs.get(key)
+    if stored is None:
+        if study.get_trials(
+            deepcopy=False,
+            states=(TrialState.COMPLETE, TrialState.PRUNED, TrialState.RUNNING),
+        ):
+            raise ValueError(
+                "The persisted study has trials without a recorded objective identity. Use a new study name."
+            )
+        study.set_user_attr(key, identity)
+    elif stored != identity:
+        raise ValueError(
+            "The persisted study uses a different objective metric or evaluation source"
+        )
+
+
 @beartype
 def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     """Load config, create Optuna study, and optimize trials."""
     config = load_hyperparameter_search_config(config_path, skip_metadata)
 
     os.makedirs(os.path.join(config.run.project_root, "state", "optuna"), exist_ok=True)
-    sampler = create_sampler(config)
 
     storage_path = os.path.join(
         config.run.project_root, "state", "optuna", f"{config.run.study_name}.db"
     )
 
+    # The accepted-run index owns the trial YAML, marker and artifact paths.
+    # Hold a study-specific lock until all trial results have been committed.
+    import fcntl
+
+    with open(f"{storage_path}.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _run_study(config, storage_path)
+
+
+def _run_study(config, storage_path):
+    sampler = create_sampler(config)
     is_multivariate = (
         config.evaluation_metrics is not None and len(config.evaluation_metrics) > 1
     )
 
-    if is_multivariate:
-        assert config.evaluation_metric_directions is not None
-        study = optuna.create_study(
-            study_name=config.run.study_name,
-            directions=[
-                {"min": "minimize", "max": "maximize"}[value]
-                for value in config.evaluation_metric_directions
-            ],
-            sampler=sampler,
-            storage=f"sqlite:///{storage_path}",
-            load_if_exists=True,
+    directions = [
+        "minimize" if direction == "min" else "maximize"
+        for direction in (config.evaluation_metric_directions or ["min"])
+    ]
+    study = optuna.create_study(
+        study_name=config.run.study_name,
+        directions=directions,
+        sampler=sampler,
+        storage=f"sqlite:///{storage_path}",
+        load_if_exists=True,
+    )
+    if [direction.name.lower() for direction in study.directions] != directions:
+        raise ValueError(
+            "The persisted study has different objective directions from this search"
         )
-    else:
-        direction = (
-            config.evaluation_metric_directions[0]
-            if (
-                config.evaluation_metric_directions
-                and len(config.evaluation_metric_directions) == 1
-            )
-            else "min"
-        )
-        study = optuna.create_study(
-            study_name=config.run.study_name,
-            direction={"min": "minimize", "max": "maximize"}[direction],
-            sampler=sampler,
-            storage=f"sqlite:///{storage_path}",
-            load_if_exists=True,
-        )
+
+    _bind_study_objective(study, config.objective_identity)
 
     trials = config.trials
     if trials is None and config.method != "grid":
@@ -523,6 +594,10 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     else:
         assert trials is not None
         _optimize_distinct_trials(study, config, trials)
+
+    if not study.get_trials(deepcopy=False, states=(TrialState.COMPLETE,)):
+        logger.info("Study finished without a completed trial.")
+        return
 
     if is_multivariate:
         print("\nBest trials (Pareto front):")

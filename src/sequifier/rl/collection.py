@@ -7,7 +7,8 @@ from dataclasses import dataclass, replace
 import torch
 
 from sequifier.contract_versions import ContractVersions
-from sequifier.io.actions import action_record
+from sequifier.io.action_record import action_record_layout
+from sequifier.io.actions import action_record, decode_action
 from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import validate_reset, validate_step
 from sequifier.rl.history import PolicyHistory
@@ -126,22 +127,27 @@ class PolicyCursor:
         actor.eval()
         if value is not None:
             value.eval()
-        distribution = actor.distribution(self.inputs)
-        features, metadata = distribution.features, distribution.metadata
-        selected = distribution.select_and_score(deterministic, self.generator)
+        record, score, entropy = actor.action_scores(
+            self.inputs,
+            deterministic=deterministic,
+            generator=self.generator,
+            entropy=compute_entropy,
+        )
         estimate = (
-            value.prepared_value(features, metadata)
+            value(self.inputs)
             if value is not None
             else torch.zeros(1, device=actor.device)
         )
         if not torch.isfinite(estimate).all():
             raise ValueError("non-finite collection value")
-        decision = selected.decision.cpu()
+        if record.keys() - action_record_layout(actor.config).keys:
+            raise ValueError("joint action contains unknown fields")
+        action = action_record(record)
         return PolicyDecision(
-            actor.action_plan.domain_action(decision),
-            action_record(actor.action_plan.to_record(decision)),
-            float(selected.log_prob[0]),
-            float(distribution.entropy(self.generator)[0]) if compute_entropy else 0.0,
+            decode_action(action, actor.config),
+            action,
+            float(score[0]),
+            float(entropy[0]) if compute_entropy else 0.0,
             float(estimate[0]),
         )
 
@@ -168,9 +174,6 @@ class PolicyCursor:
             self.desired_return = remaining_return(
                 self.desired_return, result.reward, self.actor.config.returns.gamma
             )
-        if result.observation is not None:
-            self.history.advance(
-                decision.action, result.observation, self.desired_return
-            )
-            self.refresh()
+        self.history.advance(decision.action, result.observation, self.desired_return)
+        self.refresh()
         return result

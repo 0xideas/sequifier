@@ -55,6 +55,8 @@ def weight_fingerprint(weights: Mapping[str, Tensor]) -> str:
     digest = hashlib.sha256()
     for name, tensor in sorted(weights.items()):
         value = tensor.detach().cpu().contiguous()
+        if ".prediction_scales.log_scales." in name and value.numel() == 1:
+            value = value.reshape(())
         digest.update(name.encode())
         digest.update(str((value.dtype, tuple(value.shape))).encode())
         digest.update(value.reshape(-1).view(torch.uint8).numpy().tobytes())

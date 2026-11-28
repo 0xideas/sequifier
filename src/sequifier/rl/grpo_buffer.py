@@ -1,6 +1,5 @@
 """Bounded complete groups with reconstructable causal frames and fixed scores."""
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 
 import torch
@@ -27,7 +26,6 @@ class GRPOTrajectory:
     advantage: float
     generation: int
     raw_rewards: tuple = ()
-    final_observation: Mapping | None = None
     terminated: bool = False
     truncated: bool = False
 
@@ -73,7 +71,7 @@ class SealedGroupBuffer:
             reference_identity,
             estimated_bytes,
         )
-        self.trajectories = tuple(
+        self.trajectories: tuple[GRPOTrajectory, ...] = tuple(
             trajectory for group in self.groups for trajectory in group
         )
         self.consumed = False

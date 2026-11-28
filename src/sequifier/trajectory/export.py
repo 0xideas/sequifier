@@ -1,5 +1,6 @@
 """Atomically export canonical episodes as checksummed raw Parquet shards."""
 
+import json
 import os
 from pathlib import Path
 
@@ -7,93 +8,42 @@ import pyarrow as pa
 
 from sequifier.io.atomic import atomic_path
 from sequifier.io.preprocessing_workspace import preprocessing_workspace
-from sequifier.io.sequence import (
-    CONTEXT_COLUMN,
-    CONTEXT_RECORDS,
-    OBSERVATION_MASK,
-    TransitionColumns,
-    register_sequence_name,
-)
+from sequifier.io.sequence import register_sequence_name, seed_metadata
 from sequifier.trajectory.importers import source_episodes
-from sequifier.trajectory.sequence_output import publish_sequences
-from sequifier.trajectory.table_schema import cast_episode_table, sequence_table
-from sequifier.trajectory.tables import (
-    ACTION_RECORD,
-    GROUP_COLUMN,
-    PREVIOUS_ACTION_RECORD,
-    REWARD_COLUMN,
-    SEQUENCE_NAME_COLUMN,
-    SUCCESSOR_PREFIX,
-    TRANSITION_FLAGS,
-    TableEpisodeReference,
-)
+from sequifier.trajectory.row_layout import ACTION_METADATA, TrajectoryRowLayout
+from sequifier.trajectory.sequence_output import arrival_table, publish_sequences
+from sequifier.trajectory.table_schema import cast_episode_table
+from sequifier.trajectory.tables import SEQUENCE_NAME_COLUMN
 
 
-class EpisodeTableEncoder:
-    """Canonical Arrow columns shared by sequence export and policy preparation."""
-
-    def __init__(self, policy):
-        fields = policy.observation_columns + policy.static_columns
-        successor_columns = [
-            SUCCESSOR_PREFIX + name for name in policy.observation_columns
-        ]
-        reserved = {
-            "sequenceId",
-            "itemPosition",
-            SEQUENCE_NAME_COLUMN,
-            ACTION_RECORD,
-            PREVIOUS_ACTION_RECORD,
-            GROUP_COLUMN,
-            REWARD_COLUMN,
-            CONTEXT_COLUMN,
-            OBSERVATION_MASK,
-            *TRANSITION_FLAGS,
-            *successor_columns,
-        }
-        if set(fields) & reserved:
-            raise ValueError(
-                "policy feature names collide with sequence import metadata columns"
+def episode_table(sequence, episode, layout, policy, *, first_position=None):
+    first_position = (
+        episode.first_position if first_position is None else first_position
+    )
+    rows = []
+    for offset in range(len(episode.actions) + 1):
+        decision = episode.decision(offset - 1) if offset else None
+        rows.append(
+            layout.row(
+                {
+                    "sequenceId": sequence,
+                    "itemPosition": first_position + offset,
+                    "sequenceName": episode.episode_id,
+                    "groupId": episode.group_id,
+                },
+                episode.observation(offset),
+                episode.static_inputs,
+                action=decision.action if decision else episode.previous_action,
+                reward=decision.reward if decision else None,
+                terminated=decision.terminated if decision else None,
+                truncated=decision.truncated if decision else None,
+                masked=episode.observation_masks[offset],
             )
-        self.policy = policy
-        self.observations = policy.observation_columns
-        self.successors = successor_columns
-        self.columns = reserved.union(fields)
-
-    def table(self, index, episode):
-        length = len(episode.actions)
-        transitions = episode.transitions or TransitionColumns()
-        values = {
-            **episode.observations,
-            **{name: [value] * length for name, value in episode.static_inputs.items()},
-            "sequenceId": [
-                episode.sequence_id if episode.sequence_id is not None else index
-            ]
-            * length,
-            "itemPosition": episode.item_positions,
-            SEQUENCE_NAME_COLUMN: [episode.episode_id] * length,
-            OBSERVATION_MASK: episode.observation_masks,
-            ACTION_RECORD: episode.actions,
-            PREVIOUS_ACTION_RECORD: (
-                episode.previous_action,
-                *episode.actions[:-1],
-            ),
-            GROUP_COLUMN: [episode.group_id] * length,
-            REWARD_COLUMN: transitions.rewards or [None] * length,
-            "terminated": transitions.terminated or [None] * length,
-            "truncated": transitions.truncated or [None] * length,
-            "bootstrap_allowed": transitions.bootstrap_allowed or [None] * length,
-        }
-        if context := getattr(episode, "context", None):
-            values[CONTEXT_COLUMN] = [
-                CONTEXT_RECORDS.dump_json(context).decode(),
-                *([None] * (length - 1)),
-            ]
-        for name, column in zip(self.observations, self.successors, strict=True):
-            values[column] = [
-                successor[name] if successor is not None else None
-                for successor in (transitions.successors or [None] * length)
-            ]
-        return sequence_table(values, self.observations, policy=self.policy)
+        )
+    if episode.collection is not None:
+        for row, diagnostics in zip(rows, (None, *episode.collection), strict=True):
+            row["__collection"] = diagnostics
+    return arrival_table(rows, layout, policy)
 
 
 def import_sequences(config) -> Path:
@@ -112,6 +62,20 @@ def _write_import(config, destination, work):
 
     resolved_source = config.resolved_source()
     policy = config.resolved_policy(resolved_source)
+    if (
+        config.mask_column
+        and not resolved_source.declaration.mask_column
+        and not (resolved_source.manifest or {}).get("mask_column")
+        and resolved_source.kind == "table"
+    ):
+        from dataclasses import replace
+
+        resolved_source = replace(
+            resolved_source,
+            declaration=resolved_source.declaration.model_copy(
+                update={"mask_column": config.mask_column}
+            ),
+        )
     metadata = resolved_source.metadata
     if config.initialize_from is None and metadata is not None:
         policy = policy.model_copy(
@@ -124,12 +88,26 @@ def _write_import(config, destination, work):
     references = source_episodes(resolved_source, policy)
     if not references:
         raise ValueError("sequence import requires at least one episode")
-    encoder = EpisodeTableEncoder(policy)
+    layout = TrajectoryRowLayout(
+        policy.observation_columns,
+        policy.static_columns,
+        policy.actions,
+        mask_column=config.mask_column
+        or policy.raw_mask_column
+        or resolved_source.declaration.mask_column
+        or (resolved_source.manifest or {}).get("mask_column"),
+        aliases=resolved_source.declaration.action_columns
+        or (resolved_source.manifest or {}).get("action_columns"),
+    )
     stage = work / "publication"
     stage.mkdir()
     tables, shards, seen = [], [], set()
 
     names_by_id = {}
+    sequence_seeds = {}
+    seed_path = work / "sequence-seeds.json"
+    if seed_path.is_file():
+        sequence_seeds = json.loads(seed_path.read_text())
 
     def record_shard(path):
         with pq.ParquetFile(path) as file:
@@ -137,7 +115,7 @@ def _write_import(config, destination, work):
             shards.append(
                 {
                     "path": path.name,
-                    "decisions": file.metadata.num_rows,
+                    "rows": file.metadata.num_rows,
                     "sequences": sorted(ids),
                 }
             )
@@ -163,6 +141,8 @@ def _write_import(config, destination, work):
                 [cast_episode_table(table, shard_schema) for table in tables]
             )
             path = work / f"part-{len(shards):05d}.parquet"
+            with atomic_path(seed_path) as temporary:
+                temporary.write_text(json.dumps(sequence_seeds))
             with atomic_path(path) as temporary:
                 pq.write_table(table, temporary)
             record_shard(path)
@@ -175,28 +155,34 @@ def _write_import(config, destination, work):
         seen.add(episode.episode_id)
         seq = episode.sequence_id if episode.sequence_id is not None else index
         register_sequence_name(names_by_id, seq, episode.episode_id)
-        table = encoder.table(index, episode)
-        if config.passthrough_columns:
+        context = episode.context
+        if context:
+            sequence_seeds[str(seq)] = seed_metadata(context)
+        table = episode_table(seq, episode, layout, policy, first_position=0)
+        passthrough = [
+            name
+            for name in config.passthrough_columns
+            if name != "__collection" or name not in table.column_names
+        ]
+        if passthrough:
             reference = references[index]
-            if not isinstance(reference, TableEpisodeReference):
-                raise ValueError(
-                    "passthrough_columns requires a tabular sequence source"
-                )
             reserved = (
                 set(table.column_names)
+                | {ACTION_METADATA}
                 | set(policy.actions)
                 | set(policy.feedback)
-                | {"__decision"}
             )
-            if overlap := reserved.intersection(config.passthrough_columns):
+            if overlap := reserved.intersection(passthrough):
                 raise ValueError(
                     f"Passthrough columns overlap sequence fields: {sorted(overlap)}"
                 )
-            auxiliary = reference.decision_columns(
-                episode.item_positions, config.passthrough_columns
+            auxiliary = reference.source_columns(
+                range(episode.first_position, episode.first_position + len(table)),
+                passthrough,
             ).to_arrow()
             for name in auxiliary.column_names:
-                table = table.append_column(name, auxiliary[name])
+                column = auxiliary[name]
+                table = table.append_column(name, column)
         tables.append(table)
         if len(tables) == config.episodes_per_shard:
             flush()
@@ -208,8 +194,10 @@ def _write_import(config, destination, work):
         {
             **resolved_source.provenance(),
             "policy_binding": policy.task_binding.model_dump(mode="json"),
+            **({"sequence_seeds": sequence_seeds} if sequence_seeds else {}),
         },
         static=policy.static_columns,
+        layout=layout,
         source_root=work,
     )
     os.rename(stage, destination)

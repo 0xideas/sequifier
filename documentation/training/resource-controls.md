@@ -63,23 +63,19 @@ supervised loaders.
 
 ## Autocast and matrix precision
 
-`layer_autocast: true` applies Torch autocast to local/DDP training forward and
-loss calculation, validation and warm-up. Backward runs outside autocast.
-Parameter storage dtypes remain governed by `layer_type_dtypes`. A configured
-linear FP16/BF16 dtype also selects that autocast dtype; otherwise the device's
-Torch default is used (CPU BF16, CUDA FP16). MPS uses BF16 and requires macOS 14
-or newer; native MPS FP16 autocast is rejected because the native gradient-scaler
-protocol supports CPU/CUDA. Unsupported device/dtype requests fail explicitly.
-FSDP retains its BF16 mixed-precision policy by default.
+`run.execution.precision.layer_autocast` defaults to `false`. Enable it to
+use BF16 for supervised forwards and policy scoring on supported devices.
+Supervised-only plans can select FP16 autocast with an FP16 linear dtype.
+`layer_type_dtypes` governs parameter storage. MPS autocast requires macOS 14
+or newer and uses BF16. Backward runs outside autocast.
 
 FP16 autocast with FP32 optimizer parameters enables gradient scaling. Explicit
 FP16 parameters retain the existing unscaled update protocol. The scaler is
 persisted/restored with native recovery. FSDP uses its sharded mixed-precision
 policy rather than a second enclosing autocast context.
 
-`float32_matmul_precision` is applied inside each native training process before
-model construction/compilation, including spawned ranks and direct builder use.
-It is independent of autocast and parameter storage precision.
+`run.execution.precision.float32_matmul_precision` accepts `highest`, `high`,
+or `medium` and applies before model construction on every worker.
 
 ## Determinism
 

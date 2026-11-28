@@ -58,14 +58,14 @@ class PhaseCommit:
 
     @classmethod
     def stage(
-        cls, artifacts, result: PhaseResult, model, *, checkpoint_path, telemetry=None
+        cls, artifacts, result: PhaseResult, model, *, checkpoint_path, sidecars=None
     ):
         from sequifier.artifacts.model_artifact import save_model_artifact
 
         path = artifacts.commits / f"{uuid4().hex}.pt"
         save_model_artifact(model, path)
         report = result.report(artifacts.model, checkpoint_path)
-        sidecars = {"telemetry": telemetry} if telemetry is not None else {}
+        sidecars = {} if sidecars is None else sidecars
         return cls(
             str(path),
             file_checksum(path),

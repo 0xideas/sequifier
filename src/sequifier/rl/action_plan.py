@@ -80,6 +80,13 @@ class ActionExecutionPlan:
             resolved.add(ready)
             pending.remove(ready)
 
+        self.entropy_is_exact = not self.has_autoregression and all(
+            not field.active_when
+            and field.lower is None
+            and field.upper is None
+            and not field.atoms
+            for field in actions.values()
+        )
         self.order = tuple(order)
         self.position = actor.config.decision_position
         self.fields = {}
@@ -147,10 +154,9 @@ class ActionExecutionPlan:
         }
 
     def outputs(
-        self, decoder, context, valid, statistics, decision: ActionDecision
+        self, decoder, context, valid, statistics, decision: ActionDecision, support
     ) -> Iterator[tuple[str, Tensor]]:
         """Yield each decoder output using the values chosen at earlier steps."""
-        support, _ = self.indices(context.device)
         outputs = {}
         for branch_name, targets in self.independent.items():
             branch = decoder.branches[branch_name]
@@ -190,24 +196,27 @@ class ActionExecutionPlan:
         if device not in self._indices:
             # Replay autograd can reuse indices first materialized in inference.
             with torch.inference_mode(False):
-                support = {
-                    name: torch.tensor(field.support, dtype=torch.long, device=device)
-                    for name, field in self.fields.items()
-                    if field.support
-                }
-                activity = {
-                    name: {
-                        parent: torch.tensor(
-                            values,
-                            device=device,
-                            dtype=torch.long
-                            if self.fields[parent].spec.type == "categorical"
-                            else real_action_dtype(device),
-                        )
-                        for parent, values in field.activity.items()
-                    }
-                    for name, field in self.fields.items()
-                    if field.activity
-                }
-            self._indices[device] = support, activity
+                self._indices[device] = self.build_indices(device)
         return self._indices[device]
+
+    def build_indices(self, device):
+        support = {
+            name: torch.tensor(field.support, dtype=torch.long, device=device)
+            for name, field in self.fields.items()
+            if field.support
+        }
+        activity = {
+            name: {
+                parent: torch.tensor(
+                    values,
+                    device=device,
+                    dtype=torch.long
+                    if self.fields[parent].spec.type == "categorical"
+                    else real_action_dtype(device),
+                )
+                for parent, values in field.activity.items()
+            }
+            for name, field in self.fields.items()
+            if field.activity
+        }
+        return support, activity

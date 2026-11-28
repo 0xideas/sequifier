@@ -16,6 +16,7 @@ import warnings
 from dataclasses import dataclass
 from decimal import Decimal
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, PrivateAttr, ValidationError, model_validator
@@ -33,6 +34,7 @@ from sequifier.config.training_resolution import (
     initialization_model_config,
     resolve_execution_settings,
 )
+from sequifier.fingerprints import file_checksum
 from sequifier.typechecking import beartype
 
 
@@ -552,6 +554,63 @@ class SearchRunSettings(ConfigModel):
     outputs: SearchOutputSettings
 
 
+def _monitor_identity(candidate, phase, monitor):
+    identity = {
+        "algorithm": phase.algorithm,
+        "monitor": monitor.model_dump(mode="json") if monitor else None,
+    }
+    if hasattr(phase.evaluation, "environment"):
+        environment = phase.evaluation.environment
+        if isinstance(environment, str):
+            environment = candidate.environments[environment]
+        identity["environment"] = environment.model_dump(mode="json")
+        identity["episodes"] = phase.evaluation.model_dump(
+            mode="json",
+            include={
+                "seeds",
+                "max_episode_steps",
+                "timeout_seconds",
+                "action_selection",
+            },
+        )
+        if phase.algorithm == "grpo" and monitor.metric == "score_mean":
+            identity["reward_scale"] = phase.reward_scale
+    elif monitor:
+        if phase.algorithm == "supervised":
+            references = [monitor]
+        else:
+            references = phase.evaluation.sources or phase.sources
+            identity["implicit_validation"] = phase.evaluation.sources is None
+        sources = {}
+        for ref in references:
+            dataset = candidate.datasets[ref.dataset]
+            view = dataset.views.get(ref.part)
+            if dataset.partition:
+                seed = candidate.run.reproducibility.seed
+                if seed == "random":
+                    raise ValueError(
+                        "A generated evaluation partition requires a fixed run seed for search"
+                    )
+                identity["partition_seed"] = seed
+            # Partition membership depends on the entire population before view filtering.
+            parts = (
+                view.parts
+                if view and view.parts and not dataset.partition
+                else dataset.sources
+            )
+            sources[ref.source] = {
+                "view": view.model_dump(mode="json") if view else None,
+                "partition": dataset.partition.model_dump(mode="json")
+                if dataset.partition
+                else None,
+                "parts": {
+                    key: dataset.sources[key].model_dump(mode="json") for key in parts
+                },
+            }
+        identity["sources"] = sources
+    return identity
+
+
 class CanonicalHyperparameterSearchConfig(ConfigModel):
     """Search controls and a recursive sampler over one canonical train config."""
 
@@ -570,12 +629,32 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
     prune_trials: bool = True
     pruning_warmup_epochs: int | None = Field(default=None, ge=0)
     pruning_warmup_batches: int | None = Field(default=None, ge=0)
+    pruning_warmup_iterations: int | None = Field(default=None, ge=0)
 
     evaluation_inference_config_path: str | None = None
     evaluation_script_path: str | None = None
     evaluation_metric_directions: list[Literal["min", "max"]] | None = None
     evaluation_metrics: list[str] | None = None
     _compiled_config: _CompiledValue = PrivateAttr()
+    _objective_identity: dict | None = PrivateAttr(default=None)
+
+    @property
+    def objective_identity(self):
+        if self.evaluation_script_path:
+            root = Path(self.run.project_root)
+            script = (root / self.evaluation_script_path).resolve()
+            identity = {
+                "script": str(script),
+                "script_sha256": file_checksum(script),
+                "metrics": self.evaluation_metrics,
+            }
+            if self.evaluation_inference_config_path:
+                path = Path(self.evaluation_inference_config_path)
+                path = (path if path.exists() else root / path).resolve()
+                identity["inference_config"] = str(path)
+                identity["inference_config_sha256"] = file_checksum(path)
+            return identity
+        return self._objective_identity
 
     @model_validator(mode="after")
     @beartype
@@ -588,14 +667,25 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
                 "Search parameters cannot set run-controlled "
                 f"fields: {sorted(reserved_parameters)}"
             )
-        if (
-            self.pruning_warmup_epochs is not None
-            and self.pruning_warmup_batches is not None
-        ):
+        warmups = (
+            self.pruning_warmup_epochs,
+            self.pruning_warmup_batches,
+            self.pruning_warmup_iterations,
+        )
+        if sum(value is not None for value in warmups) > 1:
             raise ValueError(
-                "Only one of pruning_warmup_epochs and pruning_warmup_batches "
-                "can be set."
+                "Select exactly one pruning warmup unit when configuring warmup"
             )
+        if self.evaluation_metrics is None:
+            if (
+                self.evaluation_metric_directions is not None
+                and len(self.evaluation_metric_directions) != 1
+            ):
+                raise ValueError(
+                    "The final phase monitor requires one optimization direction"
+                )
+            if self.evaluation_script_path is not None:
+                raise ValueError("evaluation_script_path requires evaluation_metrics")
         if self.evaluation_metrics is not None:
             if not self.evaluation_metrics:
                 raise ValueError("evaluation_metrics cannot be empty")
@@ -647,6 +737,52 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
     def grid_size(self) -> int:
         return math.prod(space.grid_size() for space in self.search_spaces)
 
+    def _validate_trial_objective(self, candidate):
+        phase = candidate.ordered_phases[-1]
+        if (
+            self.prune_trials
+            and self.pruning_warmup_iterations
+            and phase.algorithm == "supervised"
+        ):
+            raise ValueError(
+                "pruning_warmup_iterations requires a policy objective phase"
+            )
+        if (
+            self.prune_trials
+            and self.pruning_warmup_batches
+            and phase.algorithm != "supervised"
+        ):
+            raise ValueError("Use pruning_warmup_iterations for policy updates")
+        if (
+            self.prune_trials
+            and self.pruning_warmup_epochs
+            and phase.algorithm
+            not in {
+                "supervised",
+                "policy_imitation",
+            }
+        ):
+            raise ValueError(
+                "Epoch warmup requires a supervised or imitation objective phase"
+            )
+        if self.evaluation_script_path is None:
+            monitor = phase.evaluation.monitor if phase.evaluation else None
+            direction = monitor.direction if monitor else "min"
+            if self.evaluation_metric_directions is None:
+                self.evaluation_metric_directions = [direction]
+            elif self.evaluation_metric_directions != [direction]:
+                raise ValueError(
+                    "search direction must match the final phase evaluation monitor"
+                )
+
+            identity = _monitor_identity(candidate, phase, monitor)
+            if self._objective_identity is None:
+                self._objective_identity = identity
+            elif self._objective_identity != identity:
+                raise ValueError(
+                    "Search candidates must use the same objective metric and evaluation source"
+                )
+
     @beartype
     def validate_compiled_search(self) -> None:
         """Validate the representative candidate and finite-grid controls."""
@@ -674,9 +810,10 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
         load_model_config = lru_cache(maxsize=1)(initialization_model_config)
         for description, trial in candidates:
             try:
-                _validate_training_candidate(
+                candidate = _validate_training_candidate(
                     self._materialized_values(trial, 0), load_model_config
                 )
+                self._validate_trial_objective(candidate)
             except (ValidationError, ValueError) as error:
                 raise ValueError(
                     "Search parameters produce an invalid "
@@ -723,26 +860,25 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
         )
         outputs = values["run"].get("outputs", {})
         run_name = values["run"]["model_name"]
-        for key in ("model_path", "report_path"):
-            if outputs.get(key):
-                from pathlib import Path
 
-                path = Path(outputs[key])
-                outputs[key] = str(
+        def scope_file(settings, key):
+            if settings.get(key):
+                path = Path(settings[key])
+                settings[key] = str(
                     path.with_name(f"{path.stem}-{run_name}{path.suffix}")
                 )
+
+        for key in ("model_path", "report_path"):
+            scope_file(outputs, key)
         if outputs.get("phase_directory"):
             outputs["phase_directory"] = os.path.join(
                 outputs["phase_directory"], run_name
             )
-        recovery = values["run"].get("recovery", {}).get("resume", {})
-        if recovery.get("checkpoint_path"):
-            from pathlib import Path
-
-            path = Path(recovery["checkpoint_path"])
-            recovery["checkpoint_path"] = str(
-                path.with_name(f"{path.stem}-{run_name}{path.suffix}")
-            )
+        recovery = values["run"].get("recovery", {}).get("resume") or {}
+        scope_file(recovery, "checkpoint_path")
+        for phase in values["phases"].values():
+            collection = phase.get("collection") or {}
+            scope_file(collection.get("output") or {}, "manifest_path")
         return values
 
     @beartype
@@ -751,7 +887,9 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
 
         values = self._materialized_values(trial, run_index)
         try:
-            return _validate_training_candidate(values)
+            candidate = _validate_training_candidate(values)
+            self._validate_trial_objective(candidate)
+            return candidate
         except (ValidationError, ValueError) as error:
             try:
                 parameters = trial.params
@@ -794,7 +932,7 @@ def compile_canonical_hyperparameter_search_config(
         else:
             base_config = load_train_config_with_source(
                 base_config_path,
-                {},
+                {"project_root": config_values.get("run", {}).get("project_root")},
                 False,
             ).config
     except ValidationError:
@@ -804,13 +942,6 @@ def compile_canonical_hyperparameter_search_config(
             f"Unable to load canonical base training config {base_config_path!r} "
             f"referenced by {config_path!r}: {error}"
         ) from error
-
-    if not isinstance(base_config, SequifierConfig) or any(
-        phase.algorithm != "supervised" for phase in base_config.ordered_phases
-    ):
-        raise ValueError(
-            "hyperparameter search for trajectory training is not yet supported"
-        )
 
     search_values = copy.deepcopy(config_values)
     search_values["base_config_path"] = base_config_path

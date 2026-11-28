@@ -152,7 +152,10 @@ class ParameterCatalog:
                 parameter_kind=self._kind(canonical_name)
                 if primary == "free_parameter"
                 else groups[primary],
-                shape=tuple(parameter.shape),
+                # A learned scale has scalar semantics in saved selectors.
+                shape=()
+                if ".prediction_scales.log_scales." in canonical_name
+                else tuple(parameter.shape),
                 dtype=parameter.dtype,
                 shared_parameter_id=parameter_id if len(names) > 1 else None,
                 depth_parameter=bool(identity in depth_parameters),

@@ -46,6 +46,7 @@ def scale_evaluation_score(result, phase):
 def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     actor, phase = context.actor.eval(), context.phase
     session = PhaseSession(context)
+    strategy = session.strategy
     state = session.state
     sequences = CollectedSequences(context, state)
     groups, env_steps = state.get("groups", 0), state.get("env_steps", 0)
@@ -95,14 +96,18 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             )
         )
         parallel = phase.collection.parallel
-        if parallel is not None and groups < phase.budget.groups:
+        remaining = min(
+            phase.collection.groups_per_iteration, phase.budget.groups - groups
+        )
+        local_groups = len(range(strategy.rank, remaining, strategy.world_size))
+        if parallel is not None and local_groups:
             from sequifier.rl.simulator_workers import SimulatorWorkers
 
             workers = SimulatorWorkers(
                 phase.collection.environment,
                 min(
                     parallel.workers,
-                    phase.collection.groups_per_iteration * phase.collection.group_size,
+                    local_groups * phase.collection.group_size,
                 ),
                 parallel.timeout_seconds,
                 parallel.threads_per_worker,
@@ -119,45 +124,76 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             )
             with allocation("rollout_storage") as storage:
                 collection_start = perf_counter()
-                buffer, executed = collect_groups(
-                    context,
-                    adapter,
-                    groups,
-                    count,
-                    session.transaction,
-                    env_steps,
-                    restart_stream,
-                    workers=workers,
-                    storage=storage,
-                )
+                if (
+                    phase.budget.max_env_steps is not None
+                    and env_steps
+                    + count * phase.collection.group_size * phase.collection.max_steps
+                    > phase.budget.max_env_steps
+                ):
+                    raise ValueError("complete GRPO groups exceed max_env_steps")
+                per_rank, tail = divmod(count, strategy.world_size)
+                owned = per_rank + int(strategy.rank < tail)
+                start = groups + strategy.rank * per_rank + min(strategy.rank, tail)
+                with session.rounds.scope():
+                    buffer, executed = (
+                        collect_groups(
+                            context,
+                            adapter,
+                            start,
+                            owned,
+                            session.transaction,
+                            env_steps,
+                            restart_stream,
+                            workers=workers,
+                            storage=storage,
+                        )
+                        if owned
+                        else (None, 0)
+                    )
+                executed = int(strategy.sum(executed))
                 collection_seconds = perf_counter() - collection_start
                 update_start = perf_counter()
-                sequences.grpo(buffer)
+                sequences.record(buffer)
                 record = update_grpo(session, buffer)
                 if actor.device.type == "cuda":
                     torch.cuda.synchronize(actor.device)
                 update_seconds = perf_counter() - update_start
+                session.collection_seconds += collection_seconds
+                session.update_seconds += update_seconds
                 env_steps += executed
                 groups += count
-                scores = [t.score for t in buffer.trajectories]
+                trajectories = buffer.trajectories if buffer else ()
+                details = strategy.gather_objects(
+                    (
+                        [t.score for t in trajectories],
+                        [len(t.actions) for t in trajectories],
+                        [t.cutoff_reason for t in trajectories],
+                        [group[0].start_token for group in buffer.groups]
+                        if buffer
+                        else [],
+                    )
+                )
+                scores, lengths, cutoffs, tokens = (
+                    [x for part in details for x in part[i]] for i in range(4)
+                )
                 record.update(
                     {
                         "groups": groups,
                         "env_steps": env_steps,
                         "policy_version": actor.grpo_policy_version,
-                        "collected_policy_version": buffer.generation,
+                        "collected_policy_version": session.transaction,
                         "score_mean": statistics.fmean(scores),
                         "score_std": statistics.pstdev(scores),
                         "zero_variance_groups": sum(
-                            len({t.score for t in group}) == 1
-                            for group in buffer.groups
+                            len(set(scores[i : i + phase.collection.group_size])) == 1
+                            for i in range(0, len(scores), phase.collection.group_size)
                         ),
-                        "lengths": [len(t.actions) for t in buffer.trajectories],
-                        "cutoffs": [t.cutoff_reason for t in buffer.trajectories],
-                        "start_tokens": [
-                            group[0].start_token for group in buffer.groups
-                        ],
-                        "buffer_bytes": buffer.estimated_bytes,
+                        "lengths": lengths,
+                        "cutoffs": cutoffs,
+                        "start_tokens": tokens,
+                        "buffer_bytes": int(
+                            strategy.sum(buffer.estimated_bytes if buffer else 0)
+                        ),
                         "simulator_workers": len(workers) if workers is not None else 1,
                         "rollout_inference_batch_size": parallel.inference_batch_size
                         if parallel
@@ -178,7 +214,8 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 release_image_cache_entries(actor, context.reference)
                 return record
 
-            session.complete_online_update(
+            session.complete_update(
+                online=True,
                 final=groups == phase.budget.groups,
                 training=training_metrics,
                 evaluate=lambda: session.evaluate_online(

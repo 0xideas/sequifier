@@ -19,7 +19,10 @@ class TelemetryJournal:
 
     @classmethod
     @contextmanager
-    def open(cls, path, position=None):
+    def open(cls, path, position=None, *, writer=True):
+        if not writer:
+            yield cls(None, position)
+            return
         if position is None:
             path.parent.mkdir(parents=True, exist_ok=True)
         with _connect(path, "rw" if position is not None else "rwc") as connection:
@@ -43,6 +46,8 @@ class TelemetryJournal:
             yield cls(connection, position)
 
     def append(self, kind, record):
+        if self.connection is None:
+            return
         position = uuid4().hex
         self.connection.execute(
             "INSERT INTO records VALUES (?, ?, ?, ?)",
@@ -57,7 +62,8 @@ class TelemetryJournal:
 
     def commit(self):
         # Publish the journal prefix before the checkpoint that references it.
-        self.connection.commit()
+        if self.connection is not None:
+            self.connection.commit()
         return self.position
 
     @staticmethod

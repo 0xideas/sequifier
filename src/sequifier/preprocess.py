@@ -21,9 +21,14 @@ import torch
 from loguru import logger
 
 from sequifier.artifacts.dependencies import DependencyManifest
+from sequifier.config.column_names import (
+    ARRIVAL_AUXILIARY_COLUMNS,
+    INCOMING_ACTION_PRESENT,
+)
 from sequifier.config.metadata import (
     dataset_tensor_kind,
     dataset_tensor_version,
+    load_dataset_metadata,
     validate_persisted_metadata_versions,
 )
 from sequifier.config.preprocess_config import (
@@ -78,12 +83,7 @@ from sequifier.io.sample_order import (
     curriculum_storage_columns,
     source_curriculum_column,
 )
-from sequifier.io.sequence import (
-    DOMAIN_OBSERVATIONS,
-    DOMAIN_STATIC,
-    OBSERVATION_MASK,
-    with_domain_record,
-)
+from sequifier.io.sequence import DOMAIN_OBSERVATIONS, DOMAIN_STATIC, with_domain_record
 from sequifier.io.window_placement import (
     SplitWindowPlan,
     WindowPlacement,
@@ -858,7 +858,7 @@ class Preprocessor:
         self.sequence_identities = {}
         self.sequence_dependencies = DependencyManifest()
         self.sequence_manifest_path = None
-        self.sequence_view = config.sequence_view
+        self.sequence_table_provenance: dict[str, Any] = {}
         self.external_static_source = None
         self.preparation = None
         self.static_cardinality = {}
@@ -870,14 +870,20 @@ class Preprocessor:
         ) and Path(self.config.preprocessing_data_path).is_file():
             from sequifier.trajectory.sequence_output import supervised_manifest_input
 
+            mask_column = self.config.mask_column
+            frozen = None
+            if self.config.metadata_config_path:
+                metadata_path = (
+                    Path(self.config.project_root) / self.config.metadata_config_path
+                )
+                frozen = load_dataset_metadata(str(metadata_path))
+                mask_column = mask_column or frozen.raw_mask_column
             with supervised_manifest_input(
                 self.config.preprocessing_data_path,
-                self.config.sequence_view,
                 dependencies=self.sequence_dependencies,
-                mask_column=self.config.mask_column,
+                mask_column=mask_column,
                 split_column=self.config.split_column,
                 curriculum_columns=curriculum_columns(self.config.curriculum_column),
-                indexed_passthrough=self.config.indexed_passthrough,
             ) as (
                 table,
                 manifest,
@@ -885,25 +891,56 @@ class Preprocessor:
             ):
                 columns = self.config.selected_columns
                 if columns is None:
-                    columns = manifest.get("observation_columns")
+                    feedback_columns = [
+                        *manifest["action_columns"].values(),
+                        INCOMING_ACTION_PRESENT,
+                    ]
+                    columns = [
+                        *manifest["observation_columns"],
+                        *(
+                            name
+                            for name in feedback_columns
+                            if name not in self.config.indexed_passthrough
+                            and (frozen is None or name in frozen.column_data_types)
+                        ),
+                    ]
+                passthrough = self.config.indexed_passthrough
+                if indexed_writer or self.config.indexed_output_path:
+                    available = pl.scan_parquet(table).collect_schema()
+                    passthrough = list(
+                        dict.fromkeys(
+                            [
+                                *passthrough,
+                                *(
+                                    name
+                                    for name in (
+                                        *manifest["action_columns"].values(),
+                                        *ARRIVAL_AUXILIARY_COLUMNS,
+                                        "sequenceName",
+                                        "groupId",
+                                    )
+                                    if name in available and name not in columns
+                                ),
+                            ]
+                        )
+                    )
                 config = self.config.model_copy(
                     update={
                         "preprocessing_data_path": str(table),
                         "read_format": "parquet",
-                        "sequence_view": "decisions",
                         "mask_column": self.config.mask_column
-                        or (
-                            OBSERVATION_MASK
-                            if manifest.get("masked_observations")
-                            else None
-                        ),
+                        or manifest.get("mask_column"),
                         "selected_columns": columns,
+                        "indexed_passthrough": passthrough,
                     }
                 )
                 if static_path and not config.static_data_path:
                     config.static_data_path = str(static_path)
                 run = Preprocessor(config)
-                run.sequence_view = self.config.sequence_view
+                run.sequence_table_provenance = {
+                    **manifest.get("provenance", {}),
+                    "action_columns": manifest["action_columns"],
+                }
                 run.external_static_source = self.config.static_data_path
                 run.sequence_dependencies = self.sequence_dependencies
                 if run.external_static_source:
@@ -913,10 +950,6 @@ class Preprocessor:
                 ).resolve()
                 run._run_table(self.config, indexed_writer, indexed_prediction)
             return
-        if self.config.sequence_view == "observations":
-            raise ValueError(
-                "sequence_view observations requires a sequence manifest or trajectory"
-            )
         self._run_table(self.config, indexed_writer, indexed_prediction)
 
     def table_input_paths(self):
@@ -985,7 +1018,6 @@ class Preprocessor:
         if self.sequence_manifest_path:
             source = {
                 "manifest_path": str(self.sequence_manifest_path),
-                "sequence_view": self.sequence_view,
             }
         else:
             config = self.config
@@ -1005,6 +1037,7 @@ class Preprocessor:
         self.sequence_dependencies.revalidate()
         return {
             "source": source,
+            **getattr(self, "sequence_table_provenance", {}),
             "files": [
                 {"path": location, "sha256": checksum}
                 for location, checksum in sorted(
@@ -1036,7 +1069,7 @@ class Preprocessor:
         for file in files:
             scan = reader(file)
             schema = scan.collect_schema()
-            fields = [name for name in ("sequenceName", "__group") if name in schema]
+            fields = [name for name in ("sequenceName", "groupId") if name in schema]
             if fields and config.read_format == "csv":
                 scan = pl.scan_csv(file, infer_schema_length=None)
             sources.append((scan, fields))
@@ -1052,7 +1085,7 @@ class Preprocessor:
             ):
                 key = row["sequenceId"]
                 label = row.get("sequenceName")
-                group = row.get("__group")
+                group = row.get("groupId")
                 identity = episode_identity(key, label)
                 if owners.setdefault(identity, key) != key:
                     raise ValueError(f"duplicate episode ID {identity!r}")
@@ -1141,7 +1174,9 @@ class Preprocessor:
             config.max_target_offset,
             ContractVersions.STORED_WINDOW_LAYOUT,
         )
-        self.window_plan = SplitWindowPlan.from_settings(config)
+        self.window_plan = SplitWindowPlan.from_settings(
+            config, arrivals=bool(self.sequence_table_provenance.get("action_columns"))
+        )
         if config.split_method == "within_sequence" and config.split_ratios is not None:
             self.window_plan.validate_training_share(config.split_ratios)
         self.column_data_types = _normalize_column_types(config.column_data_types)
@@ -1201,7 +1236,7 @@ class Preprocessor:
                     not in {
                         *INPUT_METADATA_COLUMNS,
                         "sequenceName",
-                        "__group",
+                        "groupId",
                         config.time_alignment_column,
                         config.mask_column,
                         *config.indexed_passthrough,
@@ -1285,6 +1320,7 @@ class Preprocessor:
 
     def _process_file(self, selected_columns):
         config = self.config
+        actions = set(self.sequence_table_provenance.get("action_columns", {}).values())
         data = _load_and_preprocess_data(
             config.preprocessing_data_path,
             config.read_format,
@@ -1294,6 +1330,7 @@ class Preprocessor:
             config.curriculum_column,
             split_column=config.split_column,
             split_values=config.split_values,
+            nullable_actions=actions,
         )
         self.has_sample_positions = bool(curriculum_storage_columns(data.columns))
         data_columns = _get_data_columns(data, config.mask_column)
@@ -1351,7 +1388,22 @@ class Preprocessor:
             )
             features = FeatureStatistics()
             features.observe(
-                fitting_data, data_columns, rules, mask_column=config.mask_column
+                fitting_data,
+                [
+                    name
+                    for name in data_columns
+                    if name not in actions
+                    and not (actions and name == INCOMING_ACTION_PRESENT)
+                ],
+                rules,
+                mask_column=config.mask_column,
+            )
+            if actions and INCOMING_ACTION_PRESENT in data_columns:
+                features.observe(fitting_data, [INCOMING_ACTION_PRESENT], rules)
+            features.observe(
+                fitting_data.filter(pl.col("itemPosition") > 0),
+                [name for name in data_columns if name in actions],
+                rules,
             )
             id_maps, selected_columns_statistics = features.finish(rules)
             fitted = FittedColumns.resolve(
@@ -1368,6 +1420,7 @@ class Preprocessor:
             self.cardinality_config,
             config.mask_column,
             input_types=configured_col_types,
+            incoming_actions=actions,
         )
 
         data = self._add_indexed_passthrough(data, config.preprocessing_data_path)
@@ -2231,7 +2284,6 @@ class Preprocessor:
                 **(
                     {
                         "sequence_manifest": self.source_provenance(),
-                        "sequence_view": self.sequence_view,
                     }
                     if self.sequence_manifest_path
                     else {}
@@ -2750,6 +2802,7 @@ def _load_and_preprocess_data(
     sort_rows: bool = True,
     split_column: Optional[str] = None,
     split_values: Optional[list[Any]] = None,
+    nullable_actions: Optional[set[str]] = None,
 ) -> pl.DataFrame:
     """Read, validate, column-filter, and row-limit one input file."""
     logger.info(f"Reading data from '{data_path}'...")
@@ -2782,7 +2835,17 @@ def _load_and_preprocess_data(
     if mask_column is not None and mask_column not in data.columns:
         raise ValueError(f"mask_column '{mask_column}' not found in {data_path}")
 
-    if data.null_count().sum().sum_horizontal().item() != 0:
+    null_check = data.with_columns(
+        pl.when(pl.col("itemPosition") == 0)
+        .then(False)
+        .otherwise(pl.col(name).is_null())
+        .alias(name)
+        for name in (nullable_actions or set()) & set(data.columns)
+    )
+    if null_check.null_count().sum_horizontal().item() or any(
+        null_check[name].any()
+        for name in (nullable_actions or set()) & set(data.columns)
+    ):
         raise ValueError(f"NaN or null values not accepted: {data.null_count()}")
 
     if selected_columns:
@@ -2928,6 +2991,7 @@ def _process_batches_multiple_files_inner(
                 with_domain_record(
                     data, features.data_columns, DOMAIN_OBSERVATIONS, config.mask_column
                 ),
+                config.mask_column,
             )
             data = features.transform(
                 data,

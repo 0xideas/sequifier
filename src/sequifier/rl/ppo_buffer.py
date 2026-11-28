@@ -15,7 +15,7 @@ from sequifier.rl.window_storage import collated_windows
 @dataclass(frozen=True)
 class PPODecision:
     frame: int
-    successor: int | None
+    successor: int
     action: int | dict
     domain_action: str | float | int | dict
     old_log_probability: float
@@ -26,7 +26,6 @@ class PPODecision:
     successor_value: float
     terminated: bool
     truncated: bool
-    bootstrap: bool
     episode_id: str
     step_id: int
     policy_version: int
@@ -125,7 +124,7 @@ def compute_gae(decisions, gamma, gae_lambda, normalize):
         delta = (
             torch.tensor(step.reward, dtype=torch.float32)
             + gamma
-            * float(step.bootstrap)
+            * float(not step.terminated)
             * torch.tensor(step.successor_value, dtype=torch.float32)
             - torch.tensor(step.old_value, dtype=torch.float32)
         )

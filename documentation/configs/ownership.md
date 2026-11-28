@@ -70,10 +70,11 @@ Evaluation owns its episode seeds, monitor and cadence.
 
 ## Run settings
 
-`run.execution.device` applies throughout training. Supervised phases consume
-`run.execution.supervised` for distribution, precision, compilation, data
-loading and concatenation limits. Distribution selects `local`, `ddp` or
-`fsdp`. FSDP also requires `cpu_offload`. Mixed plans use local execution.
+`run.execution.device`, `run.execution.distribution`, and
+`run.execution.precision` apply throughout training. Distribution selects
+`local`, `ddp` or `fsdp`. FSDP also requires `cpu_offload`.
+Supervised phases consume `run.execution.supervised` for compilation, data
+loading and concatenation limits. See the [training precision reference](train.md#training-precision).
 Policy phases select `none` (the default), `inner`, or `outer` with
 `run.execution.policy.compilation.torch_compile`.
 Offline policy phases consume `run.execution.offline.episode_cache_size`.

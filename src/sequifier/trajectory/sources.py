@@ -10,7 +10,6 @@ from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
 from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import fingerprint
-from sequifier.trajectory.store import load_trajectory
 
 if TYPE_CHECKING:
     from sequifier.io.images import ImageStore
@@ -29,26 +28,17 @@ def _source_files(source, root, metadata, dependencies):
         if not isinstance(manifest, dict):
             raise ValueError("Source manifest must be a mapping")
         manifest_format = manifest.get("format")
-        if manifest_format == "sequifier.sequence-data":
-            require_contract_version(
-                manifest_format,
-                manifest.get("version"),
-                ContractVersions.SEQUENCE_DATA_MANIFEST,
-            )
-            entries_field = "shards"
-        elif manifest_format == "sequifier.trajectory-source":
-            if "version" in manifest:
-                raise ValueError(
-                    "Authored trajectory-source manifests must omit version"
-                )
-            entries_field = "episodes"
-        else:
+        if manifest_format != "sequifier.sequence-data":
             raise ValueError(f"Unsupported source manifest format {manifest_format!r}")
-        entries = manifest.get(entries_field)
+
+        require_contract_version(
+            manifest_format,
+            manifest.get("version"),
+            ContractVersions.SEQUENCE_DATA_MANIFEST,
+        )
+        entries = manifest.get("shards")
         if not isinstance(entries, list) or not entries:
-            raise ValueError(
-                f"source manifest requires a nonempty {entries_field} list"
-            )
+            raise ValueError("source manifest requires a nonempty shards list")
         paths = []
         for entry in entries:
             if (
@@ -58,15 +48,8 @@ def _source_files(source, root, metadata, dependencies):
             ):
                 raise ValueError("each manifest entry requires a nonempty path")
             path = manifest_path.parent / entry["path"]
-            if entries_field == "shards" and dependencies.add(path) != entry.get(
-                "sha256"
-            ):
+            if dependencies.add(path) != entry.get("sha256"):
                 raise ValueError(f"sequence shard checksum disagrees with {path}")
-            if (
-                "episode_id" in entry
-                and load_trajectory(path).episode_id != entry["episode_id"]
-            ):
-                raise ValueError(f"manifest episode ID disagrees with {path}")
             paths.append(path)
     if not paths or len({path.resolve() for path in paths}) != len(paths):
         raise ValueError("sources require nonempty, unique paths")
@@ -131,11 +114,16 @@ def resolve_source(
     # Keep manifest-relative locations for symlink revalidation.
     paths, manifest = _source_files(source, root, metadata, dependencies)
     kind = "prepared" if prepared or source.split is not None else source.format
-    if manifest is not None and manifest.get("format") == "sequifier.sequence-data":
+    if manifest is not None:
+        assert source.manifest_path is not None
         if source.encoding != "raw" or source.episode_end != "unknown":
             raise ValueError(
                 "committed sequence data already declares its encoding and boundaries"
             )
+        entry = manifest["sequence_metadata"]
+        static_path = (root / source.manifest_path).parent / entry["path"]
+        if dependencies.add(static_path) != entry["sha256"]:
+            raise ValueError("Sequence metadata checksum mismatch")
         kind = "table"
     if kind == "auto":
         suffixes = {path.resolve().suffix.lower() for path in paths}
@@ -149,7 +137,7 @@ def resolve_source(
                     )
                 kind = "prepared"
             else:
-                kind = "trajectory"
+                raise ValueError("Use manifest_path for a trajectory dataset")
         elif suffixes <= {".csv", ".parquet"}:
             kind = "table"
         elif suffixes == {".pt"}:

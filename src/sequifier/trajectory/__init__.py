@@ -1,6 +1,5 @@
-"""Versioned numeric trajectory artifacts."""
+"""Observation-row trajectory collection."""
 
-from sequifier.trajectory.schema import Trajectory, validate_trajectory
-from sequifier.trajectory.store import load_trajectory, save_trajectory
+from sequifier.trajectory.schema import Trajectory
 
-__all__ = ["Trajectory", "validate_trajectory", "load_trajectory", "save_trajectory"]
+__all__ = ["Trajectory"]

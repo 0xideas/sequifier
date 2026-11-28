@@ -68,6 +68,7 @@ def evaluation_fingerprint(config, phase_index):
         )
     options = config.execution.options
     execution = config.run.execution.supervised_settings
+    precision = config.run.execution.precision
     return fingerprint(
         {
             "model": config.model.model_dump(mode="json"),
@@ -92,8 +93,8 @@ def evaluation_fingerprint(config, phase_index):
             "batch_size": evaluation_batch_size(phase),
             "device": config.device,
             "layer_type_dtypes": options.layer_type_dtypes,
-            "layer_autocast": execution.precision.layer_autocast,
-            "float32_matmul_precision": execution.precision.float32_matmul_precision,
+            "layer_autocast": precision.layer_autocast,
+            "float32_matmul_precision": precision.float32_matmul_precision,
             "data_parallelism": execution.distribution.strategy,
             "world_size": execution.distribution.world_size,
             "num_workers": execution.data_loading.num_workers,

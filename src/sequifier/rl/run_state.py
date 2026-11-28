@@ -2,10 +2,11 @@
 
 import math
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Callable, Generic, TypedDict, TypeVar
 
 import torch
+from torch.distributed.tensor import DTensor
 
 from sequifier.artifacts.model_artifact import ModelExecutionConfig
 from sequifier.artifacts.reports import HandoffCandidate, PhaseResult
@@ -15,10 +16,20 @@ from sequifier.fingerprints import fingerprint
 from sequifier.rl.compilation import compile_critics
 from sequifier.rl.phase_optimization import PhaseOptimization, PhaseRoles
 from sequifier.rl.policy import Policy
+from sequifier.rl.role_execution import ActionForward, InferenceRounds
+from sequifier.rl.selection import PolicyCandidate
 from sequifier.rl.telemetry import TelemetryJournal
-from sequifier.runtime.plan import metric_improved, stop_scope
+from sequifier.runtime.plan import cadence_due, stop_scope, timed_checkpoints_due
+from sequifier.runtime.precision import PrecisionPolicy
+from sequifier.runtime.pruning import pruning_requested
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 from sequifier.runtime.stopping import StoppingState
+from sequifier.training.distributed_strategy import (
+    DistributedStrategy,
+    FullyShardedStrategy,
+    LocalStrategy,
+    on_writer,
+)
 
 if TYPE_CHECKING:
     from sequifier.rl.metrics import PolicyMetrics
@@ -26,13 +37,6 @@ if TYPE_CHECKING:
 
 PhaseType = TypeVar("PhaseType", bound=PhaseConfig)
 DataType = TypeVar("DataType")
-
-
-def clone_weights(module):
-    return {
-        name: tensor.detach().cpu().clone()
-        for name, tensor in module.state_dict().items()
-    }
 
 
 def require_equal(expected, actual, field):
@@ -92,6 +96,7 @@ class PhaseExecution:
     weights: dict[str, torch.Tensor]
     result: PhaseResult
     continuation: OptimizerContinuation | None
+    best: PolicyCandidate
 
 
 @dataclass(frozen=True)
@@ -126,59 +131,17 @@ class PhaseContext(Generic[PhaseType, DataType]):
     optimization: PhaseOptimization
     telemetry: TelemetryJournal
     adapter_contract: dict
+    precision: PrecisionPolicy
     metrics: "PolicyMetrics | None" = None
     continuation: OptimizerContinuation | None = None
     preserve_optimizer: bool = False
     global_step_offset: int = 0
+    strategy: DistributedStrategy = field(default_factory=LocalStrategy)
+    incoming_best: PolicyCandidate = field(default_factory=PolicyCandidate)
 
     @property
     def index(self):
         return self.identity.index
-
-
-class Selection:
-    """Strict comparisons retain the earliest finite best on ties."""
-
-    def __init__(self, phase, monitor, direction, state=None):
-        self.phase, self.monitor, self.direction = phase, monitor, direction
-        self.best = HandoffCandidate(**state["best"]) if state else HandoffCandidate()
-        self.last_metric = state["last_metric"] if state else None
-
-    def observe(self, actor, metric, transaction):
-        if metric is not None and not math.isfinite(metric):
-            raise ValueError(f"non-finite selection metric {self.monitor}")
-        self.last_metric = metric
-        if metric is None:
-            return
-        if metric_improved(metric, self.best.metric, self.direction):
-            self.best = HandoffCandidate(
-                float(metric), transaction, clone_weights(actor.network)
-            )
-
-    def state_dict(self):
-        return {"best": vars(self.best), "last_metric": self.last_metric}
-
-    def finish(self, context, transaction: int, clocks, provenance, scope):
-        actor = context.actor.eval()
-        selected = self.best.select(
-            self.phase,
-            lambda: HandoffCandidate(
-                self.last_metric, transaction, clone_weights(actor.network)
-            ),
-        )
-        weights = selected.require_weights()
-        if self.phase.handoff == "best":
-            actor.network.load_state_dict(weights, strict=True)
-        result = PhaseResult.from_phase(
-            context.index,
-            self.phase,
-            self.phase.evaluation.monitor,
-            stop_scope=scope,
-            selection=selected,
-            clocks=clocks,
-            provenance=provenance,
-        )
-        return actor, weights, result
 
 
 @dataclass(frozen=True)
@@ -195,6 +158,9 @@ class PhaseSession:
 
     def __init__(self, context):
         self.context = context
+        self.strategy = context.strategy
+        self.rounds = InferenceRounds(self.strategy, context.precision)
+        self.collection_seconds = self.update_seconds = self.checkpoint_seconds = 0.0
         roles = PhaseRoles.build(
             context.actor, context.phase, restoring=context.resume_state is not None
         )
@@ -202,23 +168,48 @@ class PhaseSession:
         self.modules = roles.trainable
         self.networks = {**self.modules, **roles.frozen}
         self.mask_ids = context.optimization.masks
-        self.configs = context.optimization.configs
-        self.optimization = context.optimization.build(roles)
-        if context.phase.optimizer_state == "continue" and context.resume_state is None:
-            continuation = context.continuation
-            if continuation is None:
+        context.optimization.apply_masks(roles)
+        saved = context.resume_state
+        field = "phase"
+        if saved is None and context.phase.optimizer_state == "continue":
+            saved = context.continuation
+            field = "optimization"
+            if saved is None:
                 raise ValueError(
                     "continued phase requires the preceding optimizer state"
                 )
             require_equal(
-                context.phase.algorithm,
-                continuation["algorithm"],
-                "optimization.algorithm",
+                context.phase.algorithm, saved["algorithm"], "optimization.algorithm"
             )
-            self._restore_networks_and_optimizers(continuation, "optimization")
-        self.steps = dict.fromkeys(self.modules, 0)
+        if saved is not None:
+            require_equal(
+                sorted(self.networks), sorted(saved["networks"]), f"{field}.networks"
+            )
+            for role, module in self.networks.items():
+                module.load_state_dict(saved["networks"][role])
+        self.calls = {}
+        for role, module in self.networks.items():
+            entry = ActionForward(context.actor) if role == "actor" else module
+            prepare = (
+                self.strategy.prepare_network
+                if role in self.modules
+                else self.strategy.prepare_frozen
+            )
+            self.calls[role] = self.rounds.bind(role, prepare(entry))
+        context.actor.role_call = self.calls["actor"]
+        if context.reference is not None:
+            reference = self.strategy.prepare_frozen(ActionForward(context.reference))
+            context.reference.role_call = self.rounds.bind("reference", reference)
+        self.optimization = context.optimization.optimizers(roles)
+        if saved is not None:
+            self._restore_optimizers(saved, field)
         self.sampler = torch.Generator().manual_seed(context.identity.sampling_seed)
         self.state = context.resume_state or {}
+        streams = self.state.get("rank_states")
+        if streams is not None:
+            if len(streams) != self.strategy.world_size:
+                raise ValueError("Policy checkpoint requires its original world size")
+            self.state = {**self.state, **streams[self.strategy.rank]}
         self.epoch: int | None = None
         self.transaction = self.state.get("transaction", 0)
         self.iteration_budget = context.phase.iteration_budget(
@@ -230,13 +221,15 @@ class PhaseSession:
         self.last_checkpoint_time = time.monotonic()
         self.last_snapshot_time = self.last_checkpoint_time
         self.telemetry = context.telemetry
-        selection = context.phase.evaluation.monitor
-        monitor = selection.metric
-        self.selection = Selection(
-            context.phase, monitor, selection.direction, self.state.get("selection")
+        self.monitor = context.phase.evaluation.monitor
+        selection = self.state["selection"] if self.state else {}
+        self.best = (
+            PolicyCandidate(**selection["best"])
+            if self.state
+            else context.incoming_best
         )
+        self.last_metric = selection.get("last_metric")
         if self.state:
-            self._restore_networks_and_optimizers(self.state, "phase")
             for role, saved in self.state["optimization"].items():
                 steps = saved["steps"]
                 budget = context.optimization.step_budget
@@ -248,14 +241,11 @@ class PhaseSession:
                     raise ValueError(
                         f"{role} optimizer clock exceeds committed progress/budget"
                     )
-                self.steps[role] = steps
+                self.optimization[role].optimizer_step = steps
             self.sampler.set_state(self.state["sampler"])
             self.restore_random()
 
-    def _restore_networks_and_optimizers(self, state, field):
-        require_equal(
-            sorted(self.networks), sorted(state["networks"]), f"{field}.networks"
-        )
+    def _restore_optimizers(self, state, field):
         require_equal(
             sorted(self.mask_ids),
             sorted(state["trainable_parameters"]),
@@ -266,18 +256,23 @@ class PhaseSession:
             sorted(state["optimization"]),
             f"{field}.optimization",
         )
-        for role, module in self.networks.items():
-            module.load_state_dict(state["networks"][role], strict=True)
-            if role in self.optimization:
-                require_equal(
-                    self.mask_ids[role],
-                    state["trainable_parameters"][role],
-                    f"{field}.trainability.{role}",
-                )
-                optimizer, scheduler = self.optimization[role]
-                saved = state["optimization"][role]
-                optimizer.load_state_dict(saved["optimizer"])
-                scheduler.load_state_dict(saved["scheduler"])
+        for role, update in self.optimization.items():
+            require_equal(
+                self.mask_ids[role],
+                state["trainable_parameters"][role],
+                f"{field}.trainability.{role}",
+            )
+            saved = state["optimization"][role]
+            self.strategy.restore_optimizer_state(
+                self.modules[role], update.optimizer, saved["optimizer"]
+            )
+            update.scheduler.load_state_dict(saved["scheduler"])
+
+    @property
+    def steps(self):
+        return {
+            role: update.optimizer_step for role, update in self.optimization.items()
+        }
 
     @property
     def global_step(self):
@@ -288,31 +283,41 @@ class PhaseSession:
             restore_rng_state(self.context.actor.device, self.state["random"])
 
     def zero_grad(self):
-        for optimizer, _ in self.optimization.values():
-            optimizer.zero_grad(set_to_none=True)
+        for update in self.optimization.values():
+            update.zero_grad()
 
     def step(self):
         # Check every gradient before mutating any participating network.
         norms = {
             role: float(
-                torch.nn.utils.clip_grad_norm_(
-                    module.parameters(),
-                    self.configs[role].gradient_clip_norm or float("inf"),
-                    error_if_nonfinite=True,
+                self.strategy.clip_gradients(
+                    self.modules[role],
+                    update.gradient_policy.clip_norm or float("inf"),
                 )
             )
-            for role, module in self.modules.items()
+            for role, update in self.optimization.items()
         }
-        for role, (optimizer, scheduler) in self.optimization.items():
-            optimizer.step()
-            if any(
-                not torch.isfinite(p).all() for p in self.modules[role].parameters()
-            ):
+        if self.strategy.sum(
+            int(any(not math.isfinite(norm) for norm in norms.values()))
+        ):
+            raise ValueError("Non-finite policy gradients")
+        for update in self.optimization.values():
+            update.apply_optimizer()
+        for role, module in self.modules.items():
+            finite = all(
+                torch.isfinite(
+                    parameter.to_local()
+                    if isinstance(parameter, DTensor)
+                    else parameter
+                ).all()
+                for parameter in module.parameters()
+            )
+            if self.strategy.sum(int(not finite)):
                 raise ValueError(
                     f"{role} optimizer produced non-finite parameters; transaction was not committed"
                 )
-            scheduler.step()
-            self.steps[role] += 1
+        for update in self.optimization.values():
+            update.record_optimizer_step()
         self.zero_grad()
         return norms
 
@@ -326,25 +331,21 @@ class PhaseSession:
     def transaction_schedule(self, final):
         phase = self.context.phase
         now = time.monotonic()
-        snapshot_minutes = phase.checkpoints.snapshot_interval_minutes
-        latest_minutes = (
-            self.context.run.parent.run.recovery.latest_checkpoint_interval_minutes
+        timed, latest = timed_checkpoints_due(
+            self.strategy,
+            now=now,
+            snapshot_minutes=phase.checkpoints.snapshot_interval_minutes,
+            latest_minutes=(
+                self.context.run.parent.run.recovery.latest_checkpoint_interval_minutes
+            ),
+            last_snapshot=self.last_snapshot_time,
+            last_latest=self.last_checkpoint_time,
         )
-        timed = (
-            snapshot_minutes is not None
-            and now - self.last_snapshot_time >= snapshot_minutes * 60
+        retain = timed or cadence_due(
+            self.transaction, phase.checkpoint_interval_iterations, final=final
         )
-        latest = (
-            latest_minutes is not None
-            and now - self.last_checkpoint_time >= latest_minutes * 60
-        )
-        retain = (
-            final
-            or timed
-            or self.transaction % phase.checkpoint_interval_iterations == 0
-        )
-        scheduled_evaluation = (
-            final or self.transaction % phase.evaluation_interval_iterations == 0
+        scheduled_evaluation = cadence_due(
+            self.transaction, phase.evaluation_interval_iterations, final=final
         )
         self._count_stopping = scheduled_evaluation
         return TransactionSchedule(
@@ -357,21 +358,32 @@ class PhaseSession:
 
     def observe(self, metric, *, elapsed_seconds, **record):
         if self.context.metrics is not None:
-            values = {**record, self.selection.monitor: metric}
+            values = {**record, self.monitor.metric: metric}
             self.context.metrics.record(
                 self,
                 values,
                 elapsed_seconds=elapsed_seconds,
                 validation=True,
-                primary=self.selection.monitor,
+                primary=self.monitor.metric,
                 initial=self.transaction == 0,
             )
-        self.selection.observe(self.context.actor, metric, self.transaction)
+        metric = self.strategy.broadcast(metric)
+        if metric is not None and not math.isfinite(metric):
+            raise ValueError(f"non-finite selection metric {self.monitor.metric}")
+        self.last_metric = metric
+        best = self.best.observe(
+            metric,
+            self.transaction,
+            self.monitor.direction,
+            lambda: self.strategy.capture_model_state(self.context.actor.network),
+        )
+        if best is not self.best:
+            self.best = PolicyCandidate(**vars(best), phase_index=self.context.index)
         if self._count_stopping:
             self.stopping.observe(
                 self.context.phase.stopping,
                 metric,
-                self.selection.direction,
+                self.monitor.direction,
                 self.transaction,
             )
 
@@ -388,8 +400,10 @@ class PhaseSession:
 
     def evaluate_validation(self, evaluator, **record):
         started = time.monotonic()
-        values = evaluator()
-        key = self.selection.monitor.removeprefix("validation_")
+        with self.rounds.scope():
+            values = evaluator()
+        values = {key: self.strategy.sum(value) for key, value in values.items()}
+        key = self.monitor.metric.removeprefix("validation_")
         self.record_evaluation(
             values[key],
             elapsed_seconds=time.monotonic() - started,
@@ -401,39 +415,28 @@ class PhaseSession:
         self,
         *,
         final,
-        training,
+        training: dict | Callable[[], dict],
         evaluate,
         checkpoint=None,
+        online=False,
     ):
-        """Commit an offline update after all participating optimizers have stepped."""
         self.transaction += 1
-        self.record_training(
-            final=final,
-            elapsed_seconds=time.monotonic() - self.iteration_started,
-            **training,
-        )
-        schedule = self.transaction_schedule(final)
-        if schedule.evaluate:
-            evaluate()
-        self.checkpoint(schedule, checkpoint)
-        self.iteration_started = time.monotonic()
-
-    def complete_online_update(
-        self, *, final, training: dict | Callable[[], dict], evaluate, checkpoint
-    ):
-        """Evaluate the updated policy before recording collection metrics and recovery."""
-        self.transaction += 1
-        elapsed_seconds = time.monotonic() - self.iteration_started
-        schedule = self.transaction_schedule(final)
-        if schedule.evaluate:
-            evaluate()
+        elapsed = time.monotonic() - self.iteration_started
+        schedule = None
+        if online:
+            schedule = self.transaction_schedule(final)
+            if schedule.evaluate:
+                evaluate()
+        else:
+            self.update_seconds += elapsed
         metrics = training() if callable(training) else training
-        self.record_training(
-            final=final,
-            elapsed_seconds=elapsed_seconds,
-            transaction=self.transaction,
-            **metrics,
-        )
+        if online:
+            metrics = {**metrics, "transaction": self.transaction}
+        self.record_training(final=final, elapsed_seconds=elapsed, **metrics)
+        if schedule is None:
+            schedule = self.transaction_schedule(final)
+            if schedule.evaluate:
+                evaluate()
         self.checkpoint(schedule, checkpoint)
         self.iteration_started = time.monotonic()
 
@@ -449,14 +452,20 @@ class PhaseSession:
         from sequifier.rl.ppo_evaluation import evaluate_policy
 
         phase = self.context.phase
-        result = evaluate_policy(
-            self.context.actor,
-            phase.evaluation,
-            forbidden_adapter=adapter,
-            expected_identity=self.context.adapter_contract[
-                f"{self.context.index}.evaluation"
-            ],
-        )
+        with self.rounds.scope(defer_deadline=True):
+            result = (
+                evaluate_policy(
+                    self.context.actor,
+                    phase.evaluation,
+                    forbidden_adapter=adapter,
+                    expected_identity=self.context.adapter_contract[
+                        f"{self.context.index}.evaluation"
+                    ],
+                )
+                if self.strategy.rank == 0
+                else None
+            )
+        result = self.strategy.broadcast(result)
         if adjust is not None:
             adjust(result, phase)
         record = {**result, "transaction": self.transaction, **progress}
@@ -465,46 +474,72 @@ class PhaseSession:
         )
         self.telemetry.append("evaluations", record)
 
+    def partition(self, indices, offset=0):
+        """A valid forward on an empty rank contributes zero to the global sum."""
+        first = (self.strategy.rank - offset) % self.strategy.world_size
+        local = indices[first :: self.strategy.world_size]
+        return (local, self.strategy.world_size) if len(local) else (indices[:1], 0)
+
     def optimization_state(self, *, include_steps=False):
         return {
             role: {
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
-                **({"steps": self.steps[role]} if include_steps else {}),
+                "optimizer": self.strategy.capture_optimizer_state(
+                    self.modules[role], update.optimizer
+                ),
+                "scheduler": update.scheduler.state_dict(),
+                **({"steps": update.optimizer_step} if include_steps else {}),
             }
-            for role, (optimizer, scheduler) in self.optimization.items()
+            for role, update in self.optimization.items()
         }
 
     def checkpoint(self, schedule, payload=None):
         # A scheduled evaluation may just have triggered early stopping.
-        if not (schedule.checkpoint or self.stopping.triggered):
+        prune = pruning_requested(self.context.run, self.strategy)
+        if not (schedule.checkpoint or self.stopping.triggered or prune):
             return
+        started = time.monotonic()
         extra = payload() if payload is not None else {}
+        random = capture_rng_state(self.context.actor.device)
+        local = {
+            key: extra[key]
+            for key in ("collector", "environment_state")
+            if key in extra
+        }
+        rank_states = (
+            self.strategy.gather_for_writer({**local, "random": random})
+            if self.strategy.world_size > 1
+            else None
+        )
         self.context.commit(
             {
                 **extra,
+                **({"rank_states": rank_states} if rank_states is not None else {}),
                 "version": ContractVersions.POLICY_PHASE_STATE,
                 "networks": {
-                    name: clone_weights(module)
+                    name: self.strategy.capture_model_state(module)
                     for name, module in self.networks.items()
                 },
                 "optimization": self.optimization_state(include_steps=True),
                 "sampler": self.sampler.get_state(),
-                "selection": self.selection.state_dict(),
+                "selection": {"best": vars(self.best), "last_metric": self.last_metric},
                 "stopping": asdict(self.stopping),
                 "initial_evaluated": self.initial_evaluated,
                 "trainable_parameters": self.mask_ids,
                 "transaction": self.transaction,
                 "telemetry_position": self.telemetry.commit(),
-                "reference": clone_weights(self.context.reference.network)
+                "reference": self.strategy.capture_model_state(
+                    self.context.reference.network
+                )
                 if self.context.reference is not None
                 else None,
                 "reference_identity": self.context.reference_identity,
-                "random": capture_rng_state(self.context.actor.device),
+                "random": random,
             }
         )
 
-        if schedule.retain_snapshot or self.stopping.triggered:
+        if self.strategy.rank == 0 and (
+            schedule.retain_snapshot or self.stopping.triggered
+        ):
             from shutil import copyfile
 
             from sequifier.artifacts.phase import PhaseArtifacts
@@ -520,39 +555,100 @@ class PhaseSession:
             )
             with atomic_path(destination, durable=True) as temporary:
                 copyfile(self.context.run.checkpoint_path, temporary)
+        self.checkpoint_seconds += time.monotonic() - started
         self.last_checkpoint_time = schedule.timestamp
         if schedule.timed_snapshot:
             self.last_snapshot_time = schedule.timestamp
+        if prune:
+            raise SystemExit(143)
 
     def finish(self, clocks, provenance):
         if self.context.metrics is not None:
             self.context.metrics.flush(self)
         clocks = {**clocks, "global_step": self.global_step}
         scope = stop_scope(self.context.phase.stopping, self.stopping.triggered)
-        actor, weights, result = self.selection.finish(
-            self.context,
-            self.transaction,
-            clocks,
-            {
+        if self.strategy.world_size > 1:
+            provenance = {
                 **provenance,
-                "model_interface": self.context.actor.interface_name,
-                "trainable_parameters": self.mask_ids,
-                "resolved_seeds": {
-                    "run": self.context.identity.run_seed,
-                    "phase_sampling": self.context.identity.sampling_seed,
+                "session_seconds_by_rank": self.strategy.gather_for_writer(
+                    {
+                        "collection": self.collection_seconds,
+                        "update": self.update_seconds,
+                        "checkpoint": self.checkpoint_seconds,
+                        "scoring_forward_host": self.rounds.scoring_seconds,
+                    }
+                ),
+            }
+        phase = self.context.phase
+        actor = self.context.actor.eval()
+        selected = self.best.select(
+            phase,
+            lambda: HandoffCandidate(
+                self.last_metric,
+                self.transaction,
+                self.strategy.capture_model_state(actor.network),
+            ),
+        )
+        weights = selected.require_weights()
+        if phase.handoff == "best" and not isinstance(
+            self.strategy, FullyShardedStrategy
+        ):
+            actor.network.load_state_dict(weights, strict=True)
+        result = on_writer(
+            self.strategy,
+            lambda: PhaseResult.from_phase(
+                self.context.index,
+                phase,
+                self.monitor,
+                stop_scope=scope,
+                selection=selected,
+                clocks=clocks,
+                provenance={
+                    **provenance,
+                    "model_interface": actor.interface_name,
+                    "selected_phase_index": (
+                        self.best.phase_index
+                        if phase.handoff == "best"
+                        else self.context.index
+                    ),
+                    "trainable_parameters": self.mask_ids,
+                    "resolved_seeds": {
+                        "run": self.context.identity.run_seed,
+                        "phase_sampling": self.context.identity.sampling_seed,
+                    },
                 },
-            },
-            scope,
+            ),
         )
         continuation: OptimizerContinuation | None = None
         if self.context.preserve_optimizer and scope != "end_plan":
             continuation = {
                 "algorithm": self.context.phase.algorithm,
                 "networks": {
-                    name: weights if name == "actor" else clone_weights(module)
+                    name: weights
+                    if name == "actor"
+                    else self.strategy.capture_model_state(module)
                     for name, module in self.networks.items()
                 },
                 "optimization": self.optimization_state(),
                 "trainable_parameters": self.mask_ids,
             }
-        return PhaseExecution(actor, weights, result, continuation)
+        self.rounds.modules.clear()
+        actor.role_call = None
+        if self.context.reference is not None:
+            self.context.reference.role_call = None
+        if isinstance(self.strategy, FullyShardedStrategy):
+            # Leave FSDP wrappers and phase-owned optimizers behind at the handoff.
+            from sequifier.rl.preparation import build_actor
+
+            random = capture_rng_state(self.strategy.device)
+            sharded_actor = actor
+            actor = build_actor(
+                self.context.run, device=torch.device("cpu"), initialize=False
+            )
+            actor.transfer_report = sharded_actor.transfer_report
+            actor.ppo_policy_version = sharded_actor.ppo_policy_version
+            actor.grpo_policy_version = sharded_actor.grpo_policy_version
+            if self.strategy.rank == 0:
+                actor.network.load_state_dict(weights)
+            restore_rng_state(self.strategy.device, random)
+        return PhaseExecution(actor, weights, result, continuation, self.best)

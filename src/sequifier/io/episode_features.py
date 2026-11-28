@@ -42,14 +42,12 @@ class EpisodeFeatures:
     def values(self, episode, length, column):
         if column in episode.static_inputs:
             return [episode.static_inputs[column]]
-        values = episode.observations[column][:length]
-        if any(episode.observation_masks[:length]):
+        # A prefix of N decisions includes the observation reached by decision N.
+        values = episode.observations[column][: length + 1]
+        masks = episode.observation_masks[: length + 1]
+        if any(masks):
             return [
-                value
-                for value, masked in zip(
-                    values, episode.observation_masks[:length], strict=True
-                )
-                if not masked
+                value for value, masked in zip(values, masks, strict=True) if not masked
             ]
         return values
 
@@ -92,7 +90,7 @@ class EpisodeFeatures:
         # Validate held-out values against the fixed training codec before updates.
         for episode, length in zip(self.episodes, self.lengths):
             for column, values in episode.observations.items():
-                for value in values[:length]:
+                for value in values[: length + 1]:
                     encode_feature(value, column, config)
             for column, value in episode.static_inputs.items():
                 encode_feature(value, column, config)
@@ -115,7 +113,7 @@ class EpisodeFeatures:
                     checked_policy_features(inputs, interface)
                 except ValueError as error:
                     raise ValueError(
-                        f"episode {episode.episode_id}, item {episode.item_positions[step]}: {error}"
+                        f"episode {episode.episode_id}, item {episode.first_position + step}: {error}"
                     ) from error
         self._validated_statistics = deepcopy(signature)
 

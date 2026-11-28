@@ -11,6 +11,11 @@ adapter, and a decoder. Phases own batching, learning, trainability and lifecycl
 sequifier train --config-path configs/train.yaml
 ```
 
+## Training precision
+
+`run.execution.precision` controls precision across supervised and policy
+phases. See [autocast and matrix precision](../training/resource-controls.md#autocast-and-matrix-precision).
+
 ## Minimal named configuration
 
 This example trains a causal model for one epoch on a preprocessed categorical
@@ -164,13 +169,12 @@ run:
     enforce_determinism: false
   execution:
     device: cuda
+    distribution:
+      strategy: local
     supervised:
-      distribution:
-        strategy: local
       data_loading: {}
       compilation:
         torch_compile: outer
-      precision: {}
   recovery: {}
   logging: {}
   outputs: {}
@@ -321,6 +325,10 @@ consecutive positions for inference; it does not make one position predict
 several future tokens as in LLM multi-token prediction. Training currently
 computes loss over all valid decoded positions, regardless of
 `prediction_length`. Forward prediction phases require causal attention to keep future inputs out of these predictions.
+
+The policy objective requires `target_offset: 1`. A stored window gathers the
+action from the next row. An episode-based learner receives that same action
+already paired with its decision history.
 
 To train a next-occurrence objective, declare the trigger
 in each supervised phase's `learning` settings:
@@ -480,13 +488,12 @@ run:
     enforce_determinism: false
   execution:
     device: cpu
+    distribution:
+      strategy: local
     supervised:
-      distribution:
-        strategy: local
       data_loading: {}
       compilation:
         torch_compile: none
-      precision: {}
   recovery: {}
   logging: {}
   outputs: {}
@@ -622,6 +629,8 @@ freezing and training duration do not affect compatibility. BERT phases have
 different evaluation-mask seeds and therefore start separate histories. Set
 `model_selection.scope: phase` to explicitly start a new history; the default is
 `compatible_phases`. Stopping patience remains phase-local.
+Policy phases use the same scope settings with their own
+[evaluation compatibility rules](../policy-learning.md#authoring-and-optimization).
 Best handoff, stopping and plateau
 scheduling require an evaluation monitor. See [ownership](ownership.md#phase-settings).
 

@@ -19,24 +19,23 @@ def _decide(actor, reference, cursors):
     with collated_windows(
         (cursor.inputs for cursor in cursors), actor.device, borrowed=True
     ) as inputs:
-        distribution = actor.distribution(inputs)
         generators = [cursor.generator for cursor in cursors]
         # Decode and validate distributions across the full environment batch.
         # Only random draws use individual generators; no per-row decoder calls.
-        selected = distribution.select_and_score(False, generators)
+        record, log_prob, _ = actor.action_scores(inputs, generator=generators)
         scores = (
             torch.stack(
                 [
-                    selected.log_prob,
-                    reference.evaluate_actions(inputs, selected.decision),
+                    log_prob,
+                    reference.evaluate_actions(inputs, record),
                 ],
                 dim=1,
             )
             .cpu()
             .tolist()
         )
-        del inputs, distribution
-    host_decision = selected.decision.cpu()
+        del inputs
+    host_decision = actor.action_plan.from_record(record).cpu()
     host_actions = actor.action_plan.to_record(host_decision)
     decisions = []
     for index, (old, ref) in enumerate(scores):

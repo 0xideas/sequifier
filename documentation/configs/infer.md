@@ -46,8 +46,7 @@ sequifier infer --config-path configs/infer.yaml
 > `run.execution.device: cuda` alone does not enable GPU inference. See the
 > [ONNX Runtime CUDA compatibility guide](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html).
 
-PT is the default training export. Supervised runs may explicitly request
-ONNX for deployment-oriented inference.
+PT is the default training export. Supervised and policy runs can also export ONNX graphs.
 Exports embed their execution contract. Select a training route when providing
 model configuration through a training config:
 
@@ -293,7 +292,7 @@ ORT installation. Outputs stay indexed by outer item coordinates.
 ## Policy model interfaces
 
 `task` explicitly selects the operation. `task: policy` requires one
-portable PT model or executable run checkpoint with a policy-bound interface. `task: forecast` requests ordinary predictions,
+policy ONNX graph, portable PT model, or executable run checkpoint with a policy-bound interface. `task: forecast` requests ordinary predictions,
 including from a policy-bound interface with a supported forecast contract.
 `task: embedding` extracts representations. Select `artifact.interface` when ambiguous.
 The artifact validates task support; it never chooses the operation implicitly.
@@ -309,7 +308,7 @@ selection, read/write formats, device, seed, `enforce_determinism` and batch siz
 | `action_selection` | `deterministic`; sequential mode/location choices, or `stochastic` sampling |
 | `desired_return` | null; fixed budget for return-conditioned policies |
 | `input.desired_return_column` | `desired_return`; per-row budget when no fixed budget is supplied |
-| `input.previous_action_columns` | {}; recorded lagged-action column mappings for fragments |
+| `input.action_columns` | {}; recorded incoming-action column mappings |
 | `output.output_probabilities` | false; include joint log probability and write separate target-specific categorical probability files |
 | `rollout` | null; execute in an online policy environment instead of writing prediction rows |
 
@@ -318,13 +317,13 @@ Policy prediction and rollout group rows by `sequenceId` and order them by
 be non-null integers. If your source uses `episode` and `step` for these roles,
 map them to `sequenceId` and `itemPosition` before preprocessing.
 Policy predictions and rollouts read available preceding context at split boundaries.
-Only split-owned decisions get output rows or seed indices. Use
+The split owns a prediction by its target row and a rollout seed by its observation row. Use
 `rollout.seed_history: current` for a fresh one-observation reset.
 
 Optional assertions `assertions.input_columns`, `assertions.static_columns`,
 `assertions.target_columns`, `assertions.column_data_types`, `assertions.target_column_types`, `assertions.training_objective`,
 `assertions.context_length`, `assertions.target_offset`, `assertions.prediction_length` and `assertions.decoder_support_length` must
-match the selected artifact. Unknown/cross-route options fail even at default values.
+match the selected policy contract. For policy prediction, the action target offset is always 1. Unknown/cross-route options fail even at default values.
 Policy rejects external per-column sampling, dropout, category decoding,
 autoregression and `generation_steps`. Policy accepts `input.training_route` to select a
 prepared dataset view. For an in-memory training partition, select `input.layout: raw` and supply the inference table and its original preprocessing metadata.
@@ -335,8 +334,7 @@ Policy rollout requires an environment and `max_steps`. Forecast rollout also
 requires bindings for temporal inputs. Both accept `rollout.seed` with
 `sequenceId` and `itemPosition`. As an alternative, policies accept a zero-based
 `seed_row_index` and forecasts accept a zero-based `seed_window_index`.
-Set `rollout.output.manifest_path` to publish sequence data,
-`rollout.trajectory_path` to publish a trajectory JSON, or both. The seed origin
+Set `rollout.output.manifest_path` to publish the trajectory dataset. The seed origin
 records the selected coordinates. [Rollout guide](../rollout.md)
 
 Execution determinism, action selection and seed are independent. A seeded
@@ -359,11 +357,16 @@ input:
 
 With a named split, the metadata selects the physical input. An indexed view
 supplies its own fitted metadata for artifact validation. A policy prediction on
-a within-sequence split uses the stored preceding action when available and
-writes one row per split-owned decision. A fragment without a stored predecessor
-can supply `input.previous_action_columns`. When supplied, these columns provide the
-lagged actions after episode position zero. A row with empty lag columns can use
-the preceding recorded action. At position zero the policy uses its initial feedback.
+a named split uses each covered target with an available predecessor. A policy
+decision from row 7 emits `decisionItemPosition=7`, `targetItemPosition=8`
+and `itemPosition=8`, matching a one-step forecast. Join predictions to recorded
+actions on `sequenceId` and `itemPosition`. Older policy prediction files used
+`itemPosition` for the decision row.
+A fresh prediction view can request the next action at every observation,
+including the final one. Its target coordinate can extend beyond the input.
+With ordinary input tables, use `input.action_columns` if the
+physical column names differ from the policy action names. Feedback at a decision
+uses the incoming action recorded alongside the observation at that position.
 
 To infer directly from fresh data in the original preprocessing input layout,
 use the training metadata config and select the raw input layout.
@@ -386,17 +389,14 @@ Both paths apply the same frozen maps, casting rules, and statistics. The
 prepared manifest carries a snapshot of the original metadata.
 Rollout manifests also work with `input.layout: raw` and the original metadata.
 Use `input.format: sequence` for a manifest without a `.json` suffix.
-Set `input.sequence_view: observations` to include recorded final successors.
+Every sequence includes its final observation.
 
 For policy prediction, the direct and prepared paths use the same categorical
 lookup and numeric normalization. An unseen category in an ordinary vocabulary
 maps to `[other]` (ID 1). When preparing a policy view explicitly, list recorded
 action columns used for lagged feedback in `passthrough_columns` to preserve
-their original values. Raw policy inference preserves named actions and the canonical
-`__executed_action` and `__previous_action` structs when feedback is used.
-Both routes preserve those structs automatically when reading a rollout manifest.
-For a standalone table, list the needed structs in `passthrough_columns` during
-explicit preparation. Both forecast and policy inference treat automatic-layout
+their original values. With a rollout manifest, policy inference uses the
+manifest's action column mapping to read the incoming action at the current position. Both forecast and policy inference treat automatic-layout
 tables as prepared windows. For fresh rows, use `input.layout: raw`, integer
 `sequenceId` and `itemPosition`, and the original metadata. For an actor trained
 directly on demonstrations, `sequifier preprocess` with `operation: export_metadata`

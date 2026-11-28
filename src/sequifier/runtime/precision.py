@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import torch
 
-from sequifier.config.ownership import SupervisedExecution
+from sequifier.config.ownership import ExecutionSettings
 
 
 @dataclass(frozen=True)
@@ -16,28 +16,20 @@ class PrecisionPolicy:
 
     @classmethod
     def from_settings(
-        cls, settings: SupervisedExecution, device: torch.device
+        cls, settings: ExecutionSettings, device: torch.device
     ) -> "PrecisionPolicy":
         precision = settings.precision
-        sharded = settings.distribution.strategy == "fsdp"
+        sharded = settings.distribution_settings.strategy == "fsdp"
         torch.set_float32_matmul_precision(precision.float32_matmul_precision)
         if not precision.layer_autocast:
             return cls(device.type, sharded=sharded)
         if not torch.amp.autocast_mode.is_autocast_available(device.type):
             raise ValueError(f"layer_autocast is unavailable on {device.type}")
-        configured = (precision.layer_type_dtypes or {}).get("linear")
-        dtype = {
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-        }.get(configured or "")
-        if dtype is None:
-            dtype = (
-                torch.bfloat16
-                if sharded or device.type == "mps"
-                else torch.get_autocast_dtype(device.type)
-            )
-        if dtype not in {torch.float16, torch.bfloat16}:
-            raise ValueError(f"layer_autocast requires FP16 or BF16, found {dtype}")
+        dtype = (
+            torch.float16
+            if (precision.layer_type_dtypes or {}).get("linear") == "float16"
+            else torch.bfloat16
+        )
         if device.type == "cuda":
             if not torch.cuda.is_available():
                 raise ValueError(

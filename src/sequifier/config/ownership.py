@@ -43,9 +43,9 @@ DistributionSettings = Annotated[
 
 
 class PrecisionSettings(Settings):
-    layer_type_dtypes: dict[str, str] | None = None
     layer_autocast: bool = False
     float32_matmul_precision: Literal["highest", "high", "medium"] = "highest"
+    layer_type_dtypes: dict[str, str] | None = None
 
 
 CompileMode = Literal["outer", "inner", "none"]
@@ -73,7 +73,6 @@ class DataLoadingSettings(Settings):
 
 class SupervisedExecution(Settings):
     distribution: DistributionSettings = Field(default_factory=LocalDistribution)
-    precision: PrecisionSettings = Field(default_factory=PrecisionSettings)
     compilation: CompilationSettings = Field(default_factory=CompilationSettings)
     data_loading: DataLoadingSettings = Field(default_factory=DataLoadingSettings)
     max_concat_tensors: ConcatLimit = DEFAULT_MAX_CONCAT_TENSORS
@@ -98,6 +97,31 @@ class ExecutionSettings(Settings):
     supervised: SupervisedExecution | None = None
     offline: OfflineExecution | None = None
     policy: PolicyExecution | None = None
+    distribution: DistributionSettings | None = None
+    precision: PrecisionSettings = Field(default_factory=PrecisionSettings)
+
+    @model_validator(mode="after")
+    def resolve_distribution(self):
+        if self.distribution is not None and self.supervised is not None:
+            supervised = self.supervised
+            if (
+                "distribution" in supervised.model_fields_set
+                and supervised.distribution != self.distribution
+            ):
+                raise ValueError("Conflicting run and supervised distribution settings")
+            self.supervised = SupervisedExecution.model_validate(
+                {
+                    **supervised.model_dump(exclude_unset=True),
+                    "distribution": self.distribution,
+                }
+            )
+        return self
+
+    @property
+    def distribution_settings(self):
+        if self.distribution is not None:
+            return self.distribution
+        return self.supervised.distribution if self.supervised else LocalDistribution()
 
     @property
     def policy_compile_mode(self) -> CompileMode:

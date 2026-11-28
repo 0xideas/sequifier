@@ -1,8 +1,6 @@
 """Inspectable forecast and policy collection records."""
 
-import json
-import math
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import (
     BaseModel,
@@ -15,10 +13,10 @@ from pydantic import (
     model_validator,
 )
 
+from sequifier.config.column_names import INCOMING_ACTION_PRESENT
 from sequifier.config.rollout_config import TrajectoryInputBinding
 from sequifier.fingerprints import fingerprint
 from sequifier.io.values import DomainValue
-from sequifier.trajectory.returns import remaining_return
 
 
 class Record(BaseModel):
@@ -30,9 +28,10 @@ class SeedHistory(Record):
     attention_valid_mask: list[bool]
     observation_mask: list[bool] = Field(default_factory=list)
     static_inputs: dict[str, JsonValue]
+    incoming_actions: list[dict[str, DomainValue] | None] | None = None
 
     @classmethod
-    def from_rows(cls, rows, columns, width, static, masks):
+    def from_rows(cls, rows, columns, width, static, masks, incoming_actions=None):
         padding = width - len(rows)
         if padding < 0:
             raise ValueError("Seed exceeds the model context length")
@@ -43,6 +42,16 @@ class SeedHistory(Record):
             attention_valid_mask=[False] * padding + [True] * len(rows),
             observation_mask=[False] * padding + list(masks),
             static_inputs=static,
+            incoming_actions=([None] * padding + incoming_actions)
+            if incoming_actions is not None
+            else None,
+        )
+
+    @property
+    def valid_actions(self):
+        count = sum(self.attention_valid_mask)
+        return (
+            self.incoming_actions[-count:] if self.incoming_actions else [None] * count
         )
 
     @model_validator(mode="after")
@@ -54,6 +63,10 @@ class SeedHistory(Record):
             or any(mask[i] and not mask[i + 1] for i in range(len(mask) - 1))
         ):
             raise ValueError("seed mask must be left padding followed by valid history")
+        if self.incoming_actions is not None and len(self.incoming_actions) != len(
+            mask
+        ):
+            raise ValueError("Incoming actions must align with seed observations")
         if "observation_mask" not in self.model_fields_set:
             self.observation_mask = [False] * len(mask)
         if len(self.observation_mask) != len(mask) or any(
@@ -72,245 +85,61 @@ class SeedHistory(Record):
         return self
 
 
-class Transition(Record):
-    episode_id: str
-    step_id: int = Field(ge=0)
+class Arrival(Record):
     observation: dict[str, JsonValue]
-    predictions: dict[str, DomainValue]
-    external_inputs: dict[str, JsonValue]
+    action: dict[str, DomainValue]
     reward: FiniteFloat
-    action_latents: dict[str, FiniteFloat] = Field(default_factory=dict)
-    action_components: dict[str, StrictInt] = Field(default_factory=dict)
-    successor_observation: dict[str, JsonValue] | None
     terminated: bool
     truncated: bool
-    bootstrap_allowed: bool
+    action_latents: dict[str, FiniteFloat] = Field(default_factory=dict)
+    action_components: dict[str, StrictInt] = Field(default_factory=dict)
+    diagnostics: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class Trajectory(Record):
-    format: Literal[
-        "sequifier.numeric-forecast-trajectory",
-        "sequifier.scalar-policy-trajectory",
-        "sequifier.policy-trajectory",
-    ]
     episode_id: str = Field(min_length=1)
     seed: SeedHistory
     bindings: list[TrajectoryInputBinding]
     prediction_columns: list[str]
-    transitions: list[Transition] = Field(min_length=1)
-    collection_cutoff: bool
-    total_return: FiniteFloat
+    arrivals: list[Arrival] = Field(min_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_arrivals(self):
+        for index, row in enumerate(self.arrivals):
+            if row.observation.keys() != self.seed.observations.keys() or set(
+                row.action
+            ) != set(self.prediction_columns):
+                raise ValueError(
+                    f"Arrival {index + 1} fields disagree with the trajectory"
+                )
+            if (row.terminated or row.truncated) and index + 1 != len(self.arrivals):
+                raise ValueError("An episode boundary must be the last arrival")
+        return self
+
     @property
-    def seed_group(self) -> str | None:
+    def observation_columns(self):
+        return [
+            name for name in self.seed.observations if name != INCOMING_ACTION_PRESENT
+        ]
+
+    @property
+    def collection_cutoff(self):
+        last = self.arrivals[-1]
+        return not (last.terminated or last.truncated)
+
+    @property
+    def seed_group(self):
         origin = self.metadata.get("seed_origin")
         keys = ("dataset", "sequenceId", "itemPosition")
         if isinstance(origin, dict) and all(key in origin for key in keys):
             return fingerprint({key: origin[key] for key in keys})
         return None
 
-    @model_validator(mode="after")
-    def validate_temporal_contract(self):
-        # Metadata must round-trip through the same portable JSON representation.
-        json.dumps(self.metadata, allow_nan=False)
-        inputs = set(self.seed.observations)
-        if not self.prediction_columns or len(self.prediction_columns) != len(
-            set(self.prediction_columns)
-        ):
-            raise ValueError("prediction columns must be nonempty and unique")
-        bound = [binding.input for binding in self.bindings]
-        if len(bound) != len(set(bound)) or set(bound) != inputs:
-            raise ValueError(
-                "trajectory requires exactly one producer per changing input"
-            )
-        external_keys = {
-            binding.key for binding in self.bindings if binding.source == "environment"
-        }
-        observation = {
-            key: values[-1] for key, values in self.seed.observations.items()
-        }
-        for index, transition in enumerate(self.transitions):
-            if transition.episode_id != self.episode_id or transition.step_id != index:
-                raise ValueError("transition episode/step IDs are not contiguous")
-            if transition.observation != observation:
-                raise ValueError(
-                    f"transition {index} observation breaks trajectory continuity"
-                )
-            if set(transition.predictions) != set(self.prediction_columns):
-                raise ValueError(
-                    f"transition {index} prediction fields do not match the contract"
-                )
-            if transition.successor_observation is None:
-                if (
-                    self.format
-                    not in {
-                        "sequifier.scalar-policy-trajectory",
-                        "sequifier.policy-trajectory",
-                    }
-                    or not transition.terminated
-                    or transition.external_inputs
-                ):
-                    raise ValueError(
-                        "only a terminal policy transition may omit its successor"
-                    )
-            else:
-                if set(transition.external_inputs) != external_keys:
-                    raise ValueError(
-                        f"transition {index} external input fields do not match bindings"
-                    )
-                if set(transition.successor_observation) != inputs:
-                    raise ValueError(
-                        f"transition {index} successor fields do not match inputs"
-                    )
-                for binding in self.bindings:
-                    producer = (
-                        transition.predictions
-                        if binding.source == "prediction"
-                        else transition.external_inputs
-                    )
-                    if (
-                        binding.key not in producer
-                        or transition.successor_observation[binding.input]
-                        != producer[binding.key]
-                    ):
-                        raise ValueError(
-                            f"transition {index} successor violates binding for {binding.input!r}"
-                        )
-            if transition.bootstrap_allowed != (not transition.terminated):
-                raise ValueError(
-                    "termination must disable bootstrap; truncation preserves the final observation"
-                )
-            if (transition.terminated or transition.truncated) and index != len(
-                self.transitions
-            ) - 1:
-                raise ValueError("trajectory contains a step after an episode boundary")
-            observation = transition.successor_observation
-        last = self.transitions[-1]
-        if self.collection_cutoff != (not (last.terminated or last.truncated)):
-            raise ValueError("collection cutoff must leave the episode unfinished")
-        expected_return = math.fsum(
-            transition.reward for transition in self.transitions
-        )
-        if not math.isclose(
-            self.total_return, expected_return, rel_tol=1e-12, abs_tol=1e-12
-        ):
-            raise ValueError("total_return does not equal the sum of rewards")
-        if self.format == "sequifier.policy-trajectory":
-            _validate_joint_execution(self)
-        return self
 
-
-def validate_trajectory(value: Trajectory | dict) -> Trajectory:
-    """Revalidate even an existing (possibly mutated) trajectory object."""
-    return Trajectory.model_validate(
-        value.model_dump() if isinstance(value, Trajectory) else value
-    )
-
-
-def validate_policy_seed(spec, actions, budgets, count, desired_return):
-    from sequifier.io.actions import decode_action, encode_action
-
-    if not isinstance(actions, list) or len(actions) != count:
-        raise ValueError("Seed actions must align with valid observations")
-    for index, action in enumerate(actions):
-        if action is None:
-            if index and spec.previous_action_inputs:
-                raise ValueError("Policy seed is missing a lagged action")
-            continue
-        if not isinstance(action, dict) or set(action) != set(spec.actions):
-            raise ValueError("Seed feedback must name the policy actions")
-        for name, field in spec.actions.items():
-            value = action[name]
-            if field.type == "categorical" and (
-                (isinstance(value, int) is False) or not 0 <= value < len(field.values)
-            ):
-                raise ValueError("Invalid categorical ID in seed feedback")
-        encode_action(decode_action(action, spec), spec)
+def validate_seed_budgets(spec, budgets, count, desired_return):
     budgets = TypeAdapter(list[FiniteFloat]).validate_python(budgets, strict=True)
     if len(budgets) != (count if spec.return_conditioned else 0) or (
         budgets and budgets[-1] != desired_return
     ):
         raise ValueError("Seed budgets must align with the seed history")
-
-
-def _validate_joint_execution(trajectory):
-    from sequifier.config.policy_config import ResolvedPolicyBinding
-    from sequifier.io.actions import encode_action
-
-    execution = trajectory.metadata.get("policy_execution")
-    if not isinstance(execution, dict):
-        raise ValueError("policy trajectories require execution metadata")
-    spec = ResolvedPolicyBinding.model_validate(execution.get("config"))
-    if trajectory.prediction_columns != spec.action_columns:
-        raise ValueError("trajectory action fields differ from the binding")
-    if set(trajectory.seed.observations) != set(spec.observation_columns) or set(
-        trajectory.seed.static_inputs
-    ) != set(spec.static_columns):
-        raise ValueError("trajectory inputs differ from the model binding")
-    scores = TypeAdapter(list[FiniteFloat]).validate_python(
-        execution.get("action_log_probabilities"), strict=True
-    )
-    previous = execution.get("previous_action_ids")
-    if (
-        len(scores) != len(trajectory.transitions)
-        or not isinstance(previous, list)
-        or len(previous) != len(scores)
-    ):
-        raise ValueError("trajectory scores/history must match decision count")
-    count = sum(trajectory.seed.attention_valid_mask)
-    seed_actions = execution.get("seed_previous_action_ids", [None])
-    initial_budget = execution.get("initial_desired_return")
-    seed_returns = execution.get(
-        "seed_returns", [initial_budget] if spec.return_conditioned else []
-    )
-    validate_policy_seed(
-        spec,
-        seed_actions,
-        seed_returns,
-        count,
-        initial_budget,
-    )
-    expected = seed_actions[-1]
-    for index, step in enumerate(trajectory.transitions):
-        real_fields = {
-            name for name, field in spec.actions.items() if field.type == "real"
-        }
-        if (set(step.action_latents) | set(step.action_components)) - real_fields:
-            raise ValueError(
-                "trajectory transform metadata must name real action fields"
-            )
-        recorded_previous = previous[index]
-        if isinstance(recorded_previous, dict):
-            recorded_previous = {
-                key: value
-                for key, value in recorded_previous.items()
-                if key in spec.actions
-            }
-        if recorded_previous != expected:
-            raise ValueError("previous actions must lag executed actions")
-        expected = encode_action(step.predictions, spec)
-    if execution.get("action_selection") not in {"deterministic", "stochastic"}:
-        raise ValueError("trajectory must declare its selection mode")
-    budgets = TypeAdapter(list[FiniteFloat]).validate_python(
-        execution.get("remaining_returns"), strict=True
-    )
-    if spec.return_conditioned:
-        if len(budgets) != len(scores) + 1 or budgets[0] != execution.get(
-            "initial_desired_return"
-        ):
-            raise ValueError(
-                "return budgets must include every successor and the initial budget"
-            )
-        for index, step in enumerate(trajectory.transitions):
-            if not math.isclose(
-                budgets[index + 1],
-                remaining_return(budgets[index], step.reward, spec.returns.gamma),
-                rel_tol=1e-12,
-                abs_tol=1e-12,
-            ):
-                raise ValueError(
-                    "return budgets violate the recorded reward arithmetic"
-                )
-    elif budgets:
-        raise ValueError("an unconditioned policy cannot record return budgets")

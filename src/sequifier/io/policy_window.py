@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 
 import torch
 
+from sequifier.config.column_names import NEXT_ACTION_OFFSET
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.contract_versions import ContractVersions
@@ -61,7 +62,7 @@ def encode_feature(value, column: str, config: PolicyEpisodeSpec):
 
 
 class PolicyWindowView:
-    """At decision t, expose o_t and a_(t-1), and supervise a_t separately.
+    """History ends at row i. The executed action label comes from row i + 1.
 
     Previous actions are decoder-local IDs at this boundary. They are converted
     to the persisted input vocabulary here; the start token is input-only.
@@ -70,17 +71,17 @@ class PolicyWindowView:
     def __init__(self, config: ResolvedPolicyBinding):
         self.config = config
         self._categorical_codecs = {}
-        self.view = ModelWindowView(config.context_length, "policy", 0)
+        self.view = ModelWindowView(config.context_length, "policy", NEXT_ACTION_OFFSET)
         self.resolved = resolve_window_view(
             StoredWindowLayout(
-                config.context_length, 0, ContractVersions.STORED_WINDOW_LAYOUT
+                config.context_length + NEXT_ACTION_OFFSET,
+                NEXT_ACTION_OFFSET,
+                ContractVersions.STORED_WINDOW_LAYOUT,
             ),
             self.view,
         )
 
-    def episode_inputs(
-        self, episode, step: int, returns, action_ids=None
-    ) -> SequifierInputs:
+    def episode_inputs(self, episode, step: int, returns) -> SequifierInputs:
         """Expose one causal decision from a validated episode in either lifecycle."""
         if self.config.return_conditioned and returns is None:
             from sequifier.io.episode_features import return_labels
@@ -90,19 +91,10 @@ class PolicyWindowView:
                 raise ValueError("conditioned likelihood requires a known reward tail")
             returns = return_labels(episode, length, self.config.returns.gamma)
         start = max(0, step + 1 - self.config.context_length)
-        initial = (
-            (None)
-            if episode.starts_episode
-            else action_index(episode.previous_action, self.config)
-        )
-        previous = [initial] if start == 0 else []
-        if action_ids is None:
-            previous += [
-                action_index(value, self.config)
-                for value in episode.actions[max(0, start - 1) : step]
-            ]
-        else:
-            previous += action_ids[max(0, start - 1) : step]
+        previous = [
+            action_index(value, self.config) if value is not None else None
+            for value in episode.incoming_actions[start : step + 1]
+        ]
         return self._with_context(
             episode,
             [episode.observation(position) for position in range(start, step + 1)],
@@ -111,22 +103,8 @@ class PolicyWindowView:
             list(episode.observation_masks[start : step + 1]),
         )
 
-    def successor_inputs(self, episode, step: int, successor) -> SequifierInputs:
-        """Build h_(t+1) from the true successor and action a_t."""
-        start = max(0, step + 2 - self.config.context_length)
-        observations = [
-            episode.observation(position) for position in range(start, step + 1)
-        ] + [successor]
-        previous = [
-            (
-                (None)
-                if episode.starts_episode
-                else action_index(episode.previous_action, self.config)
-            )
-            if position == 0
-            else action_index(episode.actions[position - 1], self.config)
-            for position in range(start, step + 2)
-        ]
+    def successor_inputs(self, episode, step: int) -> SequifierInputs:
+        """Read the next observation with its incoming action."""
         budgets = None
         if self.config.return_conditioned:
             from sequifier.io.episode_features import return_labels
@@ -141,14 +119,11 @@ class PolicyWindowView:
                 episode.transitions.rewards[step],
                 self.config.returns.gamma,
             )
-            budgets = returns[start : step + 1] + [following]
-        masks = list(episode.observation_masks[start : step + 2])
-        if len(masks) < len(observations):
-            masks.append(False)
-        return self._with_context(episode, observations, previous, budgets, masks)
+            budgets = [*returns[: step + 1], following]
+        return self.episode_inputs(episode, step + 1, budgets)
 
     def _with_context(self, episode, observations, previous, budgets, masks):
-        context = getattr(episode, "context", None)
+        context = episode.context
         needed = self.config.context_length - len(observations)
         if context is not None and needed > 0:
             prefix = context[-needed:]

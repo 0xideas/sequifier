@@ -10,7 +10,9 @@ if TYPE_CHECKING:
     from sequifier.trajectory.sources import ResolvedSequenceSource
 
 
-def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
+def prepared_table(
+    source: ResolvedSequenceSource,
+) -> tuple[pl.DataFrame, dict[int, tuple[int, int]]]:
     """Recover unique positions from existing windows, validating overlaps.
 
     Split target bounds select decisions. A preceding action may be recovered
@@ -31,6 +33,7 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
 
     identities = getattr(metadata, "sequence_identities", {})
     rows = {}
+    bounds = {}
     for path in source.paths:
         if path.suffix.lower() == ".pt":
             batch = load_pt_payload(
@@ -73,12 +76,16 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
             batch.left_pad_lengths,
         )
         lows, highs = batch.split_start_item_positions, batch.split_end_item_positions
-        for row in range(len(ids)):
+        for row, seq in enumerate(ids):
+            identity = int(seq)
+            interval = (int(lows[row]), int(highs[row]))
+            if bounds.setdefault(identity, interval) != interval:
+                raise ValueError("Prepared windows disagree on split bounds")
             for offset in range(
                 int(pads[row]), next(iter(sequences.values())).shape[1]
             ):
                 position = int(starts[row]) + offset
-                key = (int(ids[row]), position)
+                key = (identity, position)
                 values = {
                     column: tensor[row, offset].tolist()
                     for column, tensor in sequences.items()
@@ -93,15 +100,14 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
                     "sequenceId": key[0],
                     "itemPosition": position,
                     **values,
-                    "__decision": int(lows[row]) <= position < int(highs[row]),
                 }
-                if identity := identities.get(str(key[0])):
+                if labels := identities.get(str(identity)):
                     for column, field in (
                         ("sequenceName", "episode_id"),
-                        ("__group", "group_id"),
+                        ("groupId", "group_id"),
                     ):
-                        if identity.get(field) is not None:
-                            record[column] = identity[field]
+                        if labels.get(field) is not None:
+                            record[column] = labels[field]
                 if key in rows and rows[key] != record:
                     raise ValueError(
                         "prepared history windows disagree on overlapping positions or split bounds"
@@ -130,4 +136,4 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
         )
         if frame[DOMAIN_OBSERVATIONS].null_count():
             raise ValueError("Source observations do not cover the prepared windows")
-    return frame
+    return frame, bounds

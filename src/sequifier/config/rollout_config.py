@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from sequifier.config.column_names import validate_column_names
+from sequifier.config.column_names import INCOMING_ACTION_PRESENT, validate_column_names
 from sequifier.config.naming import ConfigModel
 
 
@@ -22,9 +22,7 @@ class InputBinding(TrajectoryInputBinding):
     @field_validator("input")
     @classmethod
     def validate_input(cls, value):
-        validate_column_names(
-            [value], "rollout bindings input", prefixes=("__executed_",)
-        )
+        validate_column_names([value], "rollout bindings input")
         return value
 
 
@@ -50,12 +48,23 @@ class CoordinateSeed(ConfigModel):
 
 class SequenceOutput(ConfigModel):
     manifest_path: str = Field(min_length=1)
+    mask_column: str | None = Field(default=None, min_length=1)
+    action_columns: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_columns(self):
+        names = list(self.action_columns.values())
+        if self.mask_column:
+            names.append(self.mask_column)
+        validate_column_names(names, "sequence output columns")
+        if not all(names) or len(names) != len(set(names)):
+            raise ValueError("Sequence output aliases must be nonempty and distinct")
+        return self
 
 
 class RolloutSelection(ConfigModel):
     seed: CoordinateSeed | None = None
-    output: SequenceOutput | None = None
-    trajectory_path: str | None = Field(default=None, min_length=1)
+    output: SequenceOutput
 
     @model_validator(mode="after")
     def validate_selection(self):
@@ -66,8 +75,6 @@ class RolloutSelection(ConfigModel):
             raise ValueError(
                 "Select exactly one rollout seed coordinate or legacy index"
             )
-        if self.output is None and self.trajectory_path is None:
-            raise ValueError("Select a sequence output or trajectory_path")
         return self
 
 
@@ -90,6 +97,7 @@ class RolloutConfig(RolloutSelection):
         if len(inputs) != len(set(inputs)) or len(targets) != len(set(targets)):
             raise ValueError("rollout input and target columns must be unique")
         bound = {binding.input for binding in self.bindings}
+        inputs = [key for key in inputs if key != INCOMING_ACTION_PRESENT]
         if bound != set(inputs):
             raise ValueError(
                 "rollout requires exactly one producer per changing input; "

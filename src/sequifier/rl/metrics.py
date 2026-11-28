@@ -67,10 +67,10 @@ class PolicyMetrics:
             )
         self.writer.phase = context.phase.name
         self.writer.algorithm = context.phase.algorithm
-        for role, (optimizer, _) in session.optimization.items():
+        for role, update in session.optimization.items():
             if role != "actor":
                 scalars[f"{role}_learning_rate"] = float(
-                    optimizer.param_groups[0]["lr"]
+                    update.optimizer.param_groups[0]["lr"]
                 )
         sources = context.phase.data_sources
         refs = sources.evaluation if validation else sources.training
@@ -88,7 +88,9 @@ class PolicyMetrics:
             global_step=session.global_step,
             values=scalars,
             primary=primary,
-            learning_rate=float(session.optimization["actor"][0].param_groups[0]["lr"]),
+            learning_rate=float(
+                session.optimization["actor"].optimizer.param_groups[0]["lr"]
+            ),
             elapsed_seconds=elapsed_seconds,
             initial=initial,
         )

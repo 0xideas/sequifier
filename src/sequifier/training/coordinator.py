@@ -26,10 +26,7 @@ from sequifier.artifacts.dependencies import (
     add_backbone_revision,
     add_initialization,
 )
-from sequifier.artifacts.model_artifact import (
-    read_execution_artifact,
-    save_model_artifact,
-)
+from sequifier.artifacts.model_artifact import read_execution_artifact
 from sequifier.artifacts.phase import (
     CommittedPhases,
     PhaseCommit,
@@ -45,14 +42,13 @@ from sequifier.artifacts.reports import (
 from sequifier.artifacts.run_checkpoint import (
     checkpoint_path,
     select_run_checkpoint,
-    training_lock,
     training_plan_identity,
 )
 from sequifier.config.components import ResumeConfig
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import file_checksum
 from sequifier.io.atomic import atomic_path, atomic_save
-from sequifier.io.output_paths import validate_training_destinations
+from sequifier.io.output_paths import policy_graph_paths, validate_training_destinations
 from sequifier.runtime.plan import (
     PhaseOutcome,
     RunIdentity,
@@ -98,39 +94,38 @@ def run_training(
 
     if not isinstance(config, ResolvedSequifierConfig):
         raise TypeError("Training requires a canonical resolved config.")
-    if config.run_mode == "supervised":
-        from sequifier.training.supervised import launch_supervised
-
-        return launch_supervised(
-            config,
-            integration_specs=integration_specs,
-            integration_instances=integration_instances,
-            semantic_optimizer_grouping=semantic_optimizer_grouping,
-        )
-    if integration_specs or integration_instances or semantic_optimizer_grouping:
+    if config.run_mode != "supervised" and (
+        integration_specs or integration_instances or semantic_optimizer_grouping
+    ):
         raise ValueError(
             "policy phases do not support custom integrations or parameter grouping"
         )
-    return run_policy_plan(config)
+    from sequifier.training.launch import launch_training
 
-
-def run_policy_plan(config) -> LearningRunResult | PolicyRunResult:
-    """Use native policy recovery when the plan shares an actor representation."""
-    from sequifier.config.training_resolution import (
-        policy_run_config,
-        prepare_locked_run,
+    return launch_training(
+        config,
+        integration_specs=integration_specs,
+        integration_instances=integration_instances,
+        semantic_optimizer_grouping=semantic_optimizer_grouping,
     )
+
+
+def run_policy_plan(config) -> LearningRunResult | PolicyRunResult | None:
+    return run_training(config)
+
+
+def execute_policy_plan(config, environment):
+    """Use native policy recovery when the plan shares an actor representation."""
+    from sequifier.config.training_resolution import policy_run_config
     from sequifier.rl.learner import execute_policy
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
-    with training_lock(checkpoint_path(config)):
-        config = prepare_locked_run(config)
-        prepared = PreparedTrainingInputs.for_run(config)
-        with prepared.run_scope():
-            if config.run_mode == "policy":
-                native = policy_run_config(config, config.training_plan)
-                return execute_policy(native, prepared)
-            return _run_learning_plan(config, prepared)
+    prepared = PreparedTrainingInputs.for_run(config)
+    with prepared.run_scope():
+        if config.run_mode == "policy":
+            native = policy_run_config(config, config.training_plan)
+            return execute_policy(native, prepared, environment=environment)
+        return _run_learning_plan(config, prepared, environment)
 
 
 def _snapshot_recovery(source, destination):
@@ -183,7 +178,11 @@ def _prepare_plan(config, groups, revision, state, completed):
     return manifest, last_data_phase
 
 
-def _run_learning_plan(config, prepared):
+def _run_learning_plan(config, prepared, environment):
+    from sequifier.training.distributed_strategy import on_writer, strategy_for
+
+    strategy = strategy_for(environment, config.run.execution.distribution_settings)
+    writer = strategy.rank == 0
     resume = config.run.recovery.resume or ResumeConfig()
     checkpoint = checkpoint_path(config)
     state = {
@@ -208,6 +207,7 @@ def _run_learning_plan(config, prepared):
         )
         if state.get("artifact_type") != "sequifier_learning_run":
             raise ValueError("learning run checkpoint differs from the requested plan")
+    state["run_id"] = strategy.broadcast(state["run_id"])
     active = state["active"]
     # Policy groups retain this parent, including resolved supervised scheduler budgets.
     config = config.model_copy()
@@ -226,6 +226,8 @@ def _run_learning_plan(config, prepared):
         authored = config._rollout_plan.model_dump(
             mode="json", exclude={"run": {"recovery", "retrain"}}
         )
+        if authored["run"]["execution"].get("distribution") is None:
+            authored["run"]["execution"].pop("distribution", None)
         plan_identity = fingerprint(
             {"resolved_prefix": plan_identity, "authored_plan": authored}
         )
@@ -239,13 +241,16 @@ def _run_learning_plan(config, prepared):
     if not config.initialize_from and (
         not resuming or state["backbone_revision"] is not None
     ):
-        revision = select_revision(
-            config.execution.backbone,
-            config.project_root,
-            revision_id=state.get("backbone_revision"),
+        revision = on_writer(
+            strategy,
+            lambda: select_revision(
+                config.execution.backbone,
+                config.project_root,
+                revision_id=state.get("backbone_revision"),
+            ),
         )
     state["backbone_revision"] = revision["revision_id"] if revision else None
-    identity = RunIdentity.start(state["run_id"])
+    identity = strategy.broadcast(RunIdentity.start(state["run_id"]))
     completed = CommittedPhases.load(phases, state.pop("completed"))
     if active is not None:
         ends = {group.index: group.index + len(group.phases) for group in groups}
@@ -296,7 +301,7 @@ def _run_learning_plan(config, prepared):
 
     if envelope is not None:
         require_phase_boundary(envelope, boundary())
-        if "metric_positions" in state:
+        if writer and "metric_positions" in state:
             restore_metric_positions(
                 model_metric_tables(config.project_root, config.model_name),
                 identity.run_id,
@@ -308,6 +313,8 @@ def _run_learning_plan(config, prepared):
 
     def save_boundary():
         nonlocal selected_path, selected_model
+        if not writer:
+            return
         selected = artifact_before(len(completed))
         if selected != selected_path:
             selected_model = (
@@ -337,7 +344,7 @@ def _run_learning_plan(config, prepared):
         group = transition.phase
         if isinstance(group, PendingGroup):
             group, inputs = group.compile(
-                config, completed, artifact_before(group.index), prepared
+                config, completed, artifact_before(group.index), prepared, strategy
             )
             recovering = (
                 state["active"] is not None and state["active"]["recovery"] is not None
@@ -385,7 +392,9 @@ def _run_learning_plan(config, prepared):
             verify_artifact(
                 prior["path"], prior["sha256"], "Active phase recovery changed"
             )
-            _snapshot_recovery(prior["path"], native_checkpoint)
+            if writer:
+                _snapshot_recovery(prior["path"], native_checkpoint)
+            strategy.barrier()
 
         def save_progress(path, commit: PhaseCommit | None):
             previous = active["recovery"]
@@ -420,7 +429,16 @@ def _run_learning_plan(config, prepared):
             identity,
             PhasePublication(save_progress, global_step_offset=group_offset),
             revision or {},
+            environment,
+            previous_commit=completed[index - 1] if index else None,
         )
+        native_records, current = strategy.broadcast(
+            (completed.records(), state["active"])
+        )
+        if not writer:
+            for record in native_records[len(completed) :]:
+                completed.append(PhaseCommit.load(record))
+            state["active"] = current
         group.release()
         stop = completed[-1].result["stop_scope"]
         if stop != "end_plan" and len(completed) != index + len(group.phases):
@@ -440,7 +458,11 @@ def _run_learning_plan(config, prepared):
     if start == len(groups) and next_index != len(phases) and not stopped:
         raise ValueError("learning run checkpoint is between inconsistent phase groups")
     if resuming and state["active"] is None and (start == len(groups) or stopped):
-        report = completed_run_report(config, checkpoint, identity.run_id, completed)
+        report = strategy.broadcast(
+            completed_run_report(config, checkpoint, identity.run_id, completed)
+            if writer
+            else None
+        )
         if report is not None:
             return _learning_result(config, checkpoint, report)
     completion_reason = run_phases(
@@ -449,45 +471,84 @@ def _run_learning_plan(config, prepared):
         finish_group,
         start=start,
         stopped=stopped and state["active"] is None,
-        replay=lambda: publish_phase_commits(completed),
+        replay=lambda: publish_phase_commits(completed) if writer else None,
     )
-    final = read_execution_artifact(completed[-1].model_path)
-    save_model_artifact(final, config.outputs.model_path)
-    initialization = (
-        completed[0]
-        .result["provenance"]
-        .get("actor_initialization", {"path": config.initialize_from})
-    )
-    prepared.close()
-    manifest_report = run_report(
-        config.outputs,
-        checkpoint,
-        identity,
-        completed,
-        resume=resume,
-        completion_reason=completion_reason,
-        source_provenance={
-            **manifest.identity,
-            **{
-                path: checksum
-                for inputs in state.get("deferred_dependencies", {}).values()
-                for path, checksum in inputs.items()
+
+    def publish_final():
+        from sequifier.rl.checkpoint import publish_policy_model
+
+        final = read_execution_artifact(completed[-1].model_path)
+        graph_paths = policy_graph_paths(config)
+        publish_policy_model(config, final, graph_paths)
+        initialization = (
+            completed[0]
+            .result["provenance"]
+            .get("actor_initialization", {"path": config.initialize_from})
+        )
+        prepared.close()
+        manifest_report = run_report(
+            config.outputs,
+            checkpoint,
+            identity,
+            completed,
+            resume=resume,
+            additional_exports=graph_paths.values(),
+            completion_reason=completion_reason,
+            source_provenance={
+                **manifest.identity,
+                **{
+                    path: checksum
+                    for inputs in state.get("deferred_dependencies", {}).values()
+                    for path, checksum in inputs.items()
+                },
             },
-        },
-        initialization=initialization,
-        backbone_parent_revision_id=state["backbone_revision"],
-        backbone_publication=publish_selected_backbone(
-            config,
-            final.model_state_dict,
-            state["backbone_revision"],
-            identity.run_id,
-            completed[-1].result,
-        ),
-        plan_fingerprint=plan_identity,
-        resource_accounting=prepared.accounting.snapshot(),
-    )
-    publish_run_report(manifest_report, config)
+            initialization=initialization,
+            backbone_parent_revision_id=state["backbone_revision"],
+            backbone_publication=publish_selected_backbone(
+                config,
+                final.model_state_dict,
+                state["backbone_revision"],
+                identity.run_id,
+                completed[-1].result,
+            ),
+            plan_fingerprint=plan_identity,
+            resource_accounting=prepared.accounting.snapshot(),
+        )
+        publish_run_report(manifest_report, config)
+        return manifest_report
+
+    manifest_report = on_writer(strategy, publish_final)
     return _learning_result(config, checkpoint, manifest_report)
+
+
+def published_training_result(config):
+    """Return a local view of the result written by a spawned worker group."""
+    import json
+
+    from sequifier.artifacts.reports import PhaseResult
+    from sequifier.rl.checkpoint import load_policy
+    from sequifier.rl.learner import restore_policy_versions
+    from sequifier.rl.run_state import ActorRepresentation, PolicyRunResult
+
+    report = json.loads(Path(config.outputs.report_path).read_text())
+    checkpoint = report["checkpoint_path"]
+    if config.run_mode == "coordinated":
+        return _learning_result(config, checkpoint, report)
+    actor = load_policy(
+        report["model_path"],
+        device="cpu",
+        interface_name=config.training_plan[-1].model_interface,
+    )
+    restore_policy_versions(actor, config.training_plan, report["phases"])
+    actor.transfer_report = report["initialization"]["transfer"]
+    return PolicyRunResult(
+        actor.eval(),
+        tuple(PhaseResult.model_validate(phase) for phase in report["phases"]),
+        ActorRepresentation.from_actor(actor),
+        report["model_path"],
+        config.outputs.report_path,
+        checkpoint,
+    )
 
 
 def _learning_result(config, checkpoint, manifest_report):

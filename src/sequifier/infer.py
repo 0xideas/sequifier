@@ -13,6 +13,7 @@ import torch
 from beartype.typing import Iterator
 from loguru import logger
 
+from sequifier.config.column_names import next_item_coordinates
 from sequifier.config.infer_config import ResolvedInferenceConfig, load_inferer_config
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
@@ -1176,12 +1177,19 @@ def infer_generative(
                     )
 
         assert preds is not None
+        coordinates = {"itemPosition": item_positions_for_preds}
+        if (
+            config.window_view.target_offset == 1
+            and config.training_objective in {"causal", "final_value", "policy"}
+            and inferer.prediction_length == 1
+        ):
+            coordinates = next_item_coordinates(item_positions_for_preds - 1)
         predictions = pl.DataFrame(
             {
                 "sequenceId": sequence_ids_for_preds,
                 "subsequenceId": subsequence_ids_for_preds,
                 "windowStartOffset": window_offsets_for_preds,
-                "itemPosition": item_positions_for_preds,
+                **coordinates,
                 **{
                     target_column: preds[target_column].flatten()
                     for target_column in inferer.target_columns
@@ -1220,6 +1228,13 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
             config.input_columns + config.static_columns + config.target_columns
         )
     )
+    from sequifier.rollout.seeds import (
+        forecast_action_columns,
+        forecast_coordinate_seed,
+        forecast_window_seed,
+        seed_origin,
+    )
+
     codec = FixedNumericPreprocessing(
         columns,
         metadata.selected_columns_statistics,
@@ -1228,11 +1243,7 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
             column: torch.empty((), dtype=column_data_types[column]).numpy().dtype
             for column in columns
         },
-    )
-    from sequifier.rollout.seeds import (
-        forecast_coordinate_seed,
-        forecast_window_seed,
-        seed_origin,
+        incoming_columns=forecast_action_columns(config).values(),
     )
 
     if rollout.seed is not None:

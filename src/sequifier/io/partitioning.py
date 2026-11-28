@@ -61,7 +61,7 @@ def table_content_keys(table):
     """Identify equal recorded sequences independently of their IDs and shard order."""
     fields = sorted(
         set(table.collect_schema().names())
-        - {"sequenceId", "sequenceName", "__group", "__collection"}
+        - {"sequenceId", "sequenceName", "groupId", "__collection"}
     )
     # itemPosition (and any depth coordinate) is part of each row. Summing
     # independent row hashes makes this a bounded, order-independent reduction.

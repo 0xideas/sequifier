@@ -15,32 +15,26 @@ def validate_runner_settings(
         raise ValueError("run.execution.policy requires a policy phase")
     if not supervised and execution.supervised is not None:
         raise ValueError("run.execution.supervised requires a supervised phase")
-    if (
-        policy
-        and execution.supervised
-        and execution.supervised.distribution.distributed
-    ):
-        raise ValueError("Mixed training plans require local execution")
-    if (
-        policy
-        and execution.supervised
-        and execution.supervised.precision.layer_type_dtypes
-    ):
+    if policy and execution.precision.layer_type_dtypes:
         raise ValueError(
-            "Mixed plans require a policy-compatible model without manual layer pre-casting"
+            "Plans with policy phases do not support manual layer pre-casting"
         )
     if not supervised and run.logging.log_interval_batches is not None:
         raise ValueError("Batch logging requires a supervised phase")
     if not policy and run.logging.log_interval_iterations is not None:
         raise ValueError("Iteration logging requires a policy phase")
     export = run.export
-    if policy and (
-        export.embedding
-        or not export.prediction
-        or not export.prediction.pt
-        or export.prediction.onnx
-    ):
+    if policy and (export.embedding or not export.prediction):
         raise ValueError("Policy plans publish a portable prediction artifact")
+    if (
+        policy
+        and export.prediction
+        and export.prediction.onnx
+        and export.prediction.onnx.with_dropout
+    ):
+        raise ValueError(
+            "Policy ONNX export uses evaluation mode; stochastic actions use policy draws"
+        )
     if not (export.prediction or export.embedding):
         raise ValueError("Select at least one export artifact")
 

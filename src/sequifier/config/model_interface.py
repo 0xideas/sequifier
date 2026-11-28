@@ -28,7 +28,7 @@ from sequifier.config.metadata import (
 from sequifier.config.naming import ConfigModel
 from sequifier.config.policy_config import PolicyBinding
 from sequifier.config.prediction_config import PredictionDistributionConfig
-from sequifier.helpers import ModelWindowView, StoredWindowLayout
+from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
 from sequifier.special_tokens import SPECIAL_TOKEN_NAMES
 from sequifier.typechecking import beartype
 
@@ -115,7 +115,6 @@ class ModelInterfaceSpecModel(ConfigModel):
             allowed=("__policy_return", "__policy_previous_action")
             if info.field_name == "input_columns"
             else (),
-            prefixes=("__executed_",),
         )
         if any(
             column.startswith("__image:")
@@ -247,6 +246,16 @@ class ResolvedInterfaceStorage(RawInputMetadata):
     target_offset: Optional[int] = None
     static_features_path: str | None = None
     storage_layout: StoredWindowLayout
+
+    def validate_view(self, view: ModelWindowView) -> None:
+        layout = self.storage_layout
+        if view.objective == "policy" and layout.max_target_offset == 0:
+            # History-only storage supplies policy inputs. The episode supplies
+            # the arrival label separately, including for older policy artifacts.
+            if view.context_length > layout.window_length:
+                raise ValueError("Policy history exceeds the stored window length")
+        else:
+            resolve_window_view(layout, view)
 
     @classmethod
     def from_metadata(

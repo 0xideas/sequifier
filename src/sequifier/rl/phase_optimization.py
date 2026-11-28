@@ -5,8 +5,10 @@ from dataclasses import dataclass, field
 from torch import nn
 
 from sequifier.artifacts.state_dict import canonicalize_state_dict
+from sequifier.config.optimizer_config import OptimizerPlan
 from sequifier.config.policy_optimization import OptimizationConfig
 from sequifier.model.parameter_catalog import ParameterCatalog
+from sequifier.training.optimization import OptimizationRuntime
 
 
 @dataclass(frozen=True)
@@ -51,7 +53,7 @@ class PhaseOptimization:
         }
         return cls(budget, configs, masks, roles.fresh_history_components)
 
-    def build(self, roles):
+    def apply_masks(self, roles):
         if roles.trainable.keys() != self.configs.keys():
             raise ValueError("phase optimization roles disagree with trainable modules")
         for role, module in roles.trainable.items():
@@ -63,7 +65,22 @@ class PhaseOptimization:
                 )
             for name, parameter in parameters.items():
                 parameter.requires_grad_(name in mask)
-        return {
-            role: self.configs[role].build(module, step_budget=self.step_budget)
-            for role, module in roles.trainable.items()
-        }
+
+    def build(self, roles):
+        self.apply_masks(roles)
+        return self.optimizers(roles)
+
+    def optimizers(self, roles) -> dict[str, OptimizationRuntime]:
+        updates = {}
+        for role, module in roles.trainable.items():
+            config = self.configs[role]
+            parameters = [p for p in module.parameters() if p.requires_grad]
+            updates[role] = OptimizationRuntime.create(
+                config,
+                str(parameters[0].device),
+                parameters,
+                parameter_catalog=ParameterCatalog(module)
+                if isinstance(config.optimizer, OptimizerPlan)
+                else None,
+            )
+        return updates

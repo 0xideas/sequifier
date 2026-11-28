@@ -34,42 +34,50 @@ arguments; grouped optimizer plans set their own rates. Policy schedulers advanc
 on optimizer steps; plateau/compound schedulers are unsupported. `OneCycleLR.total_steps` is derived from the phase budget;
 an explicitly supplied value must match that budget. Unknown roles fail validation.
 
-Imitation, DPO and GRPO default to `batch_size: 32`, `accumulation_batches: 1`,
-`evaluation.cadence: {iterations: 1}` and `checkpoints.cadence: {iterations: 1}`. Accumulation uses actual
-example counts, including partial batches. Network stochastic layers are disabled
-while gradients remain enabled. Best handoff keeps the earliest finite best on ties;
-last handoff keeps the latest transaction. Final updates always evaluate.
+Imitation, DPO and GRPO default to `batch_size: 32` and `accumulation_batches: 1`.
+Accumulation uses actual example counts, including partial batches. Network
+stochastic layers are disabled while gradients remain enabled.
+
+Set `checkpoints.cadence: {iterations: N}` on a phase to retain a snapshot every
+`N` committed iterations. The default is 10 for imitation, DPO, PPO and GRPO,
+and 100 for IQL. Phase completion retains a snapshot even when the final
+iteration falls between cadence points. Evaluation has its own cadence and
+still runs on the final update.
+
+Best handoff keeps the earliest finite best on ties. Consecutive policy phases
+carry that candidate forward when they share an actor representation and an
+evaluation contract. Offline phases compare the held-out data and scoring
+settings, including reference weights and beta for DPO. Online phases compare
+the evaluation environment, seeds, episode limits, action selection, and score
+definition. Set `model_selection.scope: phase` to start a fresh best history.
+`handoff: last` still passes the latest weights, and stopping patience remains
+phase-local. The report's `provenance.selected_phase_index` identifies the phase
+that produced the selected weights.
+
 See [continuation rules](configs/train.md#optimization-across-phases) for
 `optimizer_state: continue`; its default is `reset`.
 
 ## Offline data
 
-Sequence parts accept CSV/Parquet tables, JSON trajectories, checksummed sequence
-manifests and prepared histories. An authored manifest that lists trajectory
-files declares `format: sequifier.trajectory-source` and an `episodes`
-list with a `path` per entry. At row `t`, observations and lagged actions form
-inputs; the recorded current action is the label, and reward/successor describe
-its resulting transition. Tables use integer `sequenceId` and `itemPosition` coordinates. Use `sequenceName` for a string episode label.
-Observations and static inputs use the same names in the table, metadata and model.
-When importing without a model, declare those names in the
-`source.columns.observations` and `source.columns.static_inputs` lists.
+Sequence sources accept CSV or Parquet observation rows, a checksummed sequence
+manifest, or prepared histories. Declare the observation and static column names
+under `source.columns` when importing a table without a model. Each sequence
+starts at zero and ends with the genuine final observation. Every position
+after zero carries the complete action that produced its observation. Optional
+`reward`, `terminated`, and `truncated` columns describe that same transition.
+The history through row `t` predicts the action on row `t+1`. Termination disables
+bootstrap. A truncation retains its observed successor.
 
-Current actions use their policy field names or a structured `__executed_action`
-column. Previous actions use `__previous_action_<action>` scalar columns or a
-structured `__previous_action` column. Optional transition columns are `reward`,
-`terminated`, `truncated`, and `bootstrap_allowed`. When successors are present,
-provide `__next_<observation>` for every observation. Use `sequenceName` for a
-stable episode ID and `__group` for a collection group.
-Rename external table columns to these names before importing or training.
-Fragments require an explicit preceding action; file boundaries alone imply no
-termination. Forecast trajectories require `action_semantics: executed_predictions`.
+Use `source.action_columns` to map logical actions to physical columns,
+`sequenceName` for a stable episode label, and `groupId` for related episodes.
+Forecast predictions used as actions require `action_semantics: executed_predictions`.
 
 Setting `partition.validation_fraction` generates explicit train and validation views. The partition keeps transitive episode/group/duplicate-content components
 together and requires at least two components. Explicit `evaluation.sources`
 undergo the same overlap checks. Codecs and moments are fitted only on training
 coverage. Indexed storage and bounded episode caches are shared across phases;
 windows are constructed on demand. `import_sequences` exports a canonical raw
-Parquet decision table and its checksummed manifest. See the
+Parquet observation table and its checksummed manifest. See the
 [import example](example_inputs/configs/import-policy-sequences.yaml).
 
 Imitation minimizes joint action NLL. Return conditioning requires rewards and
@@ -134,8 +142,7 @@ Adapters implement `reset(seed)`, `step(named_domain_actions)` and `close()`;
 policy rollout also requires `reset_from_observation(initial, seed)`.
 Reset results provide observations/static inputs/units. Step results provide reward,
 separate termination/truncation booleans, successor observation and optional success.
-Never autoreset or substitute a reset observation for a final successor. A true
-terminal policy step may omit its successor; other steps must retain it.
+Every step, including termination, must return its actual successor before resetting the environment.
 
 Capabilities declare seeded reset, exact snapshot support and group-start support.
 Exact PPO recovery requires `snapshot_state()`/`restore_state()` including simulator
@@ -261,6 +268,42 @@ monitor is `mean_completed_return`/`max`; `mean_completed_length` and `success_r
 are supported. Censored episodes and unavailable metrics are explicit. GRPO uses
 `score_mean`/`max`, including declared horizons and the fixed reward scale.
 Online intervals count completed collection/update iterations.
+
+## ONNX export
+
+To publish the selected actor after imitation, IQL, PPO, GRPO, DPO, or a mixed
+training plan, add this setting to the training YAML.
+
+```yaml
+run:
+  export:
+    prediction:
+      onnx: {}
+```
+
+With the default model path, a single policy interface produces
+`models/<model_name>.onnx` alongside the canonical PT model. Multiple bound
+interfaces produce one graph per interface, named `<model_stem>-<interface>.onnx`.
+The run manifest lists the published files. Select the graph under
+`artifact.paths` in a `task: policy` inference or rollout config. Both
+`action_selection: deterministic` and `action_selection: stochastic` use the
+same evaluation-mode graph. PT and ONNX use different sampling procedures, so
+the same seed can produce different trajectories across backends.
+
+For direct ONNX Runtime use, supply model-encoded histories in the input order
+and types described by `sequifier.execution_schema` in the graph metadata.
+The additional Float64 input `policy_draws` has shape `[batch, 1 + 2 * actions]`.
+For deterministic inference, fill it with zeros. For stochastic inference,
+set column zero to one. For each action at zero-based index `i` in the binding's
+declared order, supply an independent uniform draw in `[0, 1)` at column
+`1 + 2*i` and a standard normal draw at column `2 + 2*i`. Sequifier's CLI
+prepares these inputs automatically.
+
+Output `action_i` is a zero-based index into the field's declared values for a
+categorical action, or a real value in physical units. The graph also emits the
+joint log probability, conditional categorical probability vectors, and real
+latents and mixture components for replay. The model metadata contains the
+binding, field order, units and input transforms.
 
 ## Checkpoints and inference
 

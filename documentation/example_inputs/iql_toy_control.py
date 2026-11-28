@@ -83,14 +83,15 @@ def generate(path):
                 "reward",
                 "terminated",
                 "truncated",
-                "bootstrap_allowed",
-                "__next_position",
             ],
         )
         writer.writeheader()
         for episode in range(500):
             position = rng.choice((-4, -3, 3, 4))
             quality = 0.85 if episode % 2 else 0.25
+            writer.writerow(
+                {"sequenceId": episode, "itemPosition": 0, "position": float(position)}
+            )
             for step in range(HORIZON):
                 good = "left" if position > 0 else "right"
                 action = (
@@ -104,14 +105,12 @@ def generate(path):
                 writer.writerow(
                     {
                         "sequenceId": episode,
-                        "itemPosition": step,
-                        "position": float(position),
+                        "itemPosition": step + 1,
+                        "position": float(successor),
                         "action": action,
                         "reward": 1.0 if terminated else -0.05,
                         "terminated": terminated,
                         "truncated": truncated,
-                        "bootstrap_allowed": not terminated,
-                        "__next_position": float(successor),
                     }
                 )
                 position = successor
@@ -127,7 +126,7 @@ def evaluate(paths):
                 "units": {},
             },
             "max_steps": HORIZON,
-            "trajectory_path": "unused.json",
+            "output": {"manifest_path": "rollout/manifest.json"},
             "seed_row_index": 0,
             "max_episode_steps": HORIZON,
         }
@@ -153,7 +152,7 @@ def evaluate(paths):
                 HORIZON,
                 random_seed=episode,
             )
-            returns.append(trajectory.total_return)
+            returns.append(sum(row.reward for row in trajectory.arrivals))
         print(path, "mean", statistics.mean(returns), "std", statistics.stdev(returns))
 
 

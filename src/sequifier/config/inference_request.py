@@ -32,7 +32,6 @@ class InferenceInput(ConfigModel):
     path: str | None = None
     split: str | None = None
     layout: Literal["auto", "raw", "indexed"] = "auto"
-    sequence_view: Literal["decisions", "observations"] = "decisions"
     metadata_config_path: str | None = None
     static_data_path: str | None = None
     mask_column: str | None = None
@@ -43,16 +42,12 @@ class InferenceInput(ConfigModel):
     @classmethod
     def validate_mask(cls, value):
         if value:
-            validate_column_names(
-                [value], "input.mask_column", allowed=("__observation_mask",)
-            )
+            validate_column_names([value], "input.mask_column")
         return value
 
     @model_validator(mode="after")
     def select_split(self):
-        if (
-            self.format == "sequence" or self.sequence_view != "decisions"
-        ) and self.layout != "raw":
+        if (self.format == "sequence") and self.layout != "raw":
             raise ValueError("Sequence manifest input requires input.layout: raw")
         if self.split is not None and (
             self.path or self.layout == "raw" or not self.has_split_metadata()
@@ -79,17 +74,13 @@ class PredictionInput(InferenceInput):
 
 
 class PolicyInput(InferenceInput):
-    previous_action_columns: dict[str, str] = Field(default_factory=dict)
+    action_columns: dict[str, str] = Field(default_factory=dict)
     desired_return_column: str = "desired_return"
 
     @model_validator(mode="after")
     def validate_columns(self):
-        validate_column_names(
-            self.previous_action_columns, "previous_action_columns actions"
-        )
-        validate_column_names(
-            self.previous_action_columns.values(), "previous_action_columns inputs"
-        )
+        validate_column_names(self.action_columns, "action_columns actions")
+        validate_column_names(self.action_columns.values(), "action_columns inputs")
         validate_column_names([self.desired_return_column], "desired_return_column")
         return self
 
@@ -119,7 +110,6 @@ class ContractAssertions(ConfigModel):
             values or (),
             info.field_name,
             allowed=("__policy_return", "__policy_previous_action"),
-            prefixes=("__executed_",),
         )
         return values
 

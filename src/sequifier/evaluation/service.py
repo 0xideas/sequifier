@@ -150,6 +150,7 @@ class EvaluationService:
             prediction_positions=slice(None),
             auxiliary_logits=auxiliary_logits,
             prediction_scales=output.prediction_scales,
+            regularization=output.regularization,
         )
 
     def evaluate(
@@ -158,10 +159,13 @@ class EvaluationService:
         phase: CompiledSupervisedPhase,
         datasets: DatasetRuntimeRegistry,
         context: EvaluationContext,
+        *,
+        forward=None,
     ) -> EvaluationResult:
         results: dict[str, EvaluationSourceResult] = {}
-        was_training = network.training
-        network.eval()
+        forward = network if forward is None else forward
+        training_modes = [(module, module.training) for module in forward.modules()]
+        forward.eval()
         try:
             autocast = self.precision.autocast() if self.precision else nullcontext()
             with torch.no_grad(), autocast:
@@ -238,12 +242,13 @@ class EvaluationService:
                             ),
                         )
                         dataset.metrics.evaluation_batches += 1
-                        output = network(
+                        output = forward(
                             prepared.features,
                             prepared.metadata,
                             teacher_targets=prepared.loss_targets,
                             teacher_valid_mask=prepared.loss_valid_mask,
                             interface_name=dataset.interface_name,
+                            include_regularization=True,
                         )
                         expected_batch_size = next(
                             iter(prepared.features.values())
@@ -435,5 +440,6 @@ class EvaluationService:
                         elapsed_seconds=time.perf_counter() - started,
                     )
         finally:
-            network.train(was_training)
+            for module, training in training_modes:
+                module.training = training
         return EvaluationResult(results)

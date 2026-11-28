@@ -29,20 +29,25 @@ def isolated_initialization(seed: int | None):
     python_state = random.getstate()
     numpy_state = np.random.get_state()
     cpu_state = torch.get_rng_state()
-    cuda_states = (
-        torch.cuda.get_rng_state_all() if torch.cuda.is_initialized() else None
-    )
-    # Construction and initialization occur on CPU. Never initialize unrelated devices.
+    cuda_devices = []
+    if torch.cuda.is_initialized():
+        cuda_devices = (
+            [torch.cuda.current_device()]
+            if torch.distributed.is_initialized()
+            else list(range(torch.cuda.device_count()))
+        )
+    cuda_states = {device: torch.cuda.get_rng_state(device) for device in cuda_devices}
     try:
         random.seed(seed)
         np.random.seed(seed % 2**32)
         torch.random.default_generator.manual_seed(seed)
-        if cuda_states is not None:
-            torch.cuda.manual_seed_all(seed)
+        for device in cuda_states:
+            with torch.cuda.device(device):
+                torch.cuda.manual_seed(seed)
         yield
     finally:
         random.setstate(python_state)
         np.random.set_state(numpy_state)
         torch.set_rng_state(cpu_state)
-        if cuda_states is not None:
-            torch.cuda.set_rng_state_all(cuda_states)
+        for device, state in cuda_states.items():
+            torch.cuda.set_rng_state(state, device)

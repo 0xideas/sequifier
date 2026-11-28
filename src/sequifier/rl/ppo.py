@@ -1,8 +1,13 @@
 """Phase-local PPO lifecycle over the shared collector and clipped actor/V update."""
 
 from copy import deepcopy
+from dataclasses import replace
+from time import perf_counter
+
+import torch
 
 from sequifier.config.policy_plan import PPOPhaseConfig
+from sequifier.rl.collection import stream_seed
 from sequifier.rl.environment import (
     adapter_identity,
     load_online_adapter,
@@ -35,7 +40,9 @@ def validate_ppo_adapter(adapter, phase, exact):
 def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     actor, phase = context.actor.eval(), context.phase
     session = PhaseSession(context)
-    value = session.modules["value"]
+    value = session.calls["value"]
+    strategy = session.strategy
+    distributed = strategy.world_size > 1
     state = session.state
     sequences = CollectedSequences(context, state)
     env_steps = state.get("env_steps", 0)
@@ -57,12 +64,19 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             adapter, context.adapter_contract[f"{context.index}.training"]
         )
         collector = PPOCollector(
-            actor, value, adapter, phase, context.identity.sampling_seed
+            actor,
+            value,
+            adapter,
+            phase,
+            stream_seed(context.identity.sampling_seed, "ppo-rank", strategy.rank)
+            if distributed
+            else context.identity.sampling_seed,
+            stream=strategy.rank if distributed else None,
         )
         if state:
             require_equal(state["adapter_identity"], identity, "ppo.adapter_identity")
             exact = context.run.resume.mode == "exact"
-            if exact:
+            if exact and state["collector"] is not None:
                 if state["environment_state"] is None:
                     raise ValueError(
                         "exact PPO resume requires an embedded environment snapshot"
@@ -72,14 +86,15 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                     adapter.snapshot_state(), state["environment_state"]
                 ):
                     raise ValueError("PPO adapter did not restore its snapshot exactly")
-            collector.load_state_dict(state["collector"], exact=exact)
+            if state["collector"] is not None:
+                collector.load_state_dict(state["collector"], exact=exact)
             session.record_continuation(
                 mode=context.run.resume.mode, trajectory_equivalent=exact
             )
 
         def checkpoint_payload():
             environment_state = None
-            if adapter.capabilities.exact_snapshot:
+            if collector.reset_count and adapter.capabilities.exact_snapshot:
                 require_exact_snapshot(adapter)
                 environment_state = adapter.snapshot_state()
                 if not isinstance(environment_state, dict) or not snapshots_equal(
@@ -90,7 +105,8 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                     )
             return {
                 "env_steps": env_steps,
-                "collector": collector.state_dict(),
+                "per_decision_entropy": state.get("per_decision_entropy", not state),
+                "collector": collector.state_dict() if collector.reset_count else None,
                 **sequences.checkpoint(),
                 "environment_state": environment_state,
                 "adapter_identity": identity,
@@ -104,14 +120,51 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                 phase.budget.env_steps - env_steps,
             )
             with allocation("rollout_storage") as storage:
-                buffer, episodes = collector.collect(
-                    horizon, session.transaction, storage=storage
-                )
-                sequences.ppo(buffer)
+                collection_start = perf_counter()
+                local_horizon = len(range(strategy.rank, horizon, strategy.world_size))
+                with session.rounds.scope():
+                    buffer, episodes = (
+                        collector.collect(
+                            local_horizon,
+                            session.transaction,
+                            storage=storage,
+                            normalize=False if distributed else None,
+                        )
+                        if local_horizon
+                        else (None, [])
+                    )
+                if distributed and phase.normalize_advantages and horizon > 1:
+                    advantages = torch.tensor(
+                        buffer.advantages if buffer else (), dtype=torch.float64
+                    )
+                    mean = strategy.sum(float(advantages.sum())) / horizon
+                    variance = (
+                        strategy.sum(float((advantages - mean).square().sum()))
+                        / horizon
+                    )
+                    if buffer is not None:
+                        buffer = replace(
+                            buffer,
+                            advantages=tuple(
+                                ((advantages - mean) / max(variance**0.5, 1e-8))
+                                .float()
+                                .tolist()
+                            ),
+                        )
+                episodes = [
+                    item
+                    for stream in strategy.gather_for_writer(episodes)
+                    for item in stream
+                ]
+                session.collection_seconds += perf_counter() - collection_start
+                sequences.record(buffer)
+                update_start = perf_counter()
                 record = update_ppo(session, value, buffer)
+                session.update_seconds += perf_counter() - update_start
                 del buffer
             env_steps += horizon
-            session.complete_online_update(
+            session.complete_update(
+                online=True,
                 final=env_steps == phase.budget.env_steps,
                 training={
                     **record,

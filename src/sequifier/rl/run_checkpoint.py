@@ -27,6 +27,7 @@ from sequifier.rl.run_state import (
     PhaseExecution,
     require_equal,
 )
+from sequifier.rl.selection import stage_candidate
 from sequifier.runtime.plan import new_run_id
 from sequifier.runtime.random_state import capture_rng_state
 
@@ -58,7 +59,16 @@ class RunCheckpoint:
         return self.plan.get("phase_offset", 0) + self.phase_index
 
     @classmethod
-    def load(cls, path, config, plan, data_identity=None, *, run_id=None):
+    def load(
+        cls,
+        path,
+        config,
+        plan,
+        data_identity=None,
+        *,
+        run_id=None,
+        previous_commit=None,
+    ):
         path = select_run_checkpoint(Path(path), config.resume)
         if path is None:
             return None
@@ -104,7 +114,7 @@ class RunCheckpoint:
             )
             if data_identity is not None:
                 checkpoint.validate_dependencies(config, data_identity)
-            checkpoint.validate(config)
+            checkpoint.validate(config, previous_commit=previous_commit)
             require_phase_boundary(envelope, checkpoint.phase_boundary())
             return checkpoint
         except (KeyError, TypeError, AttributeError, IndexError) as exc:
@@ -120,7 +130,7 @@ class RunCheckpoint:
             )
         require_equal(data_identity, self.data_identity, "resume.data")
 
-    def validate(self, config):
+    def validate(self, config, *, previous_commit=None):
         validate_finite_state(self.incoming_actor, "incoming_actor")
         for position, record in enumerate(self.completed):
             result = PhaseResult.model_validate(record.result)
@@ -180,21 +190,38 @@ class RunCheckpoint:
             )
         selection = state["selection"]["best"]
         best = selection["transaction"]
+        origin = selection["phase_index"]
         if best is not None and (
-            (not isinstance(best, int) or isinstance(best, bool))
-            or not 0 <= best <= transaction
+            (isinstance(best, int) is False)
+            or best < 0
+            or (isinstance(origin, int) is False)
+            or not 0 <= origin <= self.next_phase_index
+            or (origin == self.next_phase_index and best > transaction)
         ):
             raise ValueError(
                 "checkpoint selected transaction is outside committed progress"
             )
-        if (selection["metric"] is None) != (selection["weights"] is None) or (
-            best is None
-        ) != (selection["weights"] is None):
+        if (
+            (selection["metric"] is None) != (selection["weights"] is None)
+            or (best is None) != (selection["weights"] is None)
+            or (origin is None) != (selection["weights"] is None)
+        ):
             raise ValueError(
-                "checkpoint best actor, metric and transaction must be recorded together"
+                "checkpoint best actor, metric, phase and transaction must be recorded together"
             )
+        phase = config.phases[self.phase_index]
+        if origin is not None and origin < self.next_phase_index:
+            previous = self.completed[-1] if self.completed else previous_commit
+            carried = previous.sidecars.get("policy_selection", {}) if previous else {}
+            if phase.model_selection.scope != "compatible_phases" or any(
+                selection[field] != carried.get(field)
+                for field in ("phase_index", "transaction", "metric")
+            ):
+                raise ValueError(
+                    "checkpoint best actor disagrees with the preceding phase"
+                )
         validate_reference_state(
-            config.phases[self.phase_index],
+            phase,
             self,
             self.next_phase_index,
         )
@@ -215,7 +242,15 @@ class RunCheckpoint:
             if snapshot is None:
                 continue
             if snapshot.keys() != expected.keys() or any(
-                snapshot[k].shape != v.shape or snapshot[k].dtype != v.dtype
+                (
+                    snapshot[k].shape != v.shape
+                    and not (
+                        ".prediction_scales.log_scales." in k
+                        and snapshot[k].ndim == 0
+                        and v.shape == (1,)
+                    )
+                )
+                or snapshot[k].dtype != v.dtype
                 for k, v in expected.items()
             ):
                 raise ValueError(
@@ -243,9 +278,9 @@ class RunCheckpoint:
             active=active,
         )
 
-    def save(self, path, device, state=None):
+    def save(self, path, device, state=None, *, random=None):
         """Atomically commit the run and its algorithm-owned recovery state."""
-        self.random = capture_rng_state(device)
+        self.random = random if random is not None else capture_rng_state(device)
         self.phase_state = state
         model = ModelArtifact(
             ContractVersions.MODEL_ARTIFACT,
@@ -274,7 +309,9 @@ class RunCheckpoint:
             ),
         )
 
-    def finish_phase(self, execution: PhaseExecution, telemetry_position, checkpoint):
+    def finish_phase(
+        self, execution: PhaseExecution, telemetry_position, evaluation, checkpoint
+    ):
         actor, result = execution.actor, execution.result
         require_equal(
             result.selected_weight_hash,
@@ -282,6 +319,17 @@ class RunCheckpoint:
             "handoff.selected_actor",
         )
         artifacts = PhaseArtifacts(Path(result.provenance["actor_path"]))
+        sidecars = {}
+        if telemetry_position is not None:
+            sidecars["telemetry"] = {
+                "path": str(artifacts.telemetry),
+                "position": telemetry_position,
+            }
+        candidate = stage_candidate(
+            artifacts, execution.best, evaluation, result.selected_weight_hash
+        )
+        if candidate is not None:
+            sidecars["policy_selection"] = candidate
         commit = PhaseCommit.stage(
             artifacts,
             result,
@@ -291,9 +339,7 @@ class RunCheckpoint:
                 metadata=result.model_dump(mode="json"),
                 weights=execution.weights,
             ),
-            telemetry={"path": str(artifacts.telemetry), "position": telemetry_position}
-            if telemetry_position is not None
-            else None,
+            sidecars=sidecars,
         )
         self.completed.append(commit)
         self.stopped = result.stop_scope == "end_plan"

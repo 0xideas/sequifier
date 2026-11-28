@@ -30,8 +30,7 @@ class OnlineResetResult:
 
 @dataclass(frozen=True)
 class OnlineStepResult:
-    # None is permitted only at a true terminal, where no bootstrap is requested.
-    observation: Mapping[str, Any] | None
+    observation: Mapping[str, Any]
     reward: float
     terminated: bool = False
     truncated: bool = False
@@ -233,18 +232,14 @@ def validate_step(result, units, *, compact_images=False):
     if dict(result.units) != units:
         raise ValueError("online observation units changed")
     numeric_scalar(result.reward, "online reward")
-    if result.observation is None and not result.terminated:
+    if result.observation is None:
         raise ValueError(
-            "bootstrap requires the genuine successor, never an autoreset observation"
+            "Every step requires its genuine successor observation, including termination"
         )
     if result.success is not None and not isinstance(result.success, bool):
         raise ValueError("adapter success must be boolean when defined")
     return OnlineStepResult(
-        (
-            _observation_fields(result.observation, compact_images)
-            if result.observation is not None
-            else None
-        ),
+        _observation_fields(result.observation, compact_images),
         float(result.reward),
         result.terminated,
         result.truncated,
