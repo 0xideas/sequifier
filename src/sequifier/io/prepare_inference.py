@@ -155,7 +155,8 @@ def _prepare_inference(
         )
     if any(not schema["sequenceId"].is_integer() for schema in schemas):
         raise ValueError("sequenceId must contain non-null integers")
-    depth = bool(metadata.depth_layouts)
+    input_layouts = metadata.depth_layouts.relevant_layouts(temporal_columns)
+    depth = bool(input_layouts)
     media_columns = {
         key
         for name in metadata.image_sources
@@ -193,6 +194,7 @@ def _prepare_inference(
             passthrough,
             mask_column,
             inline_media,
+            static_columns=getattr(config, "static_columns", None),
             sequence_provenance=sequence_provenance,
         )
         return IndexedView.load(destination / "predict.split.json")
@@ -228,7 +230,7 @@ def _prepare_inference(
                 "max_target_offset": metadata.max_target_offset,
                 "normalize_real_columns": metadata.normalize_real_columns,
                 "static_data_path": static_path,
-                "depth_layouts": metadata.depth_layouts,
+                "depth_layouts": input_layouts,
                 "image_sources": image_sources,
                 "preconditioning_image": prefix,
                 "time_alignment_column": metadata.time_alignment_column,
@@ -309,6 +311,7 @@ def _prepare_structured_rollout(
     mask_column,
     inline_media,
     *,
+    static_columns=None,
     sequence_provenance=None,
 ):
     from sequifier.config.depth_layout import depth_mask_metadata_key
@@ -345,7 +348,8 @@ def _prepare_structured_rollout(
     data = data.select("sequenceId", "itemPosition", *sorted(required))
     table = IndexedTable(data.sort("itemPosition"), "sequenceId")
     static = scan_tables((Path(static_path),)).collect() if static_path else None
-    static_columns = metadata.static_columns
+    if static_columns is None:
+        static_columns = metadata.static_columns
     if static_columns or metadata.preconditioning_image:
         required_static = [
             *static_columns,
@@ -415,6 +419,7 @@ def _prepare_structured_rollout(
                 "indexed_passthrough": sorted(passthrough),
                 "indexed_derived_features": [],
                 "depth_layouts": layouts,
+                "static_columns": static_columns,
                 "static_features_path": "static.parquet"
                 if static is not None
                 else None,

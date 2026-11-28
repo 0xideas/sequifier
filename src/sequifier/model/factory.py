@@ -285,7 +285,9 @@ def _build_composable_network(
             static_condition_encoder=static_encoder,
             preconditioning_image_encoder=image_prefix_encoder,
             prefix_projection=prefix_projection,
-            depth_layouts=interface.depth_layouts,
+            depth_layouts=interface.depth_layouts.relevant_layouts(
+                interface.input_columns
+            ),
             input_columns=tuple(interface.input_columns),
             input_n_classes=interface.n_classes,
         )

@@ -7,6 +7,13 @@ from torch import Tensor, nn
 from torch.nn import ModuleDict
 
 from sequifier.config.model_interface import ResolvedModelInterface
+from sequifier.model.decoder_features import (
+    DepthReadout,
+    FeatureReadout,
+    GroupedReadout,
+    StaticReadout,
+    TemporalConvReadout,
+)
 from sequifier.model.dtypes import cast_floating_to_module_dtype
 from sequifier.model.encoder_stack import TransformerEncoderStack
 from sequifier.model.hash_codec import CategoricalHashCodec
@@ -210,6 +217,56 @@ class TargetDecoderBranch(nn.Module):
                     width=output.shape[-1],
                 )
             outputs[target_column] = output
+        return outputs
+
+
+class FeatureDecoderBranch(TargetDecoderBranch):
+    """Typed output heads over feature-specific readouts."""
+
+    def __init__(self, *, readout, share_heads, **kwargs):
+        super().__init__(hidden_dims=[], activation="gelu", dropout=0.0, **kwargs)
+        self.readout = readout
+        if share_heads:
+            shared = {}
+            for name in self.target_columns:
+                codec = self.hash_codecs.get(name)
+                signature = (
+                    self.target_column_types[name],
+                    tuple(codec.widths) if codec else (),
+                    self.n_classes.get(name),
+                )
+                self.output_layers[name] = shared.setdefault(
+                    signature, self.output_layers[name]
+                )
+
+    def decode_targets(self, x, targets):
+        hidden = self.readout(x, targets)
+        return {
+            name: self._project_target(name, value)
+            if name in self.output_layers
+            else value
+            for name, value in hidden.items()
+        }
+
+    def decode(self, target_column, x):
+        return self.decode_targets(x, (target_column,))[target_column]
+
+    def forward(self, x, *, trace=None, branch_name="default", **kwargs):
+        outputs = self.decode_targets(x, tuple(self.target_columns))
+        if trace is not None:
+            for name in self.target_columns:
+                value = outputs[name]
+                axes = (
+                    ("batch", "time", "depth", "channel")
+                    if value.ndim == 4
+                    else ("batch", "time", "channel")
+                )
+                outputs[name] = trace.emit(
+                    f"decoder.branch.{branch_name}.logits.{name}",
+                    value,
+                    axes=axes,
+                    width=value.shape[-1],
+                )
         return outputs
 
 
@@ -781,6 +838,14 @@ class TargetDecoding(nn.Module):
             ]
             for target_column in self.target_columns
         }
+        for outputs in branch_outputs.values():
+            raw.update(
+                {
+                    key: value
+                    for key, value in outputs.items()
+                    if key.startswith("depth_occupancy:")
+                }
+            )
         auxiliary = {}
         for target, codec in self.hash_codecs.items():
             auxiliary[target] = torch.split(raw[target], codec.widths, dim=-1)
@@ -825,6 +890,12 @@ def resolve_decoding_plan(hparams: ResolvedModelInterface) -> DecodingPlan:
     for branch_name, branch_config in branch_items:
         if branch_config.type not in {
             *DECODER_HIDDEN_DIMS,
+            "depth_layout",
+            "static_readout",
+            "grouped",
+            "feature_pool",
+            "siamese",
+            "temporal_conv",
             "autoregressive_transformer",
         }:
             raise ValueError(f"Unknown target decoder type: {branch_config.type}")
@@ -875,6 +946,23 @@ def resolve_decoding_plan(hparams: ResolvedModelInterface) -> DecodingPlan:
                         "shared categorical targets must have identical decoder-ID "
                         f"semantics, got {group!r}"
                     )
+        deep_columns = {
+            c for c in target_columns if hparams.depth_layouts.is_deep_column(c)
+        }
+        if branch_config.type == "depth_layout":
+            layout = hparams.depth_layouts.root.get(branch_config.layout)
+            if layout is None or not set(target_columns).issubset(layout.columns):
+                raise ValueError(
+                    "depth_layout targets must belong to the named depth layout"
+                )
+            if any(
+                b.config.type == "depth_layout"
+                and b.config.layout == branch_config.layout
+                for b in branches
+            ):
+                raise ValueError("A depth layout must be decoded by a single branch")
+        elif deep_columns:
+            raise ValueError("Depth targets require a depth_layout decoder")
         for target_column in target_columns:
             if target_column in target_to_branch:
                 raise ValueError(
@@ -936,6 +1024,42 @@ def build_target_decoding(
                     target: hash_codecs[target]
                     for target in branch.target_columns
                     if target in hash_codecs
+                },
+            )
+        elif branch_config.type not in DECODER_HIDDEN_DIMS:
+            targets = list(branch.target_columns)
+            if branch_config.type == "depth_layout":
+                width = branch_config.architecture.model_dim
+                readout = DepthReadout(
+                    input_dim,
+                    hparams.depth_layouts[branch_config.layout],
+                    branch_config,
+                )
+            elif branch_config.type == "temporal_conv":
+                width = branch_config.channels
+                readout = TemporalConvReadout(
+                    model_dim, hparams.decoder.support_length, branch_config
+                )
+            elif branch_config.type == "grouped":
+                width = branch_config.token_dim
+                readout = GroupedReadout(input_dim, width, branch_config.groups)
+            else:
+                width = branch_config.token_dim
+                readout_cls = (
+                    StaticReadout
+                    if branch_config.type == "static_readout"
+                    else FeatureReadout
+                )
+                readout = readout_cls(input_dim, width, targets)
+            branches[branch.name] = FeatureDecoderBranch(
+                readout=readout,
+                share_heads=branch_config.type == "siamese",
+                target_columns=targets,
+                target_column_types=hparams.target_column_types,
+                n_classes=hparams.target_n_classes,
+                input_dim=width,
+                hash_codecs={
+                    name: hash_codecs[name] for name in targets if name in hash_codecs
                 },
             )
         else:

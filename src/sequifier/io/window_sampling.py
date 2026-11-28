@@ -13,6 +13,19 @@ from sequifier.io.static_features import StaticFeatureTable
 from sequifier.typechecking import beartype
 
 
+def temporal_columns(config):
+    if hasattr(config, "interface"):
+        static = set(config.interface.static_target_columns)
+    else:
+        static = set()
+    return list(
+        dict.fromkeys(
+            config.input_columns
+            + [name for name in config.target_columns if name not in static]
+        )
+    )
+
+
 def validate_split_bounds_available(
     start_item_positions: Optional[Tensor],
     split_start_item_positions: Optional[Tensor],
@@ -75,10 +88,14 @@ def build_window_batch(
         )
         for column in input_columns
     }
+    static_values = {}
     if static_table is not None:
         if sequence_ids is None:
             raise ValueError("Static features require stored sequence IDs")
-        inputs.update(static_table.lookup(sequence_ids[stored_rows]))
+        static_values = static_table.lookup(sequence_ids[stored_rows])
+        inputs.update(
+            {k: v for k, v in static_values.items() if k not in target_columns}
+        )
     targets = {
         column: plan.gather(
             sequences[column],
@@ -87,11 +104,17 @@ def build_window_batch(
             target=True,
         )
         for column in target_columns
+        if column not in static_values
     }
     metadata = plan.build_masks(
         sample_index.left_pad_lengths[stored_rows],
         input_starts,
     )
+    for column in target_columns:
+        if column in static_values:
+            targets[column] = static_values[column][:, None].expand_as(
+                metadata["target_valid_mask"]
+            )
     if any(
         value is None
         for value in (
@@ -133,6 +156,10 @@ def build_window_batch(
         inputs.update(images)
         metadata.update(image_masks)
     for name, mask in (depth_valid_masks or {}).items():
+        if any(target.ndim == 3 for target in targets.values()):
+            metadata[f"target_depth_valid_mask:{name}"] = plan.gather(
+                mask, stored_rows, input_starts, target=True
+            )
         metadata[depth_mask_metadata_key(name)] = plan.gather(
             mask, stored_rows, input_starts
         )

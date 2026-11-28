@@ -14,6 +14,7 @@ from beartype.typing import Iterator
 from loguru import logger
 
 from sequifier.config.column_names import next_item_coordinates
+from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.config.infer_config import ResolvedInferenceConfig, load_inferer_config
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
@@ -420,8 +421,6 @@ def _windowed_inference_batch_from_storage(
         )
         inputs.update(images)
         metadata.update(image_masks)
-    from sequifier.config.depth_layout import depth_mask_metadata_key
-
     for name, mask in (depth_valid_masks or {}).items():
         metadata[depth_mask_metadata_key(name)] = plan.gather(
             mask, stored_rows, input_starts
@@ -737,6 +736,11 @@ def _apply_valid_prediction_mask_to_dict(
         )
         for key, value in values.items()
     }
+
+
+def _nullable_prediction_column(values: np.ndarray, present: np.ndarray) -> pl.Series:
+    column = pl.Series(values)
+    return column.zip_with(pl.Series(present), pl.Series([None], dtype=column.dtype))
 
 
 @beartype
@@ -1117,16 +1121,38 @@ def infer_generative(
             for target_column, predictions in preds.items():
                 if target_column in inferer.index_map:
                     preds[target_column] = np.array(
-                        [inferer.index_map[target_column][i] for i in predictions]
-                    )
+                        [inferer.index_map[target_column][i] for i in predictions.flat]
+                    ).reshape(predictions.shape)
 
         for target_column, predictions in preds.items():
-            if inferer.target_column_types[target_column] == "real":
+            if inferer.target_column_types.get(target_column) == "real":
                 preds[target_column] = inferer.invert_normalization(
                     predictions, target_column
                 )
 
         assert valid_prediction_mask is not None
+        # A static head emits once per window. Only the last output row owns it.
+        static_targets = set()
+        for name, values in preds.items():
+            if (
+                output_count_per_window > 1
+                and len(values) == windowed.sequence_ids.numel()
+            ):
+                static_targets.add(name)
+                preds[name] = np.repeat(values.reshape(-1), output_count_per_window)
+                if probs is not None and name in probs:
+                    values_per_window = probs[name]
+                    aligned = np.full(
+                        (
+                            len(values),
+                            output_count_per_window,
+                            values_per_window.shape[-1],
+                        ),
+                        np.nan,
+                        dtype=values_per_window.dtype,
+                    )
+                    aligned[:, -1] = values_per_window
+                    probs[name] = aligned.reshape(-1, values_per_window.shape[-1])
 
         sequence_ids_for_preds = _apply_valid_prediction_mask(
             sequence_ids_for_preds, valid_prediction_mask, "sequenceId"
@@ -1167,11 +1193,24 @@ def infer_generative(
                     )
                     logger.info(f"Writing probabilities to '{probabilities_path}'")
                     decoder_ids = inferer.target_decoder_ids.get(
-                        target_column, range(probs[target_column].shape[1])
+                        target_column, range(probs[target_column].shape[-1])
                     )
                     labels = [inferer.index_map[target_column][i] for i in decoder_ids]
+                    values = probs[target_column]
+                    if values.ndim == 3:
+                        layout = (
+                            config.dataset_metadata.depth_layouts.layout_for_column(
+                                target_column
+                            )
+                        )
+                        labels = [
+                            f"{label}[{i + layout.position_base}]"
+                            for i in range(layout.max_depth_length)
+                            for label in labels
+                        ]
+                        values = values.reshape(len(values), -1)
                     write_data(
-                        probability_table(labels, probs[target_column]),
+                        probability_table(labels, values),
                         probabilities_path,
                         config.write_format,
                     )
@@ -1184,16 +1223,47 @@ def infer_generative(
             and inferer.prediction_length == 1
         ):
             coordinates = next_item_coordinates(item_positions_for_preds - 1)
+        columns = {}
+        static_present = None
+        if static_targets:
+            last_window_row = np.zeros_like(valid_prediction_mask)
+            last_window_row[output_count_per_window - 1 :: output_count_per_window] = (
+                True
+            )
+            static_present = last_window_row[valid_prediction_mask]
+        for target in inferer.target_columns:
+            layout = config.dataset_metadata.depth_layouts.layout_for_column(target)
+            if layout is None:
+                values = preds[target].reshape(-1)
+                columns[target] = (
+                    _nullable_prediction_column(values, static_present)
+                    if static_present is not None and target in static_targets
+                    else values
+                )
+                continue
+            layout_name = config.dataset_metadata.depth_layouts.column_to_layout[target]
+            occupied = (
+                preds[f"depth_occupancy:{layout_name}"].reshape(
+                    -1, layout.max_depth_length
+                )
+                >= 0
+            )
+            values = preds[target].reshape(-1, layout.max_depth_length)
+            for slot in range(layout.max_depth_length):
+                position = slot + layout.position_base
+                columns[f"{target}[{position}]"] = _nullable_prediction_column(
+                    values[:, slot], occupied[:, slot]
+                )
+                columns[f"depth_occupancy:{layout_name}[{position}]"] = occupied[
+                    :, slot
+                ]
         predictions = pl.DataFrame(
             {
                 "sequenceId": sequence_ids_for_preds,
                 "subsequenceId": subsequence_ids_for_preds,
                 "windowStartOffset": window_offsets_for_preds,
                 **coordinates,
-                **{
-                    target_column: preds[target_column].flatten()
-                    for target_column in inferer.target_columns
-                },
+                **columns,
             }
         )
 
@@ -1347,6 +1417,28 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
     publish_inference_rollout(trajectory, config)
 
 
+def _append_forecast(history: np.ndarray, value: np.ndarray) -> np.ndarray:
+    """Advance the time axis, retaining each sample's physical slot axes."""
+    next_frame = value.reshape(history[:, -1:].shape).astype(history.dtype, copy=False)
+    return np.concatenate((history[:, 1:], next_frame), axis=1)
+
+
+def _merge_forecast_steps(
+    steps: list[dict[str, np.ndarray]], static_targets: set[str]
+) -> dict[str, np.ndarray]:
+    """Flatten sample and step axes while preserving slots and class scores."""
+    if len(steps) == 1:
+        return steps[0].copy()
+    merged = {}
+    for name in steps[0]:
+        if name in static_targets:
+            merged[name] = steps[-1][name]
+        else:
+            values = np.stack([step[name] for step in steps], axis=1)
+            merged[name] = values.reshape(-1, *values.shape[2:])
+    return merged
+
+
 @beartype
 def get_probs_preds_from_dict(
     config: Any,
@@ -1357,8 +1449,6 @@ def get_probs_preds_from_dict(
     total_steps: int = 1,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Infer PT predictions, flattened sample-major across autoregressive steps."""
-
-    target_cols = inferer.target_columns
 
     X = {
         key: tensor.numpy()
@@ -1373,11 +1463,11 @@ def get_probs_preds_from_dict(
             "Autoregressive generation beyond observed image frames requires "
             "future image inputs and is not supported"
         )
-    metadata_np = {key: tensor.numpy() for key, tensor in metadata.items()}
-    all_probs_list = {col: [] for col in target_cols}
-    all_preds_list = {col: [] for col in target_cols}
-
-    metadata_for_step = metadata_np
+    metadata_for_step = {key: tensor.numpy() for key, tensor in metadata.items()}
+    layouts = config.dataset_metadata.depth_layouts
+    input_layouts = layouts.relevant_layouts(config.input_columns)
+    prediction_steps = []
+    probability_steps = []
 
     if not isinstance(total_steps, int) or total_steps < 1:
         raise ValueError("generation budget must be a positive integer")
@@ -1392,60 +1482,55 @@ def get_probs_preds_from_dict(
             preds_for_step = inferer.infer_generative(
                 None, metadata_for_step, probs_for_step
             )
-            for col in target_cols:
-                all_probs_list[col].append(probs_for_step[col])
+            probability_steps.append(probs_for_step)
         else:
+            probs_for_step = None
             preds_for_step = inferer.infer_generative(
                 X,
                 metadata_for_step,
                 column_data_types=column_data_types,
                 return_probs=False,
             )
-        for col in target_cols:
-            all_preds_list[col].append(preds_for_step[col])
-
-        if i == (total_steps - 1):
+        prediction_steps.append(preds_for_step)
+        if i + 1 == total_steps:
             break
 
-        X_next = {}
-        for col in X.keys():
-            if col in config.static_columns or col == "__preconditioning_image":
-                X_next[col] = X[col]
-                continue
-            shifted_input = X[col][:, 1:]
-
-            new_value = preds_for_step[col].reshape(-1, 1).astype(shifted_input.dtype)
-
-            X_next[col] = np.concatenate([shifted_input, new_value], axis=1)
-
-        X = X_next
-        if (
-            metadata_for_step is not None
-            and "attention_valid_mask" in metadata_for_step
-        ):
-            shifted_mask = metadata_for_step["attention_valid_mask"][:, 1:]
-            appended_valid = np.ones(
-                (shifted_mask.shape[0], 1), dtype=shifted_mask.dtype
+        next_metadata = metadata_for_step.copy()
+        next_values = {col: preds_for_step[col] for col in config.input_columns}
+        for name, layout in input_layouts.items():
+            mask_key = depth_mask_metadata_key(name)
+            mask = metadata_for_step[mask_key]
+            occupied = (
+                preds_for_step[f"depth_occupancy:{name}"].reshape(
+                    mask.shape[0], layout.max_depth_length
+                )
+                >= 0
             )
-            metadata_for_step["attention_valid_mask"] = np.concatenate(
-                [shifted_mask, appended_valid], axis=1
+            next_metadata[mask_key] = _append_forecast(mask, occupied)
+            for col in layout.columns:
+                values = next_values[col].reshape(occupied.shape)
+                next_values[col] = np.where(occupied, values, 0)
+
+        X = X.copy()
+        for col, value in next_values.items():
+            X[col] = _append_forecast(X[col], value)
+        if "attention_valid_mask" in metadata_for_step:
+            mask = metadata_for_step["attention_valid_mask"]
+            next_metadata["attention_valid_mask"] = _append_forecast(
+                mask, np.ones_like(mask[:, -1])
             )
+        metadata_for_step = next_metadata
 
-    final_preds = {
-        col: np.array(preds_list).T.reshape(-1, 1).flatten()
-        for col, preds_list in all_preds_list.items()
-    }
-
-    if config.output_probabilities:
-        final_probs = {
-            col: np.array(probs_list)
-            .transpose((1, 0, 2))
-            .reshape(-1, probs_list[0].shape[1])
-            for col, probs_list in all_probs_list.items()
-        }
-    else:
-        final_probs = None
-
+    static_targets = set(config.dataset_metadata.static_columns)
+    final_preds = _merge_forecast_steps(prediction_steps, static_targets)
+    for name in inferer.target_columns:
+        if not layouts.is_deep_column(name):
+            final_preds[name] = final_preds[name].reshape(-1)
+    final_probs = (
+        _merge_forecast_steps(probability_steps, static_targets)
+        if probability_steps
+        else None
+    )
     return (final_probs, final_preds)
 
 
@@ -1636,7 +1721,7 @@ class Inferer:
             return values
 
         decoder_ids = self.target_decoder_ids.get(
-            target_column or "", list(range(values.shape[1]))
+            target_column or "", list(range(values.shape[-1]))
         )
         if SPECIAL_TOKEN_IDS.mask not in decoder_ids:
             return values
@@ -1644,19 +1729,19 @@ class Inferer:
 
         adjusted = np.array(values, copy=True)
         if is_log_probabilities:
-            adjusted[:, mask_id] = -np.inf
-            row_max = np.max(adjusted, axis=1, keepdims=True)
+            adjusted[..., mask_id] = -np.inf
+            row_max = np.max(adjusted, axis=-1, keepdims=True)
             if not np.isfinite(row_max).all():
                 raise ValueError(
                     "BERT categorical outputs contain no generatable classes."
                 )
             log_normalizers = row_max + np.log(
-                np.exp(adjusted - row_max).sum(axis=1, keepdims=True)
+                np.exp(adjusted - row_max).sum(axis=-1, keepdims=True)
             )
             return adjusted - log_normalizers
 
-        adjusted[:, mask_id] = 0.0
-        row_sums = adjusted.sum(axis=1, keepdims=True)
+        adjusted[..., mask_id] = 0.0
+        row_sums = adjusted.sum(axis=-1, keepdims=True)
         if not np.isfinite(row_sums).all() or np.any(row_sums <= 0):
             raise ValueError(
                 "BERT categorical probabilities contain no generatable classes."
@@ -1717,7 +1802,7 @@ class Inferer:
                 preds = {
                     target_column: outputs
                     for target_column, outputs in outs.items()
-                    if self.target_column_types[target_column] != "categorical"
+                    if self.target_column_types.get(target_column) != "categorical"
                 }
                 logits = {
                     target_column: self._exclude_mask_token(
@@ -1726,7 +1811,7 @@ class Inferer:
                         target_column=target_column,
                     )
                     for target_column, outputs in outs.items()
-                    if self.target_column_types[target_column] == "categorical"
+                    if self.target_column_types.get(target_column) == "categorical"
                 }
                 return {**preds, **normalize(logits)}
         else:
@@ -1743,11 +1828,12 @@ class Inferer:
                     self.sample_from_distribution_columns is None
                     or target_column not in self.sample_from_distribution_columns
                 ):
-                    outs[target_column] = outs[target_column].argmax(1)
+                    outs[target_column] = outs[target_column].argmax(-1)
                 else:
                     outs[target_column] = sample_with_cumsum(
-                        outs[target_column], is_log_probs=(probs is None)
-                    )
+                        outs[target_column].reshape(-1, outs[target_column].shape[-1]),
+                        is_log_probs=(probs is None),
+                    ).reshape(outs[target_column].shape[:-1])
                 if target_column in self.target_decoder_ids:
                     outs[target_column] = np.asarray(
                         self.target_decoder_ids[target_column]
@@ -1815,7 +1901,7 @@ class Inferer:
                 target_column: np.concatenate(
                     [out_sub[target_column] for out_sub in out_subs], axis=0
                 )[: size * self.prediction_length, :]
-                for target_column in self.target_columns
+                for target_column in out_subs[0]
             }
         elif self.inference_model_type == "pt":
             assert x is not None
@@ -1901,11 +1987,11 @@ class Inferer:
 
         outputs = []
         for output in ort_outs:
-            if not isinstance(output, np.ndarray) or output.ndim != 3:
+            if not isinstance(output, np.ndarray) or output.ndim not in (3, 4):
                 raise ValueError(
-                    "Expected a sequence-major ONNX output tensor of rank three"
+                    "Expected a sequence-major ONNX output tensor of rank three or four"
                 )
-            outputs.append(output.transpose(1, 0, 2).reshape(-1, output.shape[2]))
+            outputs.append(output.swapaxes(0, 1).reshape(-1, *output.shape[2:]))
         return outputs
 
 
@@ -1913,7 +1999,7 @@ class Inferer:
 def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """Softmax logits by target column."""
     shifted_values = {
-        target_column: target_values - np.max(target_values, axis=1, keepdims=True)
+        target_column: target_values - np.max(target_values, axis=-1, keepdims=True)
         for target_column, target_values in outs.items()
     }
     exp_values = {
@@ -1921,7 +2007,7 @@ def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         for target_column, target_values in shifted_values.items()
     }
     probs = {
-        target_column: target_values / np.sum(target_values, axis=1, keepdims=True)
+        target_column: target_values / np.sum(target_values, axis=-1, keepdims=True)
         for target_column, target_values in exp_values.items()
     }
     return probs

@@ -197,7 +197,13 @@ an autoregressive transformer branch. External sampling remains available for
 ordinary decoder branches.
 
 Autoregressive inference requires a forward-looking generative model, prediction length
-`1`, and identical input and target columns. For tabular CSV or Parquet input,
+`1`, and a prediction for each temporal input used on the next step. Additional
+targets can be reported. For each depth layout, the forecast appends one frame
+of child values and uses predicted occupancy to mark its valid slots. Static
+conditioning stays fixed. A static readout appears on the final generated row
+of each seed window.
+
+For tabular CSV or Parquet input,
 it begins at the first input window for each sequence and generates the same
 number of steps for every sequence. Folder-based PT input is processed using
 its stored windows rather than this first-window reduction.

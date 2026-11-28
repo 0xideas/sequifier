@@ -167,7 +167,7 @@ def infer_with_generative_model(
                         torch.log_softmax(
                             value[:, result.prediction_positions].float(), dim=-1
                         )
-                        if route.target_column_types[target] == "categorical"
+                        if route.target_column_types.get(target) == "categorical"
                         else value[:, result.prediction_positions].float()
                     ).cpu()
                     for target, value in result.logits.items()
@@ -175,11 +175,9 @@ def infer_with_generative_model(
             )
     return {
         target: np.concatenate(
-            [
-                batch[target].numpy().reshape(-1, batch[target].shape[-1])
-                for batch in outputs
-            ],
+            [batch[target].flatten(0, 1).numpy() for batch in outputs],
             axis=0,
         )[:size]
-        for target in target_columns
+        for target in outputs[0]
+        if target in target_columns or target.startswith("depth_occupancy:")
     }

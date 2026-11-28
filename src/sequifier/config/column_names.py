@@ -45,7 +45,17 @@ def validate_column_names(names, field, *, allowed=(), prefixes=()):
     conflicts = sorted(
         name
         for name in names
-        if (name in reserved or name.startswith(("__", "depth_valid_mask:")))
+        if (
+            name in reserved
+            or name.startswith(
+                (
+                    "__",
+                    "depth_valid_mask:",
+                    "depth_occupancy:",
+                    "target_depth_valid_mask:",
+                )
+            )
+        )
         and name not in allowed
         and not name.startswith(prefixes)
     )

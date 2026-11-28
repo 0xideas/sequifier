@@ -660,10 +660,86 @@ class AutoregressiveTransformerDecodingConfig(ConfigModel):
         return self
 
 
+class ColumnDecoderConfig(ConfigModel):
+    target_columns: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("target_columns")
+    @classmethod
+    def validate_columns(cls, columns):
+        if columns is not None:
+            _validate_column_list_unique(columns, "decoder target columns")
+        return columns
+
+
+class FeaturePoolDecodingConfig(ColumnDecoderConfig):
+    type: Literal["feature_pool"]
+    token_dim: int = Field(gt=0)
+
+
+class SiameseDecodingConfig(ColumnDecoderConfig):
+    type: Literal["siamese"]
+    token_dim: int = Field(gt=0)
+
+
+class GroupedDecodingConfig(ColumnDecoderConfig):
+    type: Literal["grouped"]
+    token_dim: int = Field(gt=0)
+    groups: dict[str, list[str]] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_groups(self):
+        columns = []
+        for name, group in self.groups.items():
+            validate_module_dict_key(name, "decoder group")
+            if not group:
+                raise ValueError("Decoder groups must contain targets")
+            columns.extend(group)
+        _validate_column_list_unique(columns, "decoder groups")
+        if self.target_columns is None:
+            self.target_columns = columns
+        elif set(self.target_columns) != set(columns):
+            raise ValueError("Decoder groups must partition target_columns")
+        return self
+
+
+class TemporalConvDecodingConfig(ColumnDecoderConfig):
+    type: Literal["temporal_conv"]
+    channels: int = Field(gt=0)
+    kernel_size: int = Field(gt=0)
+    dilation: int = Field(default=1, gt=0)
+
+
+class StaticReadoutDecodingConfig(ColumnDecoderConfig):
+    type: Literal["static_readout"]
+    token_dim: int = Field(gt=0)
+
+
+class DepthLayoutDecodingConfig(ColumnDecoderConfig):
+    type: Literal["depth_layout"]
+    layout: str
+    architecture: "TransformerEncoderArchitectureConfig"
+
+    @model_validator(mode="after")
+    def validate_positions(self):
+        if self.architecture.position_encoding.type not in {
+            "learned",
+            "sinusoidal",
+            "rope",
+        }:
+            raise ValueError("Depth positions support learned, sinusoidal, and rope")
+        return self
+
+
 BranchDecodingConfig = Annotated[
     Union[
         LinearDecodingConfig,
         MLPDecodingConfig,
+        FeaturePoolDecodingConfig,
+        SiameseDecodingConfig,
+        GroupedDecodingConfig,
+        TemporalConvDecodingConfig,
+        StaticReadoutDecodingConfig,
+        DepthLayoutDecodingConfig,
         AutoregressiveTransformerDecodingConfig,
     ],
     Field(discriminator="type"),
@@ -697,6 +773,38 @@ class AutoregressiveTransformerDecoderComponentConfig(
     pass
 
 
+class FeaturePoolDecoderComponentConfig(
+    DecoderComponentBase, FeaturePoolDecodingConfig
+):
+    pass
+
+
+class SiameseDecoderComponentConfig(DecoderComponentBase, SiameseDecodingConfig):
+    pass
+
+
+class GroupedDecoderComponentConfig(DecoderComponentBase, GroupedDecodingConfig):
+    pass
+
+
+class TemporalConvDecoderComponentConfig(
+    DecoderComponentBase, TemporalConvDecodingConfig
+):
+    pass
+
+
+class StaticReadoutDecoderComponentConfig(
+    DecoderComponentBase, StaticReadoutDecodingConfig
+):
+    pass
+
+
+class DepthLayoutDecoderComponentConfig(
+    DecoderComponentBase, DepthLayoutDecodingConfig
+):
+    pass
+
+
 class CompositeDecoderComponentConfig(DecoderComponentBase):
     type: Literal["composite"]
     branches: dict[str, BranchDecodingConfig] = Field(..., min_length=1)
@@ -716,6 +824,12 @@ DecoderComponentConfig = Annotated[
     Union[
         LinearDecoderComponentConfig,
         MLPDecoderComponentConfig,
+        FeaturePoolDecoderComponentConfig,
+        SiameseDecoderComponentConfig,
+        GroupedDecoderComponentConfig,
+        TemporalConvDecoderComponentConfig,
+        StaticReadoutDecoderComponentConfig,
+        DepthLayoutDecoderComponentConfig,
         AutoregressiveTransformerDecoderComponentConfig,
         CompositeDecoderComponentConfig,
     ],
@@ -815,6 +929,8 @@ class TransformerEncoderArchitectureConfig(ConfigModel):
         return self
 
 
+DepthLayoutDecodingConfig.model_rebuild()
+DepthLayoutDecoderComponentConfig.model_rebuild()
 AutoregressiveTransformerDecodingConfig.model_rebuild()
 AutoregressiveTransformerDecoderComponentConfig.model_rebuild()
 

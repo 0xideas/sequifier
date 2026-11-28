@@ -32,6 +32,7 @@ from sequifier.io.static_features import table_for_config
 from sequifier.io.window_sampling import (
     build_window_batch,
     target_valid_from_offsets,
+    temporal_columns,
     validate_split_bounds_available,
 )
 
@@ -71,8 +72,7 @@ class WindowChunk:
         )
         return cls(
             sequences={
-                name: payload.sequences[name]
-                for name in dict.fromkeys(config.input_columns + config.target_columns)
+                name: payload.sequences[name] for name in temporal_columns(config)
             },
             sequence_ids=payload.sequence_ids,
             sample_index=sample_index,

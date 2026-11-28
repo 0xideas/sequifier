@@ -943,8 +943,7 @@ datasets:
         type: prepared
 ```
 
-Image view names and structured image cell names cannot be target columns;
-the available decoder heads produce tabular targets. For BERT training, temporal
+Image view names and structured image cell names cannot be target columns. For BERT training, temporal
 image frames at selected positions receive the configured masked, random, or
 unchanged replacement. Masked frames become black and random frames receive
 random pixel values; frame validity stays the same. Sequence preconditioning
@@ -1143,11 +1142,12 @@ the depth input projection handles the difference. The pooled projection handles
 differences between `architecture.model_dim` and `output_dim`.
 
 CLS occupies position zero, and physical slot `s` occupies position `s+1`.
-Empty collections have a learnable CLS-only representation. Depth columns
-cannot be targets because there is no depth decoder head. BERT training masks
+Empty collections have a learnable CLS-only representation. Use a
+`depth_layout` decoder to predict child columns and physical slot occupancy. BERT training masks
 valid child slots at selected outer time steps, using the configured masked,
 random, or unchanged replacement; padded child slots stay untouched.
-Autoregressive depth inference is excluded.
+For autoregressive forecasting, predict each depth input with a `depth_layout`
+decoder for its layout. Its predicted occupancy supplies the next slot-validity mask.
 
 A composite branch may itself be a composite. Every nested composite requires
 `output_dim`; an omitted root composite width retains the existing backbone
@@ -1158,6 +1158,28 @@ where it appears, including overlaps between their descendant features.
 non-default child policies are rejected. Temporal per-feature positions occur
 at leaf outputs only, and global temporal positions occur in the backbone.
 Composite merges do not add another temporal position stage.
+
+## Feature decoder branches
+
+These types can be used as the interface decoder or as named branches of a
+`composite` decoder. The interface owns `prediction_length` and `support_length`.
+
+| Type | Settings | Output |
+| --- | --- | --- |
+| `feature_pool` | `token_dim` | One learned token per target conditions a shared context projection. Each token has its own categorical or real head. |
+| `grouped` | `token_dim`, `groups` | Each named group has an independent feature-token readout. Groups partition the branch targets. |
+| `siamese` | `token_dim` | Target tokens distinguish entities. Output heads are shared between targets with the same type and output dimensions. |
+| `temporal_conv` | `channels`, `kernel_size`, optional `dilation` | A 1-D convolution reads the latest support states through the predicted position. Set `support_length` to at least `1 + dilation * (kernel_size - 1)`. |
+| `static_readout` | `token_dim` | One prediction per target per sampled sequence window, using its final contextualized state. Training looks up the label by `sequenceId` in the prepared static table. Keep the target out of the conditioning inputs. |
+| `depth_layout` | `layout`, `architecture` | Learned physical-slot queries and a transformer produce one prediction per child column and slot. One additional `depth_occupancy:<layout>` output holds the occupancy logits. |
+
+For depth targets the training window gathers slot validity at the **target**
+offset. Each valid outer position contributes the mean loss over its occupied
+children and the mean binary occupancy loss across its slots. An empty
+collection contributes occupancy loss alone. A layout without gaps models a
+distribution over collection lengths, so occupancy decreases across slots. A forecast table contains columns
+such as `amount[0]` and `depth_occupancy:child_items[0]`, using the layout's position
+base. Unoccupied slots have null predicted values.
 
 ## Ordered autoregressive target decoding
 

@@ -51,7 +51,7 @@ class _OnnxWrapper(nn.Module):
                     logits[item["key"]][:, prediction_positions].float(),
                     dim=-1,
                 )
-                if route.target_column_types[item["key"]] == "categorical"
+                if route.target_column_types.get(item["key"]) == "categorical"
                 else logits[item["key"]][:, prediction_positions].float()
             ).transpose(0, 1)
             for item in self.schema.outputs
@@ -112,7 +112,7 @@ def validate_graph_contract(graph, schema):
     policy_graph = any(item.role == "policy_control" for item in schema.inputs)
     for value, descriptor in zip(graph.graph.output, schema.outputs):
         if not policy_graph and (
-            descriptor["dtype"] != "float32" or len(descriptor["shape"]) != 3
+            descriptor["dtype"] != "float32" or len(descriptor["shape"]) not in (3, 4)
         ):
             raise ValueError(
                 "Forecast and embedding outputs must be sequence-major FP32 tensors"
