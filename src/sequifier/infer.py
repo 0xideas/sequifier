@@ -14,6 +14,7 @@ from beartype.typing import Iterator
 from loguru import logger
 
 from sequifier.config.column_names import next_item_coordinates
+from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.config.infer_config import ResolvedInferenceConfig, load_inferer_config
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
@@ -420,8 +421,6 @@ def _windowed_inference_batch_from_storage(
         )
         inputs.update(images)
         metadata.update(image_masks)
-    from sequifier.config.depth_layout import depth_mask_metadata_key
-
     for name, mask in (depth_valid_masks or {}).items():
         metadata[depth_mask_metadata_key(name)] = plan.gather(
             mask, stored_rows, input_starts
@@ -1418,6 +1417,28 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
     publish_inference_rollout(trajectory, config)
 
 
+def _append_forecast(history: np.ndarray, value: np.ndarray) -> np.ndarray:
+    """Advance the time axis, retaining each sample's physical slot axes."""
+    next_frame = value.reshape(history[:, -1:].shape).astype(history.dtype, copy=False)
+    return np.concatenate((history[:, 1:], next_frame), axis=1)
+
+
+def _merge_forecast_steps(
+    steps: list[dict[str, np.ndarray]], static_targets: set[str]
+) -> dict[str, np.ndarray]:
+    """Flatten sample and step axes while preserving slots and class scores."""
+    if len(steps) == 1:
+        return steps[0].copy()
+    merged = {}
+    for name in steps[0]:
+        if name in static_targets:
+            merged[name] = steps[-1][name]
+        else:
+            values = np.stack([step[name] for step in steps], axis=1)
+            merged[name] = values.reshape(-1, *values.shape[2:])
+    return merged
+
+
 @beartype
 def get_probs_preds_from_dict(
     config: Any,
@@ -1428,8 +1449,6 @@ def get_probs_preds_from_dict(
     total_steps: int = 1,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Infer PT predictions, flattened sample-major across autoregressive steps."""
-
-    target_cols = inferer.target_columns
 
     X = {
         key: tensor.numpy()
@@ -1444,11 +1463,11 @@ def get_probs_preds_from_dict(
             "Autoregressive generation beyond observed image frames requires "
             "future image inputs and is not supported"
         )
-    metadata_np = {key: tensor.numpy() for key, tensor in metadata.items()}
-    all_probs_list = {col: [] for col in target_cols}
-    all_preds_list = {col: [] for col in target_cols}
-
-    metadata_for_step = metadata_np
+    metadata_for_step = {key: tensor.numpy() for key, tensor in metadata.items()}
+    layouts = config.dataset_metadata.depth_layouts
+    input_layouts = layouts.relevant_layouts(config.input_columns)
+    prediction_steps = []
+    probability_steps = []
 
     if not isinstance(total_steps, int) or total_steps < 1:
         raise ValueError("generation budget must be a positive integer")
@@ -1463,8 +1482,7 @@ def get_probs_preds_from_dict(
             preds_for_step = inferer.infer_generative(
                 None, metadata_for_step, probs_for_step
             )
-            for col in target_cols:
-                all_probs_list[col].append(probs_for_step[col])
+            probability_steps.append(probs_for_step)
         else:
             probs_for_step = None
             preds_for_step = inferer.infer_generative(
@@ -1473,55 +1491,46 @@ def get_probs_preds_from_dict(
                 column_data_types=column_data_types,
                 return_probs=False,
             )
-        if total_steps == 1 and any(
-            key.startswith("depth_occupancy:") for key in preds_for_step
-        ):
-            return probs_for_step, preds_for_step
-        for col in target_cols:
-            all_preds_list[col].append(preds_for_step[col])
-
-        if i == (total_steps - 1):
+        prediction_steps.append(preds_for_step)
+        if i + 1 == total_steps:
             break
 
-        X_next = {}
-        for col in X.keys():
-            if col in config.static_columns or col == "__preconditioning_image":
-                X_next[col] = X[col]
-                continue
-            shifted_input = X[col][:, 1:]
-
-            new_value = preds_for_step[col].reshape(-1, 1).astype(shifted_input.dtype)
-
-            X_next[col] = np.concatenate([shifted_input, new_value], axis=1)
-
-        X = X_next
-        if (
-            metadata_for_step is not None
-            and "attention_valid_mask" in metadata_for_step
-        ):
-            shifted_mask = metadata_for_step["attention_valid_mask"][:, 1:]
-            appended_valid = np.ones(
-                (shifted_mask.shape[0], 1), dtype=shifted_mask.dtype
+        next_metadata = metadata_for_step.copy()
+        next_values = {col: preds_for_step[col] for col in config.input_columns}
+        for name, layout in input_layouts.items():
+            mask_key = depth_mask_metadata_key(name)
+            mask = metadata_for_step[mask_key]
+            occupied = (
+                preds_for_step[f"depth_occupancy:{name}"].reshape(
+                    mask.shape[0], layout.max_depth_length
+                )
+                >= 0
             )
-            metadata_for_step["attention_valid_mask"] = np.concatenate(
-                [shifted_mask, appended_valid], axis=1
+            next_metadata[mask_key] = _append_forecast(mask, occupied)
+            for col in layout.columns:
+                values = next_values[col].reshape(occupied.shape)
+                next_values[col] = np.where(occupied, values, 0)
+
+        X = X.copy()
+        for col, value in next_values.items():
+            X[col] = _append_forecast(X[col], value)
+        if "attention_valid_mask" in metadata_for_step:
+            mask = metadata_for_step["attention_valid_mask"]
+            next_metadata["attention_valid_mask"] = _append_forecast(
+                mask, np.ones_like(mask[:, -1])
             )
+        metadata_for_step = next_metadata
 
-    final_preds = {
-        col: np.array(preds_list).T.reshape(-1, 1).flatten()
-        for col, preds_list in all_preds_list.items()
-    }
-
-    if config.output_probabilities:
-        final_probs = {
-            col: np.array(probs_list)
-            .transpose((1, 0, 2))
-            .reshape(-1, probs_list[0].shape[1])
-            for col, probs_list in all_probs_list.items()
-        }
-    else:
-        final_probs = None
-
+    static_targets = set(config.dataset_metadata.static_columns)
+    final_preds = _merge_forecast_steps(prediction_steps, static_targets)
+    for name in inferer.target_columns:
+        if not layouts.is_deep_column(name):
+            final_preds[name] = final_preds[name].reshape(-1)
+    final_probs = (
+        _merge_forecast_steps(probability_steps, static_targets)
+        if probability_steps
+        else None
+    )
     return (final_probs, final_preds)
 
 

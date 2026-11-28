@@ -1146,7 +1146,8 @@ Empty collections have a learnable CLS-only representation. Use a
 `depth_layout` decoder to predict child columns and physical slot occupancy. BERT training masks
 valid child slots at selected outer time steps, using the configured masked,
 random, or unchanged replacement; padded child slots stay untouched.
-Autoregressive depth inference is excluded.
+For autoregressive forecasting, predict each depth input with a `depth_layout`
+decoder for its layout. Its predicted occupancy supplies the next slot-validity mask.
 
 A composite branch may itself be a composite. Every nested composite requires
 `output_dim`; an omitted root composite width retains the existing backbone

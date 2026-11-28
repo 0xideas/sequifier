@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generic, Literal, Optional, TypeVar
 
-import numpy as np
 from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 from sequifier.config.column_names import NEXT_ACTION_OFFSET, PREDICTION_COORDINATES
@@ -804,8 +803,6 @@ def _resolve_inference_config(
             and config.input_layout != "raw"
         ):
             raise ValueError("Preprocessed depth inputs require read_format: pt")
-        if config.autoregressive_generation:
-            raise ValueError("Depth inputs do not support autoregressive inference")
     target_column_types = config.target_column_types or derive_target_column_types(
         config.target_columns, column_data_types
     )
@@ -1263,13 +1260,14 @@ class ResolvedInferenceConfig(
                     f"'generation_steps' can only be larger than 1 if 'autoregressive_generation' is true: {info.data.get('autoregressive_generation')}"
                 )
 
-            if info.data.get("rollout") is None and not np.all(
-                np.array(sorted(info.data.get("input_columns")))
-                == np.array(sorted(info.data.get("target_columns")))
-            ):
-                raise ValueError(
-                    "'generation_steps' can only be larger than 1 if 'input_columns' and 'target_columns' are identical"
-                )
+            if info.data.get("rollout") is None:
+                inputs = info.data.get("input_columns") or []
+                missing = set(inputs).difference(info.data.get("target_columns") or [])
+                if missing:
+                    raise ValueError(
+                        "Autoregressive generation requires a prediction for each "
+                        f"temporal input. Missing targets: {sorted(missing)}"
+                    )
 
         return v
 
@@ -1289,18 +1287,6 @@ class ResolvedInferenceConfig(
             raise ValueError(
                 "Autoregressive inference is not possible for models with prediction_length > 1"
             )
-        if (
-            v
-            and info.data.get("rollout") is None
-            and not np.all(
-                np.array(sorted(info.data.get("input_columns")))
-                == np.array(sorted(info.data.get("target_columns")))
-            )
-        ):
-            raise ValueError(
-                "Autoregressive inference with non-identical 'input_columns' and 'target_columns' is possible but should not be performed"
-            )
-
         if (
             v
             and info.data.get("training_objective") is not None
